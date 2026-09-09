@@ -1,0 +1,115 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-northeast-2
+  AWS_ACCOUNT_ID: "197179613039"
+
+  ECR_REPOSITORY: graph-rag/api
+
+  LAMBDA_FUNCTION_NAME: loresentry-update-gitops
+
+jobs:
+  build-test-push-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: |
+          pytest
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Generate image version
+        shell: bash
+        run: |
+          IMAGE_TAG="build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          ECR_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}"
+
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+          echo "ECR_IMAGE=${ECR_IMAGE}" >> "${GITHUB_ENV}"
+
+          echo "Building ${ECR_IMAGE}:${IMAGE_TAG}"
+
+      - name: Build image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${IMAGE_TAG}" \
+            --tag "${ECR_IMAGE}:${IMAGE_TAG}" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "${ECR_IMAGE}:${IMAGE_TAG}"
+
+      - name: Update GitOps repository
+        shell: bash
+        run: |
+          PAYLOAD="$(jq -nc \
+            --arg repository "${ECR_REPOSITORY}" \
+            --arg tag "${IMAGE_TAG}" \
+            '{
+              repository: $repository,
+              imageTag: $tag
+            }')"
+
+          aws lambda invoke \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --invocation-type RequestResponse \
+            --cli-binary-format raw-in-base64-out \
+            --payload "${PAYLOAD}" \
+            /tmp/lambda-response.json \
+            > /tmp/lambda-metadata.json
+
+          cat /tmp/lambda-response.json
+
+          FUNCTION_ERROR="$(jq -r \
+            '.FunctionError // empty' \
+            /tmp/lambda-metadata.json)"
+
+          if [ -n "${FUNCTION_ERROR}" ]; then
+            cat /tmp/lambda-metadata.json
+            exit 1
+          fi
+
+          jq -e \
+            '.status == "updated" or .status == "unchanged"' \
+            /tmp/lambda-response.json

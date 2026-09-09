@@ -1,0 +1,10 @@
+.git
+.github
+tests
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+requirements-dev.txt
+pyproject.toml
+README.md
