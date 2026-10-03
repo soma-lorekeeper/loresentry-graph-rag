@@ -1,148 +1,125 @@
-# OpenAI 호출 어댑터 마이그레이션 계획
+# OpenAI 호출 어댑터 이식 결과
 
-> 상태: 구현 계획. 이번 문서 작업에서는 SDK 설치·어댑터 구현·유료 API 호출을 수행하지 않았다.
-
-목표는 `ProposalModel`만 실제 OpenAI 호출로 교체해 고정 문서·관계 자료에 대한
-원본 모델 응답과 rules 검증 결과를 확인하는 것이다. 나머지 다섯 IO 포트는 fake로
-유지한다. FastAPI 라우트나 Kafka 소비자 없이 실행 스크립트로 검증한다.
-전체 MVP의 실제 LLM 평가 단계이며, 운영 IO 연결 완료를 뜻하지 않는다.
+동기 OpenAI 어댑터, 엄격한 후보 파서, 오류 분류, SDK 로컬 HTTP 통합과 평가 도구를
+구현했다. 실제 생성 호출은 HTTP 401로 실패했고, 사용자 요청에 따라 이번 기능 평가는
+대화 작성 응답으로 대체했다. [평가 기록](model-response-evaluation.md)에 확인 범위와
+실행 결과를 분리했다. 실제 모델 품질과 나머지 다섯 운영 IO는 후속 검증이다.
 
 기준은 [갱신안 우선 계획](refresh-mvp.md), [입출력 계약](proposal-contract.md),
 [판단·IO 분리 원칙](../implementation/DECISION_AND_IO.md)이다.
 
-## 1. 기존 코드에서 가져올 부분
+## 기존 코드에서 가져온 부분
 
-원본 경로는 `lorekeeper-ai/`, 신규 대상 경로는 이 저장소 기준이다.
-아래 신규 파일은 아직 존재하지 않는 구현 예정 위치다.
+원본 경로는 `lorekeeper-ai/` 기준이다. 기존 파일 전체를 복사하지 않고 필요한 원칙을
+현재 동기 포트·Content 용어와 계약에 맞춰 재작성했다.
 
-| 원본 | 가져올 내용 | 새 위치·변경 사항 |
+| 원본 | 선별한 내용 | 실제 구현 |
 |---|---|---|
-| [openai_client.py](../../../lorekeeper-ai/src/common/openai_client.py)의 `_request`, `_is_quota_exhausted` | 연결·timeout·요청 제한·잔액 부족·서버 오류를 구분하는 원칙 | `app/adapters/llm.py`: `OpenAIProposalModel.generate`에서 내부 `RefreshFailure`로 변환. SDK 오류 구조에 맞춰 판별과 테스트를 재작성 |
-| 같은 파일의 `create_response`, `create_completion` | 호출을 한 경계로 모으는 방식 | `ProposalModel`의 동기 인터페이스에 맞춰 동기 클라이언트 주입. API 두 종류를 모두 지원하지 않고 Responses 경로 하나로 시작 |
-| [graphrag.py](../../../lorekeeper-ai/src/common/graphrag.py)의 구조화 출력·응답 변환 | 외부 응답을 내부 값으로 바꾸는 원칙 | `app/adapters/llm_schema.py`: 제안 응답 DTO·스키마와 `ModelCandidate` 변환. Neo4j `LLMBase`·`LLMResponse` 의존 제거 |
-| [usage.py](../../../lorekeeper-ai/src/common/usage.py)의 `from_response`, `merge` | 토큰 사용량 추출, 캐시·추론 토큰의 중복 합산 방지 | 어댑터에서 Responses 사용량을 현재 `Usage`로 변환. 기존 Chat Completions 필드 파서를 그대로 복사하지 않음 |
-| [llm_limit.py](../../../lorekeeper-ai/src/common/llm_limit.py), [admission.py](../../../lorekeeper-ai/src/common/admission.py) | 운영 동시성·한도 관리의 참고 자료 | 첫 연결에서 이식 보류. 요청별 호출 예산은 현재 서비스에서 유지 |
+| [openai_client.py](../../../lorekeeper-ai/src/common/openai_client.py)의 `_request`, `_is_quota_exhausted` | 연결·timeout·일시 제한과 할당량 소진 구분 | [llm.py](../../app/adapters/llm.py)의 `status_failure`, `generate` |
+| 같은 파일의 `create_response`, `create_completion` | 호출 경계를 한곳에 모으기 | 동기 `OpenAIProposalModel`, Responses 경로 하나, 주입한 클라이언트 사용 |
+| [graphrag.py](../../../lorekeeper-ai/src/common/graphrag.py)의 구조화 출력·응답 변환 | 외부 응답을 내부 값으로 변환 | [llm_schema.py](../../app/adapters/llm_schema.py)의 엄격 DTO, 불변 `ModelCandidate` 변환 |
+| [usage.py](../../../lorekeeper-ai/src/common/usage.py)의 `from_response`, `merge` | 입력·출력 총량 추출, 캐시·추론 중복 합산 방지 | `response_usage`, 평가 시도별 원본 usage 기록 |
+| [llm_limit.py](../../../lorekeeper-ai/src/common/llm_limit.py), [admission.py](../../../lorekeeper-ai/src/common/admission.py) | 운영 동시성·한도 제어 참고 | 이식 보류. 서비스의 대상별 호출 예산과 평가 전체 예산만 적용 |
 
-원본은 비동기 전역 클라이언트, 1,800초 timeout, 최대 5회 자체 재시도와 전역 동시성
-제어가 결합돼 있다. 이를 복사하면 현재 호출 예산·동기 서비스와 운영 정책까지 묶인다.
-따라서 작은 어댑터를 새로 작성하고 오류 분류·계량 원칙을 선별 이식한다.
-LangGraph·LangChain·neo4j-graphrag는 이 연결에 추가하지 않는다.
+원본의 비동기 전역 클라이언트·1,800초 timeout·최대 5회 자체 재시도는 가져오지 않았다.
+LangGraph·LangChain·Neo4j LLM 클래스·KSS·Kiwi도 추가하지 않았다.
 
-## 2. 호출과 판단의 경계
+## 판단과 실행
 
-실행 스크립트가 API 키·모델·timeout·출력 한도·SDK 클라이언트를 구성하고
-`RefreshService(model=OpenAIProposalModel(...), ...)`로 주입한다.
-모듈 import나 rules 실행에서 환경변수를 읽거나 클라이언트를 만들지 않는다.
-클라이언트는 조립 지점에서 소유하고 성공·실패 모두 종료한다.
+`prompts.py`는 신뢰한 지시문을 `ModelInput.instructions`에, 문서 JSON을 `prompt`에
+분리한다. 어댑터는 구분자를 잘라 역할을 추측하지 않는다. OpenAI 요청은 별도
+`instructions`와 user 메시지, strict JSON schema, `store=False`, `truncation=disabled`를
+사용한다. [공식 구조화 출력 계약](https://developers.openai.com/api/docs/guides/structured-outputs)을 따른다.
 
-1. 기존 서비스가 스냅샷을 저장하고 대상별 `ModelInput`을 만든다.
-2. 어댑터가 지원하는 `schema_version`, 모델 설정과 전송 한도를 확인한다.
-3. OpenAI를 한 번 호출하고 완료 상태·거절·본문 존재·출력 구조를 확인한다.
-4. 유효한 응답을 불변 `ModelCandidate`와 `Usage`로 변환한다.
-5. 기존 rules가 프로젝트·대상·revision·근거·중복·충돌을 판정한다.
-6. 기존 서비스가 전체 결과를 fake JSON 저장소에 저장하고 fake 완료 발행을 수행한다.
+`generate`는 지원 설정·토큰 예산을 확인하고 한 번 호출한 뒤 완료 상태·거절·본문·스키마를
+검증한다. DTO는 알 수 없는 필드·숫자 문자열·누락을 거절한다. 유효한 빈 배열 두 개만
+NO_CHANGE 후보다. 실제 revision·허용 대상·인용 구간·중복·충돌 판단은 기존 rules가 맡는다.
+S3 결과용 `result_from_payload`를 모델 파서로 재사용하지 않는다.
 
-구조화 출력은 JSON 형식 제약이고 업무 검증의 대체가 아니다. 거절 응답과 출력 한도에
-걸린 미완성 응답은 정상 후보로 처리하지 않는다. Responses와 Pydantic을 사용하는
-구조화 응답 방식은 [OpenAI 공식 문서](https://developers.openai.com/api/docs/guides/structured-outputs)를 기준으로 구현한다.
+조립 지점인 [evaluate_refresh.py](../../scripts/evaluate_refresh.py)가 환경 설정과 클라이언트를
+소유하고 성공·실패 모두 종료한다. 모듈 import나 rules는 키·현재 시간·네트워크에 접근하지 않는다.
+나머지 IO는 [evaluation/fakes.py](../../evaluation/fakes.py)로 조립하며 운영 app은 tests를 import하지 않는다.
+기존 테스트도 같은 fake를 재사용한다.
 
-현재 `ModelInput.prompt`에는 지시문과 자료가 함께 들어 있다. 연결 단계에서는
-`ModelInput`에 별도 지시문 필드를 추가하고 `prompts.py`가 신뢰한 지시문과 문서 JSON을
-분리해 반환하도록 보완한다. 어댑터가 문자열 구분자를 잘라 역할을 추측하지 않는다.
-이 변경은 fake·직렬화·프롬프트 버전 회귀에 함께 반영하며 본문 내용은 명령으로 승격하지 않는다.
+## 설정·버전·예산
 
-## 3. 응답 스키마와 설정
+| 항목 | 구현 값 또는 규칙 |
+|---|---|
+| SDK·DTO | `openai==3.24.0`, `pydantic==2.13.5` |
+| 선택 모델 | `gpt-5.6-luna`. 현재 지원 한도 registry에 명시된 모델만 허용 |
+| 프롬프트·후보 버전 | `refresh-prompt-v2`, `refresh-candidate-v1` |
+| S3 결과 외곽 버전 | 기존 `refresh-result-v1` 유지 |
+| 예시 timeout·출력 한도 | 120초, 8,192토큰. SDK 요청 timeout이며 전체 평가 시간 제한은 아님 |
+| 예시 입력·문맥 예산 | 입력 120,000토큰, 입력+출력 128,192토큰 |
+| 전체 평가 호출 상한 | 8회. 현재 정상 6사례는 대상별 7회 필요 |
 
-모델 응답은 `document_proposals`, `relation_proposals` 두 배열이다. 각 후보는 현재
-[models.py](../../app/refresh/models.py)의 문서·관계·근거 값으로 변환한다.
-빈 배열 두 개는 유효한 NO_CHANGE 후보지만, 누락 필드·파싱 실패·거절을 빈 배열로 바꾸지 않는다.
-알 수 없는 필드와 잘못된 타입을 거절하고 숫자 문자열 등을 묵시적으로 보정하지 않는다.
+선택 모델의 [공식 한도](https://developers.openai.com/api/docs/models/gpt-5.6-luna)는
+입력 922,000·출력 128,000·문맥 1,050,000토큰이다(2026-10-03 확인).
+설정 예산은 그 안으로 제한한다. 기존 문자 예산과 별도로 UTF-8 바이트 길이와 스키마,
+4,096토큰 프레이밍 여유로 입력량을 보수적으로 추정한다. 정확한 tokenizer 계수는 아니므로
+실제 한도에 들어가는 입력도 거절할 수 있다. 초과 원문을 자르거나 자동 요약하지 않는다.
 
-모델 응답 스키마와 S3 결과 스키마는 별개다. 전자는 후보와 인라인 근거이고 후자는
-요청 정보·출처·실행 기록·검증된 제안·근거 참조를 포함한다. S3 결과용
-`result_from_payload`를 모델 응답 파서로 재사용하지 않는다.
-현재 기본 후보 스키마 이름도 `refresh-result-v1`이므로 첫 연결에서 후보용 버전을
-명확히 분리하고 프롬프트·고정 예시·스냅샷 호환성을 함께 갱신한다.
+이전 `refresh-v1` / `refresh-result-v1` 모델 설정의 실행 스냅샷은 새 계약으로
+묵시적으로 바꾸지 않고 실제 어댑터에서 거절한다. 이미 저장된 결과는 그대로 복구한다.
+새 계약으로 평가하려면 새 요청 ID·모델 설정을 사용한다. 재생 응답도 입력 fingerprint·
+대상·버전이 일치해야 한다.
 
-모델은 실행 시 명시하며 `unconfigured`이면 네트워크 호출 전에 실패한다.
-SDK 버전은 구현 시 호환성을 확인해 정확한 버전으로 고정한다. 이번 계획에서 모델·가격을
-확정하지 않는다. timeout과 최대 출력 토큰도 실행 설정으로 명시하고 평가 기록에 남긴다.
-기존 문자 예산은 토큰 한도가 아니므로 선택한 모델의 입력·출력 한도와 별도로 대조한다.
-초과 시 원문을 자르거나 자동 요약하지 않고 오류를 반환한다.
+## 실행 모드와 산출물
 
-현재 `Usage`는 호출 수·입력 토큰·출력 토큰만 보존한다. 캐시·추론 세부 사용량과 API
-응답 ID·실제 응답 모델·지연 시간은 평가 기록에 보존하되 입력·출력 총량에 다시 더하지 않는다.
-재시도 시도들의 전체 비용은 현재 결과의 사용량으로 복원할 수 없으므로 시도별로 기록한다.
+[.env.example](../../.env.example)을 참고해 `.env`를 준비한다. `.env`는 Git 제외이며
+키는 실제 `--live` 모드에서만 필요하다. 프로세스 환경변수가 파일보다 우선한다.
 
-## 4. 실패·재시도 정책
+```bash
+# 대화 작성 응답 재생: 원격 호출 없음
+.venv/bin/python -m scripts.evaluate_refresh \
+  --env-file .env.example --responses-dir evaluation/responses/assistant-v1 \
+  --trial replay-2 --output .evaluation/replay-2 --repeat-saved
 
-첫 구현은 SDK 자동 재시도를 명시적으로 끄고 어댑터 안에서도 재시도하지 않는다.
-`generate` 한 번에 원격 요청 최대 한 번으로 호출 수를 해석할 수 있게 한다.
-오류의 `retryable`은 상위 실행자의 판단 자료이며 자동 재실행 명령이 아니다.
-아래 코드는 새 어댑터의 구현 예정 오류 계약이다.
+# 실제 OpenAI 호출: 유효한 키 필요, 유료 호출 가능
+.venv/bin/python -m scripts.evaluate_refresh \
+  --live --env-file .env --trial live-2 --output .evaluation/live-2
+```
 
-| 실패 | 예정 코드 | retryable |
+두 모드 옵션을 모두 생략하면 고정 기대 후보를 반환하는 오프라인 기준선이다.
+`--case document`처럼 사례를 제한할 수 있다. 출력 경로가 이미 있으면 덮어쓰지 않는다.
+`--repeat-saved`는 같은 프로세스의 fake 저장 결과 복구이며 프로세스 간 영속 재개는 아니다.
+
+시도별 원본 API 응답 또는 재생 텍스트, 파싱 후보, 실제 응답 모델·요청 ID(있는 경우),
+SDK·입력 버전·설정·지연·사용량을 로컬 JSON에 보존한다. 최종 사례 파일에는 스냅샷·결과와
+rules 판정을 둔다. 파싱·모델·결과 저장 실패도 기록한다. 산출물은 Git 제외이며 일반 로그에는
+요약만 출력한다. 인증 실패 원문에는 키 일부가 들어갈 수 있으므로 로컬 산출물도 공유하지 않는다.
+
+CLI 종료 코드 0은 실행·rules 통과이며 의미상 품질 합격은 아니다. 누락·추가·기존 내용
+보존·관계 비교를 별도로 읽는다. 캐시·추론 토큰은 총량에 다시 더하지 않는다.
+usage가 없는 API 응답은 실패시키고 시도 기록의 사용량은 null로 남긴다. 현재 내부 결과의
+`Usage`만으로 실패한 시도의 실제 비용을 복원할 수 없다.
+
+## 실패와 재실행
+
+SDK `max_retries=0`과 자체 재시도 없음으로 `generate`당 원격 요청을 최대 한 번으로 제한한다.
+공급자 예외 원문은 서비스 오류 메시지에 복사하지 않는다. 예상하지 못한 코드 결함은 전파한다.
+
+| 실패 | 내부 코드 | retryable |
 |---|---|---|
-| 연결 실패·timeout | `MODEL_CONNECTION_FAILED`, `MODEL_TIMEOUT` | true |
-| 일시적 요청 제한·서버 오류 | `MODEL_RATE_LIMITED`, `MODEL_UNAVAILABLE` | true |
-| 잔액·할당량 소진 | `MODEL_QUOTA_EXHAUSTED` | false |
-| 인증·권한·잘못된 요청·미지원 설정 | `MODEL_AUTH_FAILED`, `MODEL_REQUEST_INVALID` | false |
-| 거절·출력 미완성·출력 없음 | `MODEL_REFUSED`, `MODEL_INCOMPLETE`, `MODEL_EMPTY_RESPONSE` | false |
-| JSON·스키마·DTO 변환 실패 | `MODEL_INVALID_RESPONSE` | false |
+| 연결·timeout | `MODEL_CONNECTION_FAILED`, `MODEL_TIMEOUT` | true |
+| 일시 제한·서버 오류 | `MODEL_RATE_LIMITED`, `MODEL_UNAVAILABLE` | true |
+| 인식한 할당량 소진 | `MODEL_QUOTA_EXHAUSTED` | false |
+| 인증·권한·요청·미지원 설정 | `MODEL_AUTH_FAILED`, `MODEL_REQUEST_INVALID` | false |
+| 거절·미완성·빈 출력 | `MODEL_REFUSED`, `MODEL_INCOMPLETE`, `MODEL_EMPTY_RESPONSE` | false |
+| JSON·DTO·usage 오류 | `MODEL_INVALID_RESPONSE` | false |
 
-공급자 예외 전체를 서비스 오류 메시지로 복사하지 않고 필요한 분류만 전달한다.
-예상하지 못한 코드 결함은 일반 실패로 숨기지 않는다. timeout은 원격 계산·과금이
-없었다는 뜻이 아니며, 결과 저장 전 요청 재실행은 이전 대상 호출도 반복할 수 있다.
-저장된 결과가 있으면 기존 복구 흐름대로 LLM을 다시 호출하지 않는다.
+`retryable`은 자동 재시도 명령이 아니다. 평가 도구는 공통 인증·할당량 실패 시 나머지 사례도
+중단한다. timeout은 원격 계산·과금이 없었다는 뜻이 아니다. 결과 저장 전 실패의 재실행은
+이미 성공한 대상까지 다시 호출할 수 있다. 결과가 저장됐다면 기존 서비스는 모델을 재호출하지 않는다.
 
-## 5. 구현 순서와 완료 기준
+## 검증과 남은 범위
 
-| 순서 | 작업 | 완료 기준 |
-|---|---|---|
-| 1 | 후보 스키마·엄격한 파서·사용량 매핑 | 문서만·관계만·둘 다·변경 없음, 누락·잘못된 타입 테스트 통과 |
-| 2 | 동기 OpenAI 어댑터·설정 주입·오류 변환 | 가짜 클라이언트로 호출 인자·한 번 호출·timeout·거절·오류 분류 검증 |
-| 3 | 실제 SDK와 로컬 HTTP 테스트 서버 연결 | 외부 자격증명 없이 요청·응답 직렬화, 자원 종료, 자동 재시도 없음 검증 |
-| 4 | `scripts/evaluate_refresh.py`와 고정 평가 자료 | 실제 LLM만 교체해 원본 응답·파싱 후보·rules 결과·사용량 파일 생성 |
-| 5 | 명시적 실제 모델 실행과 평가 기록 | 호출 성공과 업무 검증 통과, 제안 품질을 각각 기록. 기존 회귀·lint·format 통과 |
+[SDK HTTP 테스트](../../tests/integration/test_openai_http.py)는 실제 SDK를 로컬 서버에 연결해
+요청 JSON·사용량·오류·timeout·무재시도·자원 종료를 검증한다. 기본 pytest/CI는 실제 키와
+원격 OpenAI 호출을 사용하지 않는다. 전체 회귀·Ruff 통과와 대체 응답 평가를 완료했다.
 
-위 경로와 실행 옵션은 구현 예정이며 현재 실행 가능한 명령으로 안내하지 않는다.
-평가 스크립트는 고정 입력과 fake 조립을 명시적으로 로드하고 실행하며, 운영 코드가
-`tests`를 import하지 않도록 평가용 조립을 `scripts` 또는 별도 평가 자료 경계에 둔다.
-실제 API 테스트는 기본 pytest/CI에서 실행하지 않는다. 현재 `tests/refresh/conftest.py`는
-소켓을 차단하므로 HTTP 통합 테스트는 `tests/integration/`에 별도로 둔다.
+실제 모델의 생성·품질·사용량, S3·Content·Neptune 관계 조회·영속 상태·Kafka와 FastAPI
+갱신안 진입점은 이번 완료 범위 밖이다. [후속 계획](follow-up.md)을 따른다.
 
-원본 API 응답, DTO 파싱 결과, 최종 결과 JSON, 호출 설정·시도별 사용량·실패 코드와
-평가 판정을 로컬 산출물로 남긴다. 산출물은 일반 로그나 Git에 자동 포함하지 않는다.
-HTTP 성공, rules 수락, 사람이 기대한 변경의 정확성은 서로 다른 평가 항목이다.
-
-고정 자료로 기대 수정의 누락·근거 없는 변경·기존 내용 손실·대상 오류·근거 위치를
-확인한다. 특히 현재 모델은 코드 포인트 위치를 직접 반환하므로 긴 원문·반복 문장·이모지에서
-오류가 나는지 별도 측정한다. 잘못된 위치를 임의로 고쳐 성공시키지 않는다.
-품질 합격선은 첫 평가 결과와 기대 사례를 바탕으로 합의하며 API 연결만으로 품질 완료를 선언하지 않는다.
-
-## 6. 기존 계획 준수 점검
-
-2026-10-03 로컬 코드 대조 기준이다. 상세 구현은 [rules 이식 결과](rules-implementation.md)를 따른다.
-
-| 계획 | 현재 확인 결과 | 남은 작업·차이 |
-|---|---|---|
-| 순수 판단과 IO 분리 | rules는 값만 사용, 서비스는 여섯 포트로 IO 조율 | 실제 모델 어댑터에도 같은 경계 적용 |
-| 변경 20개·본문 5,000자, 다중 대상 | 선택·한도 검증과 대상별 호출 구현 | 실제 모델 토큰·출력 예산은 미구현 |
-| 원문·revision 보존 | 실행 스냅샷 고정, 정확한 구간·인용 검증 | 요청 manifest는 내부 호환 때문에 선택적. 외부 진입점에서 필수 전달·fingerprint 검증 필요 |
-| 기존 AI 선별 이식 | 구간·출처·문맥·후보 검증을 Content 계약으로 재작성 | KSS·Kiwi는 보류. 기존 few-shot 품질 평가와 세부 사용량 계량은 미완료 |
-| 결과에 제안만 저장·저장 후 완료 전달 | 서비스 순서와 JSON 변환, fake 복구 검증 | S3·Kafka 실제 IO·영속 상태·lease는 미연결 |
-| 서버 없는 규칙 테스트와 별도 IO 통합 | refresh 순수·fake 테스트 존재, 기존 진단 HTTP 통합 존재 | 진단 통합 테스트가 refresh 실제 IO 검증을 대신하지 않음 |
-
-따라서 구현 구조와 fake 기반 단계는 계획에 맞지만 전체 MVP가 끝난 상태는 아니다.
-원본 표의 파일명·부품을 모두 그대로 옮긴 것도 아니다. 이번 OpenAI 연결은 다음 미완료
-단계를 수행하는 계획이며, 이후 Content·S3·관계 저장소·Kafka 통합은 별도로 진행한다.
-
-## 스냅샷 버전 호환 정책
-
-첫 연결의 후보 버전은 `refresh-candidate-v1`, 지시문 분리 버전은
-`refresh-prompt-v2`다. S3 결과 외곽 버전 `refresh-result-v1`은 유지한다.
-`ModelInput.instructions`에는 코드가 정한 지시문만, `prompt`에는 문서 JSON만 둔다.
-기존 실행 스냅샷의 `refresh-v1` / `refresh-result-v1` 모델 설정을 새 계약으로
-묵시적으로 바꾸지 않는다. 실제 모델 어댑터는 지원하지 않는 버전을 호출 전에 거절한다.
-이미 저장된 결과는 기존 복구 흐름으로 반환하며 모델을 다시 부르지 않는다.
-새 계약으로 재평가하려면 새 요청 ID와 명시적인 새 모델 설정을 사용한다.
+2026-10-03 최종 검증: 전체 pytest 267개 통과, Ruff lint·format 통과,
+변경 문서의 로컬 링크 170개 확인(누락 없음). 기본 HTTP 제공 경로는 그대로 유지했다.

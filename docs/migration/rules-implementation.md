@@ -2,7 +2,8 @@
 
 [LOREKEEPER-637](https://lorekeepers.atlassian.net/browse/LOREKEEPER-637)에서 순수 rules,
 다중 대상 모델 호출 조율, 결과 JSON 변환을 구현했다. 실제 rules와 여섯 fake IO를
-연결해 검증한다. 실제 LLM의 제안 품질, S3·Content·Neptune·Kafka 운영 연결은 다음 단계다.
+연결해 검증한다. 이 문서는 rules 이식 당시 범위다. 이후 [OpenAI 어댑터와 응답 대체 평가](openai-adapter.md)를
+추가했다. 실제 모델 품질·S3·Content·Neptune·Kafka 운영 연결은 후속이다.
 입출력 한도와 결과 형식의 기준은 [제안 계약](proposal-contract.md)이다.
 
 ## 무엇을 어디에 가져왔는가
@@ -72,11 +73,11 @@ Kafka offset·DLQ는 검증하지 않는다. 저장 불가 완료 실패 값은 
 순수 규칙과 실제 rules 서비스 회귀, JSON 고정 예시, 기존 진단 API와 로컬 HTTP 어댑터
 통합 테스트를 함께 실행한다. refresh 테스트는 소켓을 차단하며 외부 서버 없이 동작한다.
 
-다음 단계의 호출 코드 이식과 평가 순서는 [OpenAI 어댑터 이전 계획](openai-adapter.md)에 정리했다.
+호출 코드의 추가 이식 결과와 평가 방법은 [OpenAI 어댑터 이식 결과](openai-adapter.md)에 정리했다.
 다음 작업은 같은 고정 자료를 통한 실제 LLM 평가, Content와 입력·결과 JSON Schema 확정,
 S3 키·권한·만료, 추가 본문 API, 그래프 반영 기준, 영속 상태와 Kafka 어댑터 연결이다.
 원본 Content 문서·확정 관계에 쓰는 포트는 이번 생성 경로에 없다.
 
-2026-10-03 로컬 검증: 전체 pytest 190개 통과(그중 refresh 164개), Ruff lint·format 검사
+rules 이식 시점의 검증 기록: 전체 pytest 190개 통과(그중 refresh 164개), Ruff lint·format 검사
 통과, 문서의 로컬 파일 링크 검사 통과. 기존 Starlette/httpx 사용 중단 예정 경고 1개는
 남아 있다. 이 결과는 배포 환경 검증이나 실제 LLM 평가 결과가 아니다.

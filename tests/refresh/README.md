@@ -46,3 +46,8 @@ case.calls.failures["publisher.ack"].append(
 
 테스트 통과는 원문 인용이 실제로 제안을 뒷받침하는지, 실제 모델이 기대 제안을 만드는지
 증명하지 않는다. [현재 이식 결과와 남은 검증](../../docs/migration/rules-implementation.md)을 참고한다.
+
+OpenAI 후보 계약·오류·예산은 `test_llm_schema.py`, `test_llm.py`에서 검증한다.
+평가 기록과 대화 응답 재생은 `test_evaluation_*.py`, `test_response_replay.py`를 본다.
+실제 SDK의 로컬 HTTP 검증은 소켓 차단 경계 밖의 `tests/integration/test_openai_http.py`에 둔다.
+키 없이 실행할 전체 흐름은 [대체 응답 평가](../../docs/migration/model-response-evaluation.md)를 따른다.

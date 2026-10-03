@@ -33,8 +33,10 @@ relation keys, revisions, and proposals across the internal contracts.
 The internal refresh service validates changed documents, builds source-preserving
 context, coordinates multiple target calls, and validates document and relation
 proposals. Results serialize to JSON; completion values carry the result location.
-It is tested with real rules and fake IO, without production refresh adapters or
-an HTTP/Kafka entry point. See [migration results](docs/migration/rules-implementation.md).
+The OpenAI Responses adapter and local HTTP integration are implemented. Conversation-authored
+responses verify the refresh flow; live generation remains unverified after an authentication
+failure. Other refresh IO uses fakes, with no HTTP/Kafka entry point. See
+[OpenAI migration results](docs/migration/openai-adapter.md).
 
 ## Stack
 
@@ -81,15 +83,15 @@ and modern Python syntax (`UP`). Docstring rules are not enabled.
 Apply safe lint fixes and formatting locally:
 
 ```bash
-.venv/bin/ruff check --fix app tests
-.venv/bin/ruff format app tests
+.venv/bin/ruff check --fix app tests evaluation scripts
+.venv/bin/ruff format app tests evaluation scripts
 ```
 
 Check without changing files, using the same commands as CI:
 
 ```bash
-.venv/bin/ruff check app tests
-.venv/bin/ruff format --check app tests
+.venv/bin/ruff check app tests evaluation scripts
+.venv/bin/ruff format --check app tests evaluation scripts
 ```
 
 ## Test

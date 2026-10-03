@@ -1,8 +1,8 @@
 # Refresh 갱신안 생성
 
 `RefreshService`는 여섯 외부 IO 포트와 `RefreshRules`를 생성자로 주입받는다.
-기본 rules는 입력·선택·청킹·문맥·후보 검증을 수행한다. 실제 IO 어댑터와 HTTP·Kafka
-진입점은 연결하지 않았으며, 테스트는 실제 rules와 외부 fake를 조합한다.
+기본 rules는 입력·선택·청킹·문맥·후보 검증을 수행한다. OpenAI 어댑터는 별도 평가
+스크립트에서 주입한다. 다른 IO는 fake이며 HTTP·Kafka 진입점은 미연결이다.
 
 처음 읽을 때는 `models.py`에서 값의 의미를 보고, `rules.py`의 판단 단계를 확인한 뒤
 `service.py`의 조회·판단·실행 순서를 읽는다. `ports.py`는 실행 구현이 지킬 계약이다.

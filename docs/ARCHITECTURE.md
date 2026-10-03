@@ -8,7 +8,7 @@
 
 현재 서버는 일반 함수·불변 dataclass·Protocol·생성자 주입으로 판단과 IO를 분리한다.
 운영 진단 `GET /health/db`에는 실제 HTTP 어댑터가 연결돼 있다.
-내부 갱신안 생성에는 순수 rules와 서비스가 구현돼 있으며 외부 IO는 fake로 검증한다.
+내부 갱신안 생성에는 순수 rules·서비스와 OpenAI 어댑터가 있다. 모델 외 다섯 IO는 fake다.
 
 ## 판단·조율·실행의 경계
 
@@ -66,7 +66,8 @@ Free Monad·범용 Effect Handler·명령 레지스트리는 사용하지 않는
 
 결과 저장 후 실패는 저장 결과로 재개하고, 저장 전 실패는 모델 재호출이 가능하다.
 분산 트랜잭션이나 정확히 한 번 호출을 보장하지 않는다. 현재는 실제 rules와 fake IO,
-JSON 결과 변환까지 검증하며 실제 모델·S3·Content·Neptune·Kafka 연동은 남아 있다.
+JSON 결과 변환과 OpenAI SDK 로컬 HTTP·대화 작성 응답 재생을 검증했다.
+실제 모델 생성 품질·S3·Content·Neptune·Kafka 운영 연동은 남아 있다.
 정책과 이식 근거는 [rules 이식 결과](migration/rules-implementation.md)를 따른다.
 
 ## 실행과 배포 구성

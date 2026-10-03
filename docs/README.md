@@ -8,7 +8,8 @@
 그래프 저장, RAG/GraphRAG 검색, Content 변경 이벤트 소비는 아직 구현하지 않았다.
 진단 유스케이스에는 순수 판단·애플리케이션 조율·HTTP 어댑터 분리를 적용했다.
 내부 갱신안 생성에는 다중 문서·관계 제안 rules와 결과 JSON 변환을 구현하고 fake IO로 검증했다.
-[rules 이식 결과](migration/rules-implementation.md)는 실제 IO·LLM 품질 평가와 구분해 현재 상태를 설명한다.
+OpenAI 어댑터와 로컬 HTTP 검증도 구현했다. [모델 응답 대체 평가](migration/model-response-evaluation.md)는
+대화 작성 응답으로 확인한 기능 흐름을 설명한다. 실제 원격 생성·품질과 운영 IO는 미검증이다.
 문서는 로컬 코드·테스트·배포 설정을 설명하며, 운영 서버의 실시간 상태나 배포 성공을 뜻하지 않는다.
 
 ## 필요한 작업별 문서

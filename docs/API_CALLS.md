@@ -1,6 +1,6 @@
 # GraphRAG가 호출하는 API
 
-> **책임:** Neptune 요청 주소·설정·응답 사용과 통신 실패 처리를 설명한다.
+> **책임:** Neptune 진단과 OpenAI 생성 호출의 설정·경계·실패 처리를 설명한다.
 >
 > **호출자·대상:** GraphRAG가 Neptune의 상태 API를 호출한다.
 >
@@ -8,8 +8,9 @@
 >
 > **관련 기준:** GraphRAG가 반환하는 응답은 [제공 API](API.md)에서 관리한다.
 
-현재 외부 호출은 [neptune.py](../app/neptune.py)의 Neptune 상태 조회 한 종류다.
-그래프 쿼리, Content·AI Chat 호출, 임베딩·LLM API 호출은 없다.
+운영 HTTP 경로는 [neptune.py](../app/neptune.py)의 상태 조회를 사용한다.
+별도 평가 실행에는 OpenAI Responses 호출 어댑터가 있다. 그래프 쿼리, Content·AI Chat
+호출과 임베딩 호출은 아직 없다.
 
 ## 요청 구성
 
@@ -43,5 +44,15 @@ HTTP·네트워크·JSON 해석 실패는 어댑터가 `GraphStatusUnavailable`�
 운영 Neptune의 TLS·IAM·VPC 연결은 별도 확인 대상이다.
 
 갱신안 서비스는 S3·관계·Content·모델·작업 상태·완료 발행을 Protocol로 요청한다.
-현재 연결은 테스트용 fake이며 실제 외부 API 호출은 추가하지 않았다.
+OpenAI 모델 포트는 실제 어댑터를 선택할 수 있고 나머지 다섯 포트는 fake다.
 [포트 계약](../app/refresh/ports.py)과 [이식 결과](migration/rules-implementation.md)를 참고한다.
+
+## 갱신안 모델 호출
+
+[OpenAIProposalModel](../app/adapters/llm.py)은 동기 SDK의 `responses.create`로
+OpenAI `POST /v1/responses`를 호출한다. FastAPI 라우트에는 연결하지 않았으며
+평가 도구의 `--live` 모드에서 선택한다. 대화 응답 재생은 네트워크 호출을 하지 않는다.
+
+키·모델·timeout·토큰 예산·클라이언트 종료는 실행 스크립트가 담당한다. SDK와 어댑터 모두
+자동 재시도가 없다. 구조화 출력·오류 코드·스냅샷 버전·사용량 정책과 실행 명령은
+[OpenAI 이식 결과](migration/openai-adapter.md)를 기준으로 한다.

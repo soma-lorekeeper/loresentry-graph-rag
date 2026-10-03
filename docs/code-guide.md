@@ -49,3 +49,8 @@
 `app/refresh/models.py`에서 값의 의미, `rules.py`에서 판단 단계, `service.py`에서
 조회·판단·실행 순서를 읽는다. [Refresh 코드 안내](../app/refresh/README.md)와
 [실제 rules 실행 테스트](../tests/refresh/test_real_service.py)가 진입점이다.
+
+모델 연결은 [llm.py](../app/adapters/llm.py), 후보 계약은
+[llm_schema.py](../app/adapters/llm_schema.py)를 읽는다.
+[evaluate_refresh.py](../scripts/evaluate_refresh.py)가 키·클라이언트와 다섯 fake를 조립한다.
+[대체 응답 평가](migration/model-response-evaluation.md)의 명령으로 실제 rules 흐름을 실행할 수 있다.

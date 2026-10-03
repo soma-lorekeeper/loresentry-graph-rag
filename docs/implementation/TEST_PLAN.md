@@ -61,3 +61,13 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 검증한다. 소켓을 차단하고 JSON fake 저장소로 출처·결과 왕복·복구를 확인한다.
 기존 ScriptedRules 테스트는 실행 순서·오류 전달 검증으로 별도 유지한다.
 실제 LLM 품질·S3 내구성·Content 인가·Neptune 반영·Kafka 전달 보장은 후속 검증이다.
+
+## 모델 호출과 응답 대체
+
+`tests/refresh/test_llm_schema.py`·`test_llm.py`는 파서·엄격 타입·오류 분류와 호출 예산을,
+`tests/integration/test_openai_http.py`는 실제 SDK의 로컬 HTTP 요청·무재시도·종료를 확인한다.
+`test_evaluation_*.py`·`test_response_replay.py`는 시도 기록·실패·사용량 불명·응답 재생·
+버전 불일치·잘못된 원문 위치 거절을 검증한다. 기본 pytest는 원격 API를 호출하지 않는다.
+
+대화 작성 응답 6사례의 실행 결과는 [평가 기록](../migration/model-response-evaluation.md)에 있다.
+실제 API 인증 성공·모델 생성 품질·사용량은 후속 검증으로 남긴다.
