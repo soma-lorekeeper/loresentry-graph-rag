@@ -1,0 +1,184 @@
+# Kafka Producer·Consumer·Consumer Group
+
+발행·구독, offset commit, 그룹 배정과 재처리의 기본 동작을 설명한다.
+
+관련 문서: [Java 클라이언트](java-client.md), [Spring Kafka](spring-kafka.md), [메시지 계약 초안](message-contract.md).
+
+- **Producer**
+  - 메시지를 topic에 보내는 클라이언트.
+    - 우리 인프라에서는 content 서비스의 outbox relay가 producer.
+  - **전송 흐름**
+    1. **serializer**: key, value를 bytes로 변환
+    2. **partitioner**: 보낼 partition을 결정
+    3. **batch**: partition별로 메시지를 모아둠
+    4. **sender thread**: 모인 batch를 그 partition의 leader broker로 전송
+    5. **ack** 수신 → 성공, 또는 실패 시 재시도
+  - **partitioner**
+    - key가 있으면 `hash(key) % partition 수` → 같은 key는 항상 같은 partition.
+    - key가 없으면 batch 단위로 한 partition에 몰아 보내고 다음 partition으로 넘어감(sticky). 순서는 보장 안 됨.
+    - partition 수를 바꾸면 key → partition 매핑이 바뀌어 순서 보장이 깨짐.
+  - **batching**
+    - 메시지를 하나씩 보내지 않고 모아서 보냄. 처리량을 위한 장치.
+    - `linger.ms`(모으려고 기다리는 시간), `batch.size`(batch 최대 크기), `compression.type`(batch 단위 압축).
+    - 압축은 종단 간(end-to-end)임.
+      - producer가 레코드 배치 단위로 압축해 보내고, broker는 압축된 채로 저장하고 그대로 전송함. 푸는 건 consumer.
+      - 그래서 네트워크뿐 아니라 디스크 사용량까지 줄어듦.
+      - 압축 단위가 배치라 배치가 클수록 압축률이 좋아짐. `linger.ms`가 지연 대 처리량만의 문제가 아닌 이유.
+  - **leader 주소는 메타데이터 캐시에서 찾음**
+    - producer는 첫 접속 때 받은 메타데이터를 들고 있음. 전체 broker 목록과 partition별 leader가 들어 있어서, 보낼 때마다 물어보지 않고 캐시에서 leader 주소를 바로 꺼냄.
+    - leader가 바뀌면 낡은 주소로 보내게 되고, 그 broker가 `NOT_LEADER_OR_FOLLOWER`를 돌려줌.
+    - 이때 **bootstrap으로 돌아가지 않음.** 이미 연결돼 있는 broker 중 가장 한가한 곳(least loaded node)에 `MetadataRequest`를 보내 갱신함.
+      - 아무 broker에나 물어도 되는 이유: 모든 broker가 controller의 메타데이터 로그를 복제해 같은 사본을 가짐. leader에게 가야 하는 건 produce/fetch뿐임.
+    - 갱신 후 자동 재시도하므로 애플리케이션까지 예외가 올라오지 않음. `retry.backoff.ms`(기본 100ms) 쉬었다 재시도하고, `delivery.timeout.ms` 안에 성공하면 `send()`는 그냥 성공으로 끝남.
+    - 주기적 갱신은 `metadata.max.age.ms`(기본 5분). 에러는 이 주기를 기다리지 않고 즉시 갱신을 트리거하는 역할.
+    - 알고 있는 broker가 전부 연결 불가일 때만 bootstrap 주소로 되돌아감(re-bootstrap, `metadata.recovery.strategy`). Kafka 4.x 기본값이 `rebootstrap`.
+    - 우리 인프라에서는 bootstrap Service에 붙는 데 성공해도, 메타데이터로 받은 broker별 주소에 도달하지 못하면 전송이 안 됨. NetworkPolicy를 걸 때 bootstrap만 열면 안 되는 이유.
+  - **acks**: 어디까지 기록되면 성공으로 볼지
+    - `0`: 보내고 끝. 확인 안 함. 유실 가능.
+    - `1`: leader만 기록하면 성공. leader가 죽으면 유실 가능.
+    - `all`(기본값): ISR 전원 기록 시 성공. `min.insync.replicas`와 함께 내구성을 보장.
+  - **idempotent producer** (`enable.idempotence=true`, 기본값)
+    - 네트워크 오류로 재시도하면 같은 메시지가 두 번 저장될 수 있음.
+    - producer가 producer id + partition별 sequence 번호를 붙여 보내고, broker가 이미 받은 번호면 버림.
+    - 한계: **같은 producer 세션 안의 재시도만** 막음. outbox relay가 재시작해서 같은 이벤트를 다시 보내면 새 메시지로 저장됨 → 그래서 consumer 쪽에 Inbox(멱등 처리)가 필요.
+  - **transaction** (`transactional.id`)
+    - 여러 partition에 쓰기 + consumer offset commit을 원자적으로 묶음.
+    - Kafka → Kafka 파이프라인에서 exactly-once를 만드는 수단. 외부 DB 쓰기까지 묶어주지는 않음.
+    - 상태는 내부 topic `__transaction_state`에 저장.
+    - 읽는 쪽 짝은 `isolation.level`.
+      - `read_uncommitted`(기본): 진행 중인 트랜잭션의 메시지도 보임.
+      - `read_committed`: high watermark가 아니라 **LSO(Last Stable Offset)**까지만 읽음. LSO는 아직 끝나지 않은 가장 오래된 트랜잭션의 시작 지점.
+      - 트랜잭션 하나가 오래 열려 있으면 LSO가 멈춰 consumer 전체가 멈춤.
+- **Consumer**
+  - topic에서 메시지를 읽는 클라이언트.
+    - 우리 인프라에서는 graph-rag가 consumer.
+  - **pull 방식**
+    - broker가 밀어주지 않고 consumer가 `poll()`로 가져감.
+    - consumer가 자기 처리 속도에 맞춰 가져갈 수 있고, 한 번에 여러 건을 묶어 받음.
+    - 각 partition의 leader에게서, high watermark(확정된 offset)까지만 읽음.
+    - `poll()`을 계속 도는데 바쁜 대기가 되지 않는 이유: **long polling**.
+      - `fetch.min.bytes`(기본 1)만큼 데이터가 없으면 broker가 응답을 붙잡아 둠. `fetch.max.wait.ms`(기본 500ms)까지 기다렸다가 보냄.
+      - 이렇게 지연된 요청을 보관하는 자료구조를 **purgatory**라고 함. (동작은 [브로커의 purgatory](kafka-cluster.md) 참고)
+      - `acks=all` produce 요청도 여기 들어감. ISR 복제를 기다리는 동안 스레드를 붙잡지 않음.
+    - **fetch는 라이브러리가 백그라운드에서, `poll()`은 로컬 버퍼에서**
+      - 역할 분담
+        - 애플리케이션: `poll()` → 처리 → commit 루프만 짬.
+        - 클라이언트 라이브러리: broker에 `FetchRequest`, 받은 메시지 버퍼링, heartbeat, rebalance.
+        - broker: 보낼 데이터가 없으면 요청을 붙잡아 둠 (위의 long polling).
+      - 타이머로 주기적으로 묻는 방식이 아님. 응답을 받으면 바로 다음 fetch를 보내서 broker에는 fetch 요청이 거의 항상 하나 떠 있음.
+        - 메시지가 들어오면 붙잡혀 있던 요청이 즉시 응답됨. 지연이 폴링 주기에 묶이지 않고 ms 단위. pull인데 체감은 push에 가까움.
+      - 받은 메시지는 로컬 버퍼에 미리 쌓아 둠(prefetch). `poll()`은 네트워크 호출이 아니라 이 버퍼에서 꺼내는 것.
+        - `poll(1.0)`의 1초는 '버퍼가 비었을 때 최대 대기 시간'이지 폴링 주기가 아님.
+        - 처리가 느려도 fetch는 백그라운드에서 계속 돌고, 버퍼가 차면 멈춤. librdkafka 기본 상한 64MB(`queued.max.messages.kbytes`). pod 메모리를 잡을 때 포함해서 계산할 것.
+        - rebalance로 partition을 빼앗기면 그 partition의 버퍼는 버려지고, 새 담당 consumer가 마지막 commit 지점부터 다시 받음. 처리했지만 commit 전이던 메시지는 두 번 처리됨 → Inbox가 막아야 하는 중복 경로.
+      - Java는 구조가 조금 다름.
+        - classic consumer(`group.protocol=classic`)에는 fetch 전용 스레드가 없음. `poll()`이 레코드를 돌려주기 직전에 다음 fetch를 미리 보내 두는 방식(pipelining). 처리하는 동안 응답이 도착하고, 다음 `poll()`에서 꺼냄.
+        - Kafka 4.x의 새 consumer(`group.protocol=consumer`)는 네트워크 I/O를 백그라운드 스레드로 옮겨 Python 클라이언트와 비슷해짐.
+      - 우리 인프라에서는 graph-rag의 Python 클라이언트가 미정.
+        - confluent-kafka-python: C 라이브러리 librdkafka의 백그라운드 스레드가 fetch. `poll()`이 blocking이라 FastAPI(async)에서는 event loop를 막지 않도록 별도 스레드에서 돌려야 함. long polling 설정 이름이 `fetch.wait.max.ms`로 Java와 다름.
+        - aiokafka: asyncio task가 fetch. `async for msg in consumer`로 event loop에서 그대로 돌아감.
+    - **`poll()`은 버퍼 꺼내기 외에도 일을 함**
+      - 생존 신호: `max.poll.interval.ms` 타이머를 리셋함. 백그라운드 heartbeat와 별개로 '애플리케이션이 루프를 돌고 있다'를 증명.
+      - rebalance 진행: librdkafka와 Java는 partition 할당/회수 콜백(`on_assign`/`on_revoke`)을 `poll()`을 부른 스레드에서 실행함. `poll()`을 안 부르면 rebalance가 끝나지 않고 group 전체가 기다림.
+      - 에러·이벤트 전달: librdkafka는 백그라운드에서 생긴 에러, commit 결과를 `poll()`을 통해 애플리케이션에 넘김.
+      - auto commit 기준점: Python 클라이언트는 `enable.auto.commit=true`(기본)면 `poll()`이 돌려주는 순간 그 offset이 '처리됨'으로 기록되고, 백그라운드 타이머가 5초마다 commit함.
+        - 처리가 끝나기 전에 commit이 나갈 수 있음. 그 사이 죽으면 그 메시지는 다시 오지 않음 → 유실(at-most-once).
+        - 우리는 처리 후 commit(아래 'commit 시점이 곧 전달 보장')이므로 `enable.auto.commit=false`로 두고 직접 commit해야 함.
+      - 그래서 긴 처리 중에도 `poll()`은 계속 불러야 함. 처리할 partition을 `pause()` → 별도 worker에서 처리 → 루프는 `poll()`만 계속 호출 → 끝나면 commit 후 `resume()`. [미작성 항목](README.md#미결정과-미작성-항목)으로 남김.
+  - **읽어도 메시지는 지워지지 않음**
+    - 삭제는 `retention.ms` 기준으로만 일어남. 읽었다고 사라지지 않음.
+    - 그래서 여러 group이 같은 메시지를 각자 읽을 수 있고, offset을 되돌리면 다시 읽을 수 있음(replay).
+  - **offset commit**
+    - "어디까지 처리했는지"를 group 단위로 내부 topic `__consumer_offsets`에 기록.
+    - 재시작하면 마지막 commit 지점부터 이어서 읽음.
+    - auto commit(`enable.auto.commit=true`, 주기적 자동 기록) vs manual commit(처리 후 직접 기록).
+  - **commit 시점이 곧 전달 보장**
+    - 처리 → commit: 처리 후 commit 전에 죽으면 다시 받음 → **at-least-once** (중복 가능) ← 우리 선택. 중복은 Inbox로 거름.
+    - commit → 처리: commit 후 처리 전에 죽으면 그 메시지를 건너뜀 → **at-most-once** (유실 가능)
+  - **`auto.offset.reset`**
+    - commit 기록이 없는 새 group이 어디서부터 읽을지.
+    - `earliest`: 남아 있는 가장 오래된 메시지부터 / `latest`: 지금 이후 메시지부터.
+  - **`max.poll.interval.ms`** (기본 5분)
+    - `poll()` 호출 간격이 이 시간을 넘으면 죽은 consumer로 판단해 group에서 제외하고 partition을 다른 consumer에게 넘김.
+    - LLM 호출처럼 오래 걸리는 처리를 `poll()` 루프 안에서 동기로 하면 걸릴 수 있음.
+  - **DLQ(Dead Letter Queue)**
+    - 계속 실패하는 메시지를 붙잡고 있으면 그 partition 전체가 멈춤.
+    - 일정 횟수 실패하면 DLQ topic으로 보내고 다음 메시지로 넘어감.
+    - 우리 인프라에서는 `content.file.changed.v1.dlq` (보존 30일).
+- **Consumer Group**
+  - 같은 `group.id`를 가진 consumer들의 묶음. 하나의 논리적 구독자.
+  - **partition 분배 규칙**
+    - 한 partition은 group 안에서 **정확히 한 consumer**에게만 배정됨.
+    - 한 consumer는 여러 partition을 맡을 수 있음.
+    - consumer 수 > partition 수면 남는 consumer는 놀게 됨.
+    - 우리 인프라에서는 partition 6개 → graph-rag pod는 최대 6개까지 의미 있음.
+  - **순서 보장의 근거**
+    - 한 partition을 한 consumer만 순서대로 읽으므로, 같은 key(`projectId`)의 메시지는 순서대로 처리됨.
+    - consumer 안에서 다시 멀티스레드로 흩뿌리면 이 보장이 깨짐.
+  - **group 안은 queue, group 사이는 pub/sub**
+    - 같은 group: 메시지를 나눠서 처리 (작업 분산)
+    - 다른 group: 각 group이 모든 메시지를 독립적으로 받음 (각자 offset)
+    - 예: `graph-rag` group과 `search` group이 같은 topic을 각자 전부 받음.
+  - **group coordinator**
+    - group마다 담당 broker가 하나 정해짐. `__consumer_offsets`에서 그 group을 담당하는 partition의 leader broker.
+    - group 멤버 관리, heartbeat 수신, offset commit 저장을 맡음.
+    - 별도 서버가 아니라 **broker 안의 역할**. partition leader처럼 broker가 맡는 역할 중 하나이고, controller와는 다름.
+      - controller: 클러스터 메타데이터를 관리함. `__cluster_metadata`를 Raft로 복제하고, 클러스터에 active 1대.
+      - group coordinator: group 멤버십, 배정, offset을 관리함. `__consumer_offsets`를 일반 topic처럼 ISR로 복제하고, group마다 담당 broker가 다름.
+      - 우리 인프라는 combined mode라 같은 pod가 coordinator이면서 active controller일 수 있음. 같은 프로세스에 있을 뿐 같은 역할은 아님.
+    - **정해지는 방식** (두 단계)
+      1. 어느 partition인가: `abs(hashCode(group.id)) % 50` 공식으로 정해짐. 정하는 주체가 없고, 어느 broker가 계산해도 같은 값이 나옴.
+      2. 그 partition의 leader가 어느 broker인가: controller가 정함. 평소에는 preferred leader, 장애 시에는 ISR에서 재선출.
+      - 그래서 coordinator가 바뀌는 시점 = 그 partition의 leader가 바뀌는 시점.
+      - client는 `FindCoordinator`로 찾음. 요청을 받은 broker가 해시를 계산하고, 자기 메타데이터 사본에서 그 partition의 leader를 알려줌.
+    - **topic partition마다가 아니라 group마다 하나**
+      - consumer는 메시지를 가져올 때는 각 topic partition의 leader와, 합류·heartbeat·commit은 group의 coordinator 한 곳과만 통신함.
+      - group이 읽는 topic partition이 몇 개든, 그 group의 offset은 전부 한 `__consumer_offsets` partition에 기록됨.
+    - **group과 partition은 N:1**
+      - group 하나는 정확히 한 partition에 매핑되지만, 한 partition에는 group이 0개일 수도 여러 개일 수도 있음.
+      - 예 (같은 공식으로 계산): `graph-rag`는 41번, `search`는 6번. 우리 group 이름은 아직 미정.
+      - partition이 50개면 group 9개만 돼도 어딘가 두 group이 겹칠 확률이 절반을 넘음 (생일 문제).
+      - partition 수는 'group을 몇 개 담나'가 아니라 'coordinator 일을 broker에 몇 조각으로 나누나'를 정함. 바꾸면 모든 group의 매핑이 바뀌므로 사실상 고정.
+    - **한 broker가 여러 group을 맡음**
+      - 자기가 leader인 `__consumer_offsets` partition(우리 인프라는 broker당 16~17개)에 모인 group을 전부 관리함.
+      - 내부 구조 (Kafka 4.x coordinator runtime): partition 하나가 상태 기계 하나. 같은 partition의 요청은 순차 처리하고, 다른 partition끼리는 스레드 풀(`group.coordinator.threads`, 기본 4)에서 병렬 처리함.
+      - 상태를 바꾸는 요청(commit, 합류)은 레코드를 partition에 쓰고, 복제로 확정될 때까지 응답을 보류함.
+      - 같은 partition에 걸린 group끼리는 서로 영향을 줌. 한 group이 commit을 폭주시키면 이웃 group도 느려질 수 있음.
+    - **group leader client 지정** (classic 프로토콜만)
+      - coordinator가 정함. leader가 비어 있으면 처음 합류한 멤버가 leader가 되고, 다음 rebalance에서도 제때 다시 합류하면 그대로 유지됨.
+      - leader가 떠나거나 rebalance timeout 안에 다시 합류하지 못하면 남은 멤버 중 하나로 바뀜.
+      - assignor는 모든 멤버가 지원하는 것 중에서 멤버들의 투표로 정함. 배포 중 옛 pod와 새 pod의 설정이 다르면 예상과 다른 assignor가 뽑힐 수 있음.
+      - KIP-848(`group.protocol=consumer`)에는 이 역할이 없음. coordinator가 직접 배정을 계산함.
+    - 헷갈리기 쉬운 것: 'partition rebalancing'
+      - consumer group rebalance(어느 consumer가 어느 partition을 읽나)는 group coordinator가 진행함.
+      - partition 재배치(어느 broker가 어느 replica를 갖나)와 leader 재균형은 controller가 실행함. 재배치 계획은 사람이나 Cruise Control이 세움.
+    - 같은 패턴의 다른 coordinator: transaction coordinator(`__transaction_state`), share coordinator(`__share_group_state`, KIP-932). '내부 topic partition의 leader = 그 key의 담당자'라는 패턴.
+  - **`__consumer_offsets`**
+    - consumer group 상태를 저장하는 **내부 topic**. 구조는 일반 topic과 같음(partition, 복제, log). 클라이언트가 직접 쓰지 않고 coordinator만 씀.
+    - 들어 있는 레코드
+      - offset commit: key (group, topic, partition) → commit한 offset, 시각, leader epoch
+      - group 메타데이터: key (group) → 멤버 목록, 배정, 세대(generation 또는 member epoch)
+    - partition 50개(`offsets.topic.num.partitions`). `group.id` 해시로 한 group의 레코드가 한 partition에 모임 → 그 partition의 leader(coordinator) 한 곳에서만 쓰고, 순서도 보장됨.
+    - compact topic: key별 최신 값만 남김. commit을 계속 해도 로그가 끝없이 커지지 않음.
+    - coordinator의 저장소: 상태는 메모리에 두고 쓰되, 모든 변경을 여기에 먼저 기록함. coordinator가 바뀌면 새 leader가 이 로그를 읽어 상태를 복원함.
+    - 첫 group이 생길 때 broker가 자동으로 만듦. `auto.create.topics.enable: false`는 일반 topic에만 적용되고, 내부 topic 생성은 막지 않음.
+    - **offset도 만료됨**: 멤버가 하나도 없는 group은 `offsets.retention.minutes`(기본 7일)가 지나면 commit offset이 삭제됨. 다시 올리면 `auto.offset.reset`을 따름.
+    - 우리 인프라에서는
+      - `offsets.topic.replication.factor: 3`이라 RF 3. broker 3대가 50개 partition의 사본을 모두 가짐. 각 broker의 gp3 10Gi PVC에 `__consumer_offsets-0`부터 `__consumer_offsets-49`까지 디렉터리로 있음.
+      - topic retention도 7일이라, graph-rag를 7일 넘게 내려 두면 commit 위치와 메시지가 함께 사라질 수 있음.
+    - 확인 방법
+      - `kafka-topics.sh --describe --topic __consumer_offsets`: partition별 leader(= 그 partition에 매핑된 group들의 coordinator).
+      - `kafka-consumer-groups.sh --describe --group GROUP_ID --state`: `COORDINATOR (ID)` 열에 담당 broker id.
+  - **rebalance**
+    - consumer가 들어오거나 나가거나 죽으면 partition 배정을 다시 함.
+    - 기존 방식(classic): 모든 consumer가 partition을 내려놓고 다시 받음 → 그동안 group 전체가 멈춤(stop-the-world).
+    - Kafka 4.0부터 새 방식(KIP-848, `group.protocol=consumer`)이 정식 지원: broker가 배정을 주도하고, 바뀌는 partition만 옮김.
+    - 배포(롤링 재시작)할 때마다 rebalance가 일어남.
+    - 배정을 계산하는 주체는 broker가 아니라 consumer였음.
+      - classic 프로토콜에서는 group 멤버 중 하나가 **group leader**로 뽑히고, 그 클라이언트가 배정 알고리즘을 실행해 결과를 coordinator에 제출함. broker는 전달만 함.
+      - KIP-848의 핵심 변화가 이 계산을 broker(coordinator)로 옮긴 것.
+    - 배정 알고리즘(assignor)에도 선택지가 있음: `Range`, `RoundRobin`, `Sticky`, `CooperativeSticky`.
+      - `CooperativeSticky`는 기존 배정을 최대한 유지하고 바뀌는 partition만 넘겨 stop-the-world를 피함. KIP-848 이전의 완화책.
+  - **consumer lag**
+    - `마지막 메시지 offset - group이 commit한 offset` = 아직 처리 못 한 양.
+    - consumer가 밀리고 있는지 보는 핵심 지표. 우리 인프라에는 아직 측정 수단이 없음(metrics 미설정).

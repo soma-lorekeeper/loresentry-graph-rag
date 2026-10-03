@@ -21,6 +21,11 @@ Relationships come from **explicitly stored file references**, never from guessi
 at names that happen to appear in body text. Trash, other projects, and data the
 caller cannot access must stay out of retrieval results.
 
+## Documentation
+
+See [the documentation guide](docs/README.md) for the current implementation,
+provided and outgoing APIs, code navigation, and verification scope.
+
 ## Stack
 
 | | Version | Notes |
@@ -39,6 +44,7 @@ built a month apart resolve to the same tree.
 
 | Method | Path | Behaviour |
 | --- | --- | --- |
+| `GET` | `/health/db` | Checks Neptune `/status`; returns diagnostic fields or `503`. See [API details](docs/API.md). |
 | `GET` | `/health` | `{"status":"ok"}`. Used by the Kubernetes probes. |
 | `GET` | `/` | `{"service":"graph-rag-api"}` |
 
@@ -57,10 +63,13 @@ curl localhost:8000/health
 ## Test
 
 ```bash
-pytest
+.venv/bin/python -m pytest -q
 ```
 
-No AWS or network access required.
+No AWS or external network access required. Integration tests use a loopback HTTP
+server and need local socket access. Run only pure rules with
+`.venv/bin/python -m pytest tests/test_graph.py -q`, or select real HTTP integration
+with `.venv/bin/python -m pytest -m integration -q`.
 
 ## Deploy
 
@@ -79,7 +88,7 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 
 ## Not implemented yet
 
-- Amazon Neptune access, and the graph model itself.
+- Graph queries and writes against Amazon Neptune, and the graph model itself. Neptune status checks are implemented.
 - RAG/GraphRAG retrieval.
 - The Kafka consumer for `loresentry-content` change events. No broker is running
   in the cluster yet.
