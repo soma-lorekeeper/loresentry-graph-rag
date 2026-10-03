@@ -13,7 +13,7 @@ S3 입력, 명시적 관계 조회, 부족한 문서의 Content 조회를 인터
 전체 원본 코드 매핑은 [이전 범위](overview.md), 저장·검색 확장은 [후속 계획](follow-up.md)을 따른다.
 
 현재 1~3단계의 구현·검증 내용은 [rules 이식 결과](rules-implementation.md)에 기록했다.
-실제 LLM 평가와 IO 통합은 남아 있다.
+실제 LLM 평가와 IO 통합은 남아 있다. 다음 단계는 [OpenAI 어댑터 이전 계획](openai-adapter.md)을 따른다.
 
 ## 1. 이번 단계의 범위
 
@@ -49,7 +49,7 @@ Content의 검토·확정 화면까지 완성해야만 생성 기능을 검증�
 | [extractor.py](../../../lorekeeper-ai/src/service/index/extractor.py)의 `KoreanWebNovelERTemplate`, `NovelContextExtractor`와 [extraction_examples.py](../../../lorekeeper-ai/src/service/index/extraction_examples.py)의 `EXTRACTION_FEW_SHOT` | 한국어 원고·배경 문맥·사례를 넣는 프롬프트 구성 재사용. 엔티티·관계 JSON을 설정 변경 제안·근거 JSON으로 재작성. Neo4j 클래스 상속은 제거 | `app/refresh/prompts.py`: 순수 프롬프트 생성. `app/adapters/llm.py`: 구조화 출력 호출. 생성 서비스가 두 단계를 연결 | 기존 사례를 목표 설정 필드와 기대 제안으로 다시 작성해 실제 LLM 평가 |
 | [graph_schema.py](../../../lorekeeper-ai/src/service/index/graph_schema.py)의 노드·관계 정의, [extraction_pipeline.py](../../../lorekeeper-ai/src/service/index/extraction_pipeline.py)의 `build_pipeline` | 도메인 의미와 출력 검증 흐름 참고. `GraphPruning`·writer·resolver 조립은 이전하지 않음. 갱신 대상·필드·revision_no·근거를 검증하는 규칙은 신규 작성 | `app/refresh/models.py`, `app/refresh/rules.py`: 입력·제안 값과 순수 검증. `app/refresh/service.py`: 문맥 구성, 호출, 검증 조율 | 잘못된 필드·다른 프로젝트·없는 근거 거절, 변경 없음 구분, 원본 쓰기 없음 |
 | [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py)의 `build_docstore`, `render_docstore` | 근거를 한 번만 담고 참조하는 정책을 선별. 모순 탐지의 claim/channel 입력과 Neo4j element ID는 제거 | `app/refresh/evidence.py`: 갱신안 여러 항목이 공유하는 원문 근거 정리. 후속 검색 결과에서도 같은 값 사용 | 동일 근거 중복 제거, 서로 다른 revision_no의 근거는 합치지 않음 |
-| [openai_client.py](../../../lorekeeper-ai/src/common/openai_client.py)의 `create_completion`, `create_response`, `_request`, [graphrag.py](../../../lorekeeper-ai/src/common/graphrag.py)의 `MeteredLLM` | 호출·오류·재시도 처리 재사용. Neo4j `LLMResponse` 변환과 전역 클라이언트 결합을 제거하고 필요한 호출 경계를 주입 | `app/adapters/llm.py`: 생성 서비스의 LLM 포트 구현. 모델 응답을 내부 제안 후보와 사용량으로 변환 | timeout·출력 오류·재시도 소진의 실패 변환, 실제 LLM 연결 검증 |
+| [openai_client.py](../../../lorekeeper-ai/src/common/openai_client.py)의 `create_completion`, `create_response`, `_request`, [graphrag.py](../../../lorekeeper-ai/src/common/graphrag.py)의 `MeteredLLM` | 호출·오류 분류를 선별 이식. 첫 연결은 SDK·어댑터 내부 재시도 없이 한 번 호출. Neo4j `LLMResponse` 변환과 전역 클라이언트 결합을 제거하고 필요한 호출 경계를 주입 | `app/adapters/llm.py`: 생성 서비스의 LLM 포트 구현. 모델 응답을 내부 제안 후보와 사용량으로 변환 | timeout·출력 오류·재시도 소진의 실패 변환, 실제 LLM 연결 검증 |
 | [usage.py](../../../lorekeeper-ai/src/common/usage.py)의 `empty`, `from_response`, `merge`, [llm_limit.py](../../../lorekeeper-ai/src/common/llm_limit.py), [admission.py](../../../lorekeeper-ai/src/common/admission.py) | 사용량 합산과 제한 정책 선별. 응답 파싱은 어댑터, 합산은 순수 함수. 시각·대기·세마포어와 전역 상태는 실행 쪽으로 분리 | `app/llm/usage.py`, `app/adapters/llm.py`: 작업별 비용 평가와 호출 예산 적용. Kafka 대기를 기존 HTTP 429로 처리하지 않음 | 캐시 토큰 중복 합산 방지, 제한 시 추가 호출 중단, 작업 간 사용량 격리 |
 | [index/job_service.py](../../../lorekeeper-ai/src/service/index/job_service.py)의 `submit`, `_run_index_job`, `get_status` | 접수·실행·결과·실패 역할만 참고. 메모리 큐와 회차 순차 처리는 교체 | `app/refresh/service.py`: 생성 유스케이스. 영속 상태·결과 저장·완료 발행은 병렬 전달 계층의 계약으로 연결 | 같은 요청의 결과 재사용, 저장 후 발행 실패에서 재생성 없이 복구 |
 | [tenant.py](../../../lorekeeper-ai/src/common/tenant.py)의 `Tenant`, [kg_scope.py](../../../lorekeeper-ai/src/service/kg_scope.py)의 `kg_scope` | 모든 자료에 같은 범위를 적용하는 원칙. 정수 ID·동적 Cypher 필터 구현은 제외 | `app/refresh/models.py`, `app/refresh/rules.py`: 검증된 프로젝트 범위와 입력 자료의 일치 검사. 실제 인가는 입력 공급 경계에서 수행 | 다른 프로젝트 자료를 LLM 호출 전에 거절 |
