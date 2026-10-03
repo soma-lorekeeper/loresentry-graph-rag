@@ -7,5 +7,5 @@
     "code": "STORAGE_UNAVAILABLE",
     "message": "Retry exhausted"
   },
-  "prompt_version": "refresh-v1"
+  "prompt_version": "refresh-prompt-v2"
 }

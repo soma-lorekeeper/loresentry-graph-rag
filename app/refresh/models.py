@@ -84,8 +84,8 @@ class ModelSettings:
     """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
 
     model: str = "unconfigured"
-    prompt_version: str = "refresh-v1"
-    schema_version: str = "refresh-result-v1"
+    prompt_version: str = "refresh-prompt-v2"
+    schema_version: str = "refresh-candidate-v1"
 
 
 @dataclass(frozen=True)
@@ -262,6 +262,7 @@ class ModelInput:
     prompt_version: str
     model: str
     target_ids: tuple[str, ...] = ()
+    instructions: str = ""
 
 
 @dataclass(frozen=True)
