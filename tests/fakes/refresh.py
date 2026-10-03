@@ -116,3 +116,13 @@ class FakeDocuments:
             else:
                 found.append(deepcopy(document))
         return DocumentBatch(tuple(found), tuple(missing))
+
+
+class FakeModel:
+    def __init__(self, candidate, calls=None):
+        self.candidate = deepcopy(candidate)
+        self.calls = calls if calls is not None else Calls()
+
+    def generate(self, model_input):
+        self.calls.record("model.generate", model_input)
+        return deepcopy(self.candidate)
