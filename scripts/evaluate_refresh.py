@@ -14,6 +14,7 @@ from app.refresh.errors import RefreshFailure
 from app.refresh.serialization import result_to_payload
 from evaluation.artifacts import AttemptRecorder, RecordingClient, write_json
 from evaluation.cases import cases
+from evaluation.replay import ResponseReplay
 from evaluation.runner import CallBudget, assemble, run_case
 
 
@@ -35,7 +36,9 @@ def environment(path: Path | None) -> dict:
 def main(argv=None) -> int:
     """명시적 live 플래그와 키·모델·예산이 있을 때만 원격 호출한다."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--live", action="store_true")
+    mode.add_argument("--responses-dir", type=Path)
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--timeout", type=float)
@@ -100,9 +103,19 @@ def main(argv=None) -> int:
                 if client is not None
                 else None
             )
+            if args.responses_dir is not None:
+                model = ResponseReplay(args.responses_dir, case, recorder)
+            source = (
+                "openai-api"
+                if args.live
+                else "conversation-assistant"
+                if args.responses_dir
+                else "expected-fixture"
+            )
             scenario = assemble(case, model, budget, recorder)
             report = {
                 "case": case.name,
+                "response_source": source,
                 "live": args.live,
                 "trial": args.trial,
                 "request": asdict(case.request),
@@ -135,6 +148,13 @@ def main(argv=None) -> int:
                 )
                 write_json(args.output / f"{case.name}.json", report)
             reports.append(report)
+            # Shared credentials/quota cannot be repaired by another fixture.
+            failure = report.get("failure") or report.get("result", {}).get("error")
+            if failure and failure.get("code") in {
+                "MODEL_AUTH_FAILED",
+                "MODEL_QUOTA_EXHAUSTED",
+            }:
+                break
         failed = any(
             r.get("failure") or not r["assessment"]["rules_accepted"] for r in reports
         )

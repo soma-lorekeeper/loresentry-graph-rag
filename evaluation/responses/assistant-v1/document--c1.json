@@ -1,0 +1,10 @@
+{
+  "response_source": "conversation-assistant",
+  "input_fingerprint": "d994d13eb8ec073871218e9b5772f4beb0f15bb5720d9bd3f00093d5f5bc6e4a",
+  "target_ids": [
+    "c1"
+  ],
+  "schema_version": "refresh-candidate-v1",
+  "prompt_version": "refresh-prompt-v2",
+  "response_text": "{\"document_proposals\": [{\"target_document_id\": \"c1\", \"base_revision_no\": 7, \"field\": \"body_text\", \"value\": \"유나는 파란 망토를 입는다. 고향은 서울이다.\", \"evidence\": [{\"document_id\": \"m1\", \"revision_no\": 3, \"start\": 0, \"end\": 15, \"quote\": \"유나는 파란 망토를 입는다.\"}]}], \"relation_proposals\": []}"
+}

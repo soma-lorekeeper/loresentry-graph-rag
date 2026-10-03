@@ -76,3 +76,39 @@ def test_live_requires_key_and_explicit_settings(tmp_path, monkeypatch):
     assert not (tmp_path / "run").exists()
     with pytest.raises(SystemExit):
         main(["--trial", "t", "--output", str(tmp_path / "other")])
+
+
+def test_live_auth_failure_stops_suite_and_records_unknown_cost(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import httpx2
+    from openai import AuthenticationError
+
+    import scripts.evaluate_refresh as cli
+
+    create = Mock(
+        side_effect=AuthenticationError(
+            "private",
+            body={"code": "invalid_api_key"},
+            response=httpx2.Response(
+                401, request=httpx2.Request("POST", "http://test")
+            ),
+        )
+    )
+
+    @contextmanager
+    def fake_client(**kwargs):
+        yield SimpleNamespace(max_retries=0, responses=SimpleNamespace(create=create))
+
+    monkeypatch.setattr(cli, "OpenAI", fake_client)
+    monkeypatch.setenv("OPENAI_API_KEY", "local-test-value")
+    target = tmp_path / "auth"
+    assert main(arguments(target) + ["--live"]) == 1
+    create.assert_called_once()
+    record = json.loads((target / "document-attempt-1.json").read_text())
+    assert record["sdk_version"] == "3.24.0"
+    assert record["usage"] is None
+    assert record["failure"]["code"] == "MODEL_AUTH_FAILED"
+    assert not (target / "relation.json").exists()

@@ -1,0 +1,10 @@
+{
+  "response_source": "conversation-assistant",
+  "input_fingerprint": "72e073ff156392597dff5145fd524044c18918f1a26574c8958a387d0418d030",
+  "target_ids": [
+    "c1"
+  ],
+  "schema_version": "refresh-candidate-v1",
+  "prompt_version": "refresh-prompt-v2",
+  "response_text": "{\"document_proposals\": [{\"target_document_id\": \"c1\", \"base_revision_no\": 7, \"field\": \"body_text\", \"value\": \"유나는 파란 망토를 입고 은색 검을 소유한다. 고향은 서울이다.\", \"evidence\": [{\"document_id\": \"m1\", \"revision_no\": 3, \"start\": 0, \"end\": 15, \"quote\": \"유나는 파란 망토를 입는다.\"}, {\"document_id\": \"m1\", \"revision_no\": 3, \"start\": 16, \"end\": 31, \"quote\": \"유나는 은색 검을 소유한다.\"}]}], \"relation_proposals\": [{\"document_id\": \"c1\", \"target_document_id\": \"i1\", \"base_revision_no\": 7, \"target_base_revision_no\": 9, \"relation_key\": \"related_item\", \"reverse_relation_key\": \"related_character\", \"description\": \"유나가 소유한 은색 검\", \"evidence\": [{\"document_id\": \"m1\", \"revision_no\": 3, \"start\": 16, \"end\": 31, \"quote\": \"유나는 은색 검을 소유한다.\"}], \"operation\": \"ADD\"}]}"
+}

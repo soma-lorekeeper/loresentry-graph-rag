@@ -1,0 +1,8 @@
+{
+  "response_source": "conversation-assistant",
+  "input_fingerprint": "d3d23cf16c3d1bd6d90f61ad9be21282de424298eb32032f1ee873d346e00bfa",
+  "target_ids": [],
+  "schema_version": "refresh-candidate-v1",
+  "prompt_version": "refresh-prompt-v2",
+  "response_text": "{\"document_proposals\": [], \"relation_proposals\": [{\"document_id\": \"m1\", \"target_document_id\": \"m2\", \"base_revision_no\": 3, \"target_base_revision_no\": 5, \"relation_key\": \"related_manuscript\", \"reverse_relation_key\": \"related_manuscript\", \"description\": \"서울을 떠난 유나의 여정이 다음 장의 부산 도착으로 이어진다.\", \"evidence\": [{\"document_id\": \"m1\", \"revision_no\": 3, \"start\": 0, \"end\": 31, \"quote\": \"첫 장에서 유나는 서울을 떠난다. 다음 장에서 이어진다.\"}, {\"document_id\": \"m2\", \"revision_no\": 5, \"start\": 0, \"end\": 27, \"quote\": \"이전 장에서 서울을 떠난 유나는 부산에 도착한다.\"}], \"operation\": \"ADD\"}]}"
+}

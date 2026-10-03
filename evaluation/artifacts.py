@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from openai import APIConnectionError, APIStatusError
+from openai import __version__ as sdk_version
 
 from app.refresh.errors import RefreshFailure
 
@@ -49,6 +50,7 @@ class AttemptRecorder:
             "case": self.case.name,
             "request": asdict(self.case.request.job),
             "attempt": len(self.records) + 1,
+            "sdk_version": sdk_version,
             "live": self.live,
             "settings": asdict(self.limits),
             "model_input": asdict(model_input),

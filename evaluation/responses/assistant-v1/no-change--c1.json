@@ -1,0 +1,10 @@
+{
+  "response_source": "conversation-assistant",
+  "input_fingerprint": "ea0dacbeda63b7035abcbd08ca74961d2165ace7f4bb0fc430ec4a40893062dc",
+  "target_ids": [
+    "c1"
+  ],
+  "schema_version": "refresh-candidate-v1",
+  "prompt_version": "refresh-prompt-v2",
+  "response_text": "{\"document_proposals\": [], \"relation_proposals\": []}"
+}
