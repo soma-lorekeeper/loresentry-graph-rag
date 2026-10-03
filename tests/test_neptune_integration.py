@@ -36,7 +36,9 @@ def upstream():
             pass
 
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
-        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread = Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
         thread.start()
         state["endpoint"] = f"http://127.0.0.1:{server.server_port}"
         try:
@@ -53,16 +55,30 @@ def test_real_adapter_and_route_can_repeat_a_read(upstream):
         first = client.get("/health/db")
         second = client.get("/health/db")
     assert first.status_code == second.status_code == 200
-    assert first.json() == second.json() == {
-        "status": "ok", "service": "graph-rag-api", "endpoint": upstream["endpoint"],
-        "role": "writer", "dbEngineVersion": "unknown", "gremlin": "unknown",
-    }
+    assert (
+        first.json()
+        == second.json()
+        == {
+            "status": "ok",
+            "service": "graph-rag-api",
+            "endpoint": upstream["endpoint"],
+            "role": "writer",
+            "dbEngineVersion": "unknown",
+            "gremlin": "unknown",
+        }
+    )
     assert upstream["requests"] == [("GET", "/status"), ("GET", "/status")]
 
 
-@pytest.mark.parametrize("status,body", [
-    (500, b'{}'), (200, b'not-json'), (200, b'[]'), (200, b'{"role":null}'),
-])
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        (500, b"{}"),
+        (200, b"not-json"),
+        (200, b"[]"),
+        (200, b'{"role":null}'),
+    ],
+)
 def test_upstream_failures_are_503_without_retry(upstream, status, body):
     upstream.update(status=status, body=body)
     with TestClient(create_app(NeptuneStatusSource(upstream["endpoint"]))) as client:

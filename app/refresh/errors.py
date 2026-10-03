@@ -5,6 +5,7 @@ from app.refresh.models import Failure
 
 class RefreshFailure(Exception):
     """실패 코드와 재시도 가능 여부를 Failure 값으로 전달하는 예상 가능한 실패."""
+
     def __init__(self, failure: Failure):
         self.failure = failure
         super().__init__(failure.message)

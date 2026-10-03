@@ -4,7 +4,12 @@ from dataclasses import replace
 
 import pytest
 
-from app.refresh.errors import JobBusy, RefreshFailure, RequestConflict, RulesNotImplemented
+from app.refresh.errors import (
+    JobBusy,
+    RefreshFailure,
+    RequestConflict,
+    RulesNotImplemented,
+)
 from app.refresh.models import Failure, JobState, Outcome, Readiness
 from tests.fakes.refresh import FakeJobs
 from tests.fakes.scenario import scenario
@@ -14,10 +19,15 @@ def failure(code="TEST_TIMEOUT", retryable=True):
     return RefreshFailure(Failure(code, code, retryable))
 
 
-@pytest.mark.parametrize("operation", [
-    "artifacts.read_input", "relations.find_related", "documents.fetch_documents",
-    "artifacts.save_context",
-])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "artifacts.read_input",
+        "relations.find_related",
+        "documents.fetch_documents",
+        "artifacts.save_context",
+    ],
+)
 def test_input_io_failure_prevents_model_and_releases_for_delivery_retry(operation):
     s = scenario()
     s.calls.failures[operation].append(failure())
@@ -40,12 +50,15 @@ def test_graph_delay_is_not_an_empty_success(readiness):
     assert s.publisher.delivered == []
 
 
-@pytest.mark.parametrize("operation,code", [
-    ("rules.validate_input", "WRONG_PROJECT"),
-    ("documents.fetch_documents", "ACCESS_DENIED"),
-    ("rules.assemble", "REQUIRED_DOCUMENT_MISSING"),
-    ("rules.assemble", "DOCUMENT_DELETED"),
-])
+@pytest.mark.parametrize(
+    "operation,code",
+    [
+        ("rules.validate_input", "WRONG_PROJECT"),
+        ("documents.fetch_documents", "ACCESS_DENIED"),
+        ("rules.assemble", "REQUIRED_DOCUMENT_MISSING"),
+        ("rules.assemble", "DOCUMENT_DELETED"),
+    ],
+)
 def test_terminal_rejection_is_failed_completion_not_success(operation, code):
     s = scenario()
     s.calls.failures[operation].append(failure(code, False))
@@ -75,7 +88,9 @@ def test_completed_duplicate_and_conflicting_input_do_not_generate_again():
     assert s.calls.names().count("model.generate") == 1
     assert s.publisher.delivered == [first]
     with pytest.raises(RequestConflict):
-        s.service().run(replace(s.request, required_graph_version="changed"), "execution-3")
+        s.service().run(
+            replace(s.request, required_graph_version="changed"), "execution-3"
+        )
     assert s.jobs.load(s.request).state == JobState.COMPLETED
 
 
@@ -108,13 +123,18 @@ def test_model_retry_reuses_frozen_context_despite_source_changes():
     assert s.calls.names().count("model.generate") == 2
 
 
-@pytest.mark.parametrize("operation,prefix,delivered_before", [
-    ("publisher.publish", [], 0),
-    ("publisher.ack", [], 1),
-    ("jobs.checkpoint", [None], 0),  # context saved; result saved; checkpoint fails
-    ("jobs.checkpoint", [None, None], 1),  # delivered; completion checkpoint fails
-])
-def test_saved_result_recovers_without_regeneration(operation, prefix, delivered_before):
+@pytest.mark.parametrize(
+    "operation,prefix,delivered_before",
+    [
+        ("publisher.publish", [], 0),
+        ("publisher.ack", [], 1),
+        ("jobs.checkpoint", [None], 0),  # context saved; result saved; checkpoint fails
+        ("jobs.checkpoint", [None, None], 1),  # delivered; completion checkpoint fails
+    ],
+)
+def test_saved_result_recovers_without_regeneration(
+    operation, prefix, delivered_before
+):
     s = scenario()
     s.calls.failures[operation].extend([*prefix, failure()])
     with pytest.raises(RefreshFailure):
@@ -180,7 +200,9 @@ def test_lost_completed_result_does_not_regenerate_or_publish():
     assert s.jobs.load(s.request).state == JobState.COMPLETED
 
 
-@pytest.mark.parametrize("operation", ["rules.select", "rules.chunk", "rules.validate_candidate"])
+@pytest.mark.parametrize(
+    "operation", ["rules.select", "rules.chunk", "rules.validate_candidate"]
+)
 def test_unimplemented_steps_are_not_converted_to_normal_results(operation):
     s = scenario()
     s.calls.failures[operation].append(RulesNotImplemented(operation))

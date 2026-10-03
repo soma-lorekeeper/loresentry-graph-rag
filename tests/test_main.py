@@ -32,15 +32,23 @@ def test_basic_routes_do_not_query_graph():
 
 
 def test_health_db_reports_reachable_graph():
-    source = StubStatusSource({
-        "role": "writer", "dbEngineVersion": "1.4.8.0", "gremlin": {"version": "3.7.1"},
-    })
+    source = StubStatusSource(
+        {
+            "role": "writer",
+            "dbEngineVersion": "1.4.8.0",
+            "gremlin": {"version": "3.7.1"},
+        }
+    )
     with TestClient(create_app(source)) as client:
         response = client.get("/health/db")
     assert response.status_code == 200
     assert response.json() == {
-        "status": "ok", "service": "graph-rag-api", "endpoint": source.endpoint,
-        "role": "writer", "dbEngineVersion": "1.4.8.0", "gremlin": "3.7.1",
+        "status": "ok",
+        "service": "graph-rag-api",
+        "endpoint": source.endpoint,
+        "role": "writer",
+        "dbEngineVersion": "1.4.8.0",
+        "gremlin": "3.7.1",
     }
     assert source.calls == 1
 
@@ -51,7 +59,9 @@ def test_health_db_reports_unreachable_graph_without_retry():
         response = client.get("/health/db")
     assert response.status_code == 503
     assert response.json() == {
-        "status": "error", "service": "graph-rag-api", "error": "connection refused",
+        "status": "error",
+        "service": "graph-rag-api",
+        "error": "connection refused",
     }
     assert source.calls == 1
 

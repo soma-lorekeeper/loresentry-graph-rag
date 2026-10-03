@@ -10,6 +10,7 @@ class InvalidGraphStatus(ValueError):
 @dataclass(frozen=True)
 class GraphStatus:
     """상태 응답에서 추출한 역할과 엔진·Gremlin 버전."""
+
     role: str
     engine_version: str
     gremlin_version: str

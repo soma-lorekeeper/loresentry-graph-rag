@@ -2,3 +2,10 @@
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = ["integration: real HTTP IO against a loopback server (no AWS)"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]

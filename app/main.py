@@ -5,7 +5,11 @@ import os
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from app.application import GraphHealthService, GraphStatusSource, GraphStatusUnavailable
+from app.application import (
+    GraphHealthService,
+    GraphStatusSource,
+    GraphStatusUnavailable,
+)
 from app.graph import InvalidGraphStatus
 from app.neptune import NeptuneStatusSource
 
@@ -50,7 +54,9 @@ def create_app(source: GraphStatusSource | None = None) -> FastAPI:
         return JSONResponse(
             status_code=200,
             content={
-                "status": "ok", "service": SERVICE, "endpoint": result.endpoint,
+                "status": "ok",
+                "service": SERVICE,
+                "endpoint": result.endpoint,
                 "role": result.status.role,
                 "dbEngineVersion": result.status.engine_version,
                 "gremlin": result.status.gremlin_version,

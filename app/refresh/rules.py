@@ -6,8 +6,16 @@
 
 from app.refresh.errors import RulesNotImplemented
 from app.refresh.models import (
-    Chunk, DocumentBatch, ExecutionSnapshot, InputSnapshot, ModelCandidate,
-    ModelInput, RefreshRequest, RefreshResult, RelatedDocuments, Selection,
+    Chunk,
+    DocumentBatch,
+    ExecutionSnapshot,
+    InputSnapshot,
+    ModelCandidate,
+    ModelInput,
+    RefreshRequest,
+    RefreshResult,
+    RelatedDocuments,
+    Selection,
 )
 
 
@@ -17,6 +25,7 @@ class RefreshRules:
     아래 메서드의 반환 설명은 구현할 계약이다. 현재 기본 구현은 모두
     RulesNotImplemented를 발생시키며, DB·네트워크·시간·난수를 직접 조회하지 않는다.
     """
+
     def validate_input(self, request: RefreshRequest, source: InputSnapshot) -> None:
         """요청과 입력 스냅샷의 사용 조건을 검증할 경계.
 
@@ -25,8 +34,9 @@ class RefreshRules:
         """
         raise RulesNotImplemented("validate_input")
 
-    def select(self, request: RefreshRequest, source: InputSnapshot,
-               related: RelatedDocuments) -> Selection:
+    def select(
+        self, request: RefreshRequest, source: InputSnapshot, related: RelatedDocuments
+    ) -> Selection:
         """입력과 관계 조회 결과에서 처리할 문서를 선택할 경계.
 
         Returns:
@@ -37,9 +47,14 @@ class RefreshRules:
         """
         raise RulesNotImplemented("select")
 
-    def assemble(self, request: RefreshRequest, source: InputSnapshot,
-                 related: RelatedDocuments, selection: Selection,
-                 fetched: DocumentBatch) -> ExecutionSnapshot:
+    def assemble(
+        self,
+        request: RefreshRequest,
+        source: InputSnapshot,
+        related: RelatedDocuments,
+        selection: Selection,
+        fetched: DocumentBatch,
+    ) -> ExecutionSnapshot:
         """조회 결과의 범위·상태·누락을 검증하고 실행 입력을 조립할 경계.
 
         원본의 revision을 보존해야 한다. 추가 조회 자체는 서비스가 IO 포트로 수행한다.
@@ -60,7 +75,9 @@ class RefreshRules:
         """
         raise RulesNotImplemented("chunk")
 
-    def build_context(self, snapshot: ExecutionSnapshot, chunks: tuple[Chunk, ...]) -> str:
+    def build_context(
+        self, snapshot: ExecutionSnapshot, chunks: tuple[Chunk, ...]
+    ) -> str:
         """본문 조각과 출처로 모델에 제공할 문맥 문자열을 구성할 경계.
 
         Raises:
@@ -78,8 +95,12 @@ class RefreshRules:
         """
         raise RulesNotImplemented("build_prompt")
 
-    def validate_candidate(self, snapshot: ExecutionSnapshot, candidate: ModelCandidate,
-                           model_input: ModelInput) -> RefreshResult:
+    def validate_candidate(
+        self,
+        snapshot: ExecutionSnapshot,
+        candidate: ModelCandidate,
+        model_input: ModelInput,
+    ) -> RefreshResult:
         """모델 후보의 대상·revision·근거를 검증하여 결과를 결정할 경계.
 
         Args:

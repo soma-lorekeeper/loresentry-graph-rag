@@ -8,12 +8,23 @@ from dataclasses import replace
 
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import (
-    Completion, DocumentBatch, Failure, JobState, Outcome, Readiness,
-    RefreshRequest, RefreshResult, RelatedDocuments,
+    Completion,
+    DocumentBatch,
+    Failure,
+    JobState,
+    Outcome,
+    Readiness,
+    RefreshRequest,
+    RefreshResult,
+    RelatedDocuments,
 )
 from app.refresh.ports import (
-    DocumentSource, ProposalModel, RefreshArtifactStore, RefreshCompletionPublisher,
-    RefreshJobStore, RelatedDocumentSource,
+    DocumentSource,
+    ProposalModel,
+    RefreshArtifactStore,
+    RefreshCompletionPublisher,
+    RefreshJobStore,
+    RelatedDocumentSource,
 )
 from app.refresh.rules import RefreshRules
 
@@ -24,9 +35,18 @@ class RefreshService:
     판단은 rules에 위임하고 실행 스냅샷·결과·작업 상태 저장과 완료 발행을 조율한다.
     문서 원문이나 관계 그래프에 갱신안을 적용하는 기능은 포함하지 않는다.
     """
-    def __init__(self, *, artifacts: RefreshArtifactStore, relations: RelatedDocumentSource,
-                 documents: DocumentSource, model: ProposalModel, jobs: RefreshJobStore,
-                 publisher: RefreshCompletionPublisher, rules: RefreshRules | None = None):
+
+    def __init__(
+        self,
+        *,
+        artifacts: RefreshArtifactStore,
+        relations: RelatedDocumentSource,
+        documents: DocumentSource,
+        model: ProposalModel,
+        jobs: RefreshJobStore,
+        publisher: RefreshCompletionPublisher,
+        rules: RefreshRules | None = None,
+    ):
         """실행에 사용할 포트와 판단 규칙을 주입한다.
 
         Args:
@@ -75,17 +95,23 @@ class RefreshService:
             result = self.artifacts.read_result(request)
             if record.state == JobState.COMPLETED:
                 if result is None or record.result_ref is None:
-                    raise RefreshFailure(Failure("RESULT_MISSING", "Completed result unavailable"))
+                    raise RefreshFailure(
+                        Failure("RESULT_MISSING", "Completed result unavailable")
+                    )
                 return self._completion(request, record.result_ref, result)
             if record.result_ref is not None and result is None:
-                raise RefreshFailure(Failure("RESULT_MISSING", "Saved result unavailable"))
+                raise RefreshFailure(
+                    Failure("RESULT_MISSING", "Saved result unavailable")
+                )
             if result is None:
                 try:
                     result = self._compute(request, record)
                 except RefreshFailure as error:
                     if error.failure.retryable:
                         raise
-                    result = RefreshResult(request.job, Outcome.FAILED, failure=error.failure)
+                    result = RefreshResult(
+                        request.job, Outcome.FAILED, failure=error.failure
+                    )
             # Idempotent write also recovers a result saved before a job checkpoint.
             if result.job != request.job:
                 raise RequestConflict("result identity differs")
@@ -94,8 +120,12 @@ class RefreshService:
             current = self.jobs.load(request)
             if current is None or current.execution_id != execution_id:
                 raise RequestConflict("job owner changed during execution")
-            record = replace(current, state=JobState.RESULT_READY, result_ref=result_ref,
-                             failure=result.failure)
+            record = replace(
+                current,
+                state=JobState.RESULT_READY,
+                result_ref=result_ref,
+                failure=result.failure,
+            )
             self.jobs.checkpoint(record)
             completion = self._completion(request, result_ref, result)
             self.publisher.publish(completion)
@@ -106,10 +136,17 @@ class RefreshService:
             # delivery/lease recovery; it must not mask the original failure.
             try:
                 current = self.jobs.load(request)
-                if (current is not None and current.execution_id == execution_id
-                        and current.state not in {JobState.COMPLETED, JobState.RETRYABLE}):
-                    failure = error.failure if isinstance(error, RefreshFailure) else None
-                    self.jobs.checkpoint(replace(current, state=JobState.RETRYABLE, failure=failure))
+                if (
+                    current is not None
+                    and current.execution_id == execution_id
+                    and current.state not in {JobState.COMPLETED, JobState.RETRYABLE}
+                ):
+                    failure = (
+                        error.failure if isinstance(error, RefreshFailure) else None
+                    )
+                    self.jobs.checkpoint(
+                        replace(current, state=JobState.RETRYABLE, failure=failure)
+                    )
             except Exception as release_error:
                 error.add_note(f"Job release failed: {type(release_error).__name__}")
             raise
@@ -123,18 +160,26 @@ class RefreshService:
         snapshot = self.artifacts.read_context(request)
         if snapshot is None:
             if record.context_ref is not None:
-                raise RefreshFailure(Failure("CONTEXT_MISSING", "Saved execution snapshot unavailable"))
+                raise RefreshFailure(
+                    Failure("CONTEXT_MISSING", "Saved execution snapshot unavailable")
+                )
             source = self.artifacts.read_input(request)
             self.rules.validate_input(request, source)
             related = RelatedDocuments()
             if request.discover_related:
                 related = self.relations.find_related(request)
                 if related.readiness != Readiness.READY:
-                    raise RefreshFailure(Failure("GRAPH_NOT_READY", "Relationship projection not ready", True))
+                    raise RefreshFailure(
+                        Failure(
+                            "GRAPH_NOT_READY", "Relationship projection not ready", True
+                        )
+                    )
             selection = self.rules.select(request, source, related)
             fetched = DocumentBatch(())
             if selection.missing_ids:
-                fetched = self.documents.fetch_documents(request.job.project_id, selection.missing_ids)
+                fetched = self.documents.fetch_documents(
+                    request.job.project_id, selection.missing_ids
+                )
             snapshot = self.rules.assemble(request, source, related, selection, fetched)
         if snapshot.request != request:
             raise RequestConflict("execution snapshot belongs to a different request")
@@ -151,4 +196,10 @@ class RefreshService:
         """요청과 결과 식별이 같을 때 완료 값을 만들고, 다르면 RequestConflict를 발생시킨다."""
         if result.job != request.job:
             raise RequestConflict("result identity differs")
-        return Completion(request.job, result_ref, result.outcome, result.failure, result.prompt_version)
+        return Completion(
+            request.job,
+            result_ref,
+            result.outcome,
+            result.failure,
+            result.prompt_version,
+        )

@@ -60,6 +60,28 @@ uvicorn app.main:app --reload --port 8000
 curl localhost:8000/health
 ```
 
+## Lint and format
+
+[Ruff](https://docs.astral.sh/ruff/) checks Python code and formats `app/` and
+`tests/`. Install the pinned development dependencies using the setup above.
+Configuration lives in `pyproject.toml`: Python 3.12, a target line length of 88,
+basic error checks, unused imports, import sorting, bug-prone patterns (`B`),
+and modern Python syntax (`UP`). Docstring rules are not enabled.
+
+Apply safe lint fixes and formatting locally:
+
+```bash
+.venv/bin/ruff check --fix app tests
+.venv/bin/ruff format app tests
+```
+
+Check without changing files, using the same commands as CI:
+
+```bash
+.venv/bin/ruff check app tests
+.venv/bin/ruff format --check app tests
+```
+
 ## Test
 
 ```bash
@@ -76,7 +98,7 @@ with `.venv/bin/python -m pytest -m integration -q`.
 `main` push runs [`.github/workflows/ci-cd.yaml`](.github/workflows/ci-cd.yaml):
 
 ```
-pytest → docker build → ECR graph-rag/api:build-<run>-<attempt>
+ruff check + format --check → pytest → docker build → ECR graph-rag/api:build-<run>-<attempt>
        → invoke loresentry-update-gitops → commit to loresentry-gitops → Argo CD
 ```
 

@@ -12,6 +12,7 @@ class GraphStatusUnavailable(Exception):
 
 class GraphStatusSource(Protocol):
     """상태 진단용 원본 응답을 한 번 읽는 IO 계약."""
+
     @property
     def endpoint(self) -> str:
         """진단 결과에 표시할 상태 조회 대상 주소."""
@@ -31,12 +32,14 @@ class GraphStatusSource(Protocol):
 @dataclass(frozen=True)
 class GraphHealth:
     """진단에 사용한 주소와 해석된 그래프 메타데이터."""
+
     endpoint: str
     status: GraphStatus
 
 
 class GraphHealthService:
     """상태 조회 구현을 주입받아 조회 후 순수 해석을 수행하는 서비스."""
+
     def __init__(self, source: GraphStatusSource):
         self._source = source
 

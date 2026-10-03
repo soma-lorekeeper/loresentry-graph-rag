@@ -52,12 +52,18 @@ def test_checkpoint_records_context_result_and_terminal_state_for_resume():
         restored.checkpoint(replace(done, state=JobState.RUNNING))
 
 
-@pytest.mark.parametrize("operation,delivery_count", [("publisher.publish", 0), ("publisher.ack", 1)])
-def test_publisher_distinguishes_failure_before_delivery_and_lost_ack(operation, delivery_count):
+@pytest.mark.parametrize(
+    "operation,delivery_count", [("publisher.publish", 0), ("publisher.ack", 1)]
+)
+def test_publisher_distinguishes_failure_before_delivery_and_lost_ack(
+    operation, delivery_count
+):
     request = example()[0]
     completion = Completion(request.job, ArtifactRef("b", "result"), Outcome.NO_CHANGE)
     publisher = FakePublisher()
-    publisher.calls.failures[operation].append(RefreshFailure(Failure("PUBLISH_TIMEOUT", "timeout", True)))
+    publisher.calls.failures[operation].append(
+        RefreshFailure(Failure("PUBLISH_TIMEOUT", "timeout", True))
+    )
     with pytest.raises(RefreshFailure):
         publisher.publish(completion)
     assert len(publisher.delivered) == delivery_count

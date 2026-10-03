@@ -11,7 +11,9 @@ class ScriptedRules(RefreshRules):
         self.snapshot = snapshot
         self.result = result
         self.calls = calls if calls is not None else Calls()
-        self.model_input = ModelInput("fixture prompt", "fixture-v1", "fixture-v1", "fake")
+        self.model_input = ModelInput(
+            "fixture prompt", "fixture-v1", "fixture-v1", "fake"
+        )
 
     def validate_input(self, request, source):
         self.calls.record("rules.validate_input", request, source)
@@ -21,7 +23,9 @@ class ScriptedRules(RefreshRules):
         return self.selection
 
     def assemble(self, request, source, related, selection, fetched):
-        self.calls.record("rules.assemble", request, source, related, selection, fetched)
+        self.calls.record(
+            "rules.assemble", request, source, related, selection, fetched
+        )
         return self.snapshot
 
     def chunk(self, snapshot):

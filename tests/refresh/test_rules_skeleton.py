@@ -7,10 +7,18 @@ from app.refresh.models import ModelInput
 from app.refresh.rules import RefreshRules
 
 
-@pytest.mark.parametrize("method", [
-    "validate_input", "select", "assemble", "chunk", "build_context",
-    "build_prompt", "validate_candidate",
-])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "validate_input",
+        "select",
+        "assemble",
+        "chunk",
+        "build_context",
+        "build_prompt",
+        "validate_candidate",
+    ],
+)
 def test_every_unimplemented_boundary_stops_instead_of_accepting_data(method):
     function = getattr(RefreshRules(), method)
     with pytest.raises(RulesNotImplemented, match=method):

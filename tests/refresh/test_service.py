@@ -17,16 +17,24 @@ def test_normal_flow_preserves_snapshots_and_orders_io():
     assert s.jobs.load(s.request).state == JobState.COMPLETED
     assert s.publisher.delivered == [done]
     names = s.calls.names()
-    assert names.index("relations.find_related") < names.index("documents.fetch_documents")
+    assert names.index("relations.find_related") < names.index(
+        "documents.fetch_documents"
+    )
     assert names.index("artifacts.save_context") < names.index("model.generate")
-    assert names.index("rules.validate_candidate") < names.index("artifacts.save_result")
+    assert names.index("rules.validate_candidate") < names.index(
+        "artifacts.save_result"
+    )
     assert names.index("artifacts.save_result") < names.index("publisher.publish")
-    fetched = next(args for name, args in s.calls.events if name == "documents.fetch_documents")
+    fetched = next(
+        args for name, args in s.calls.events if name == "documents.fetch_documents"
+    )
     assert fetched == ("project-1", ("setting-1",))
     assembled = next(args for name, args in s.calls.events if name == "rules.assemble")
     assert assembled[1] == s.source
     assert assembled[-1].documents == s.snapshot.documents[1:]
-    validated = next(args for name, args in s.calls.events if name == "rules.validate_candidate")
+    validated = next(
+        args for name, args in s.calls.events if name == "rules.validate_candidate"
+    )
     assert validated == (s.snapshot, s.model.candidate, s.rules.model_input)
 
 

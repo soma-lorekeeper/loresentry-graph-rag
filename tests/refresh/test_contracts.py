@@ -4,8 +4,15 @@ import pytest
 
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import (
-    ArtifactRef, DocumentSnapshot, Evidence, Failure, InputSnapshot, JobKey,
-    Proposal, RefreshRequest, SelectionSettings,
+    ArtifactRef,
+    DocumentSnapshot,
+    Evidence,
+    Failure,
+    InputSnapshot,
+    JobKey,
+    Proposal,
+    RefreshRequest,
+    SelectionSettings,
 )
 
 
@@ -15,7 +22,7 @@ def test_revision_and_original_positions_survive_snapshot_construction():
     snapshot = InputSnapshot(job, (source,))
     evidence = Evidence("draft", 4, 3, 5, "안녕")
     proposal = Proposal("setting", 9, "body", "제안", (evidence,))
-    assert snapshot.documents[0].body[evidence.start:evidence.end] == evidence.quote
+    assert snapshot.documents[0].body[evidence.start : evidence.end] == evidence.quote
     assert proposal.base_revision == 9
     assert proposal.evidence[0].revision == source.revision
     with pytest.raises(FrozenInstanceError):

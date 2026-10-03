@@ -5,8 +5,14 @@ from copy import deepcopy
 
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import (
-    ArtifactRef, DocumentBatch, ExecutionSnapshot, Failure, InputSnapshot,
-    RefreshRequest, RefreshResult, RelatedDocuments,
+    ArtifactRef,
+    DocumentBatch,
+    ExecutionSnapshot,
+    Failure,
+    InputSnapshot,
+    RefreshRequest,
+    RefreshResult,
+    RelatedDocuments,
 )
 
 
@@ -74,7 +80,9 @@ class FakeArtifacts:
         self.calls.record("artifacts.read_result", request)
         return deepcopy(self.results.get(self._check(request)))
 
-    def save_result(self, request: RefreshRequest, result: RefreshResult) -> ArtifactRef:
+    def save_result(
+        self, request: RefreshRequest, result: RefreshResult
+    ) -> ArtifactRef:
         self.calls.record("artifacts.save_result", request, result)
         key = self._check(request)
         if result.job != request.job:
@@ -87,7 +95,10 @@ class FakeArtifacts:
 
     @staticmethod
     def _ref(request, kind):
-        return ArtifactRef("fake-artifacts", f"{request.job.project_id}/{request.job.request_id}/{kind}")
+        return ArtifactRef(
+            "fake-artifacts",
+            f"{request.job.project_id}/{request.job.request_id}/{kind}",
+        )
 
 
 class FakeRelations:
@@ -106,7 +117,9 @@ class FakeDocuments:
         self.documents = {(d.project_id, d.document_id): deepcopy(d) for d in documents}
         self.calls = calls if calls is not None else Calls()
 
-    def fetch_documents(self, project_id: str, document_ids: tuple[str, ...]) -> DocumentBatch:
+    def fetch_documents(
+        self, project_id: str, document_ids: tuple[str, ...]
+    ) -> DocumentBatch:
         self.calls.record("documents.fetch_documents", project_id, document_ids)
         found, missing = [], []
         for document_id in document_ids:
@@ -144,6 +157,7 @@ class FakeJobs:
 
     def claim(self, request, execution_id):
         from dataclasses import replace
+
         from app.refresh.errors import JobBusy
         from app.refresh.models import JobRecord, JobState
 
@@ -156,7 +170,9 @@ class FakeJobs:
                 return previous
             if previous.state != JobState.RETRYABLE:
                 raise JobBusy("execution already owns this request")
-            record = replace(previous, execution_id=execution_id, state=JobState.RUNNING)
+            record = replace(
+                previous, execution_id=execution_id, state=JobState.RUNNING
+            )
         else:
             record = JobRecord(request, execution_id)
         self.records[identity(request)] = record
@@ -171,14 +187,25 @@ class FakeJobs:
         if previous is None or previous.execution_id != record.execution_id:
             raise JobBusy("checkpoint owner differs")
         allowed = {
-            JobState.RUNNING: {JobState.RUNNING, JobState.RESULT_READY, JobState.RETRYABLE},
-            JobState.RESULT_READY: {JobState.RESULT_READY, JobState.COMPLETED, JobState.RETRYABLE},
+            JobState.RUNNING: {
+                JobState.RUNNING,
+                JobState.RESULT_READY,
+                JobState.RETRYABLE,
+            },
+            JobState.RESULT_READY: {
+                JobState.RESULT_READY,
+                JobState.COMPLETED,
+                JobState.RETRYABLE,
+            },
             JobState.RETRYABLE: set(),
             JobState.COMPLETED: set(),
         }
         if record.state not in allowed[previous.state]:
             raise ValueError("invalid job transition")
-        if record.state in {JobState.RESULT_READY, JobState.COMPLETED} and record.result_ref is None:
+        if (
+            record.state in {JobState.RESULT_READY, JobState.COMPLETED}
+            and record.result_ref is None
+        ):
             raise ValueError("result reference required")
         for name in ("context_ref", "result_ref"):
             old = getattr(previous, name)

@@ -1,4 +1,3 @@
-from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -49,10 +48,16 @@ def test_artifact_failures_are_explicit_and_failed_save_has_no_effect(code):
 def test_relation_fixture_preserves_duplicates_cycles_scope_and_readiness(readiness):
     request, _, related, _, _, _ = example()
     edge = related.relations[0]
-    response = replace(related, readiness=readiness,
-                       document_ids=("setting-1", "setting-1", "draft-1"),
-                       relations=(edge, replace(edge, source_id=edge.target_id, target_id=edge.source_id),
-                                  replace(edge, project_id="other")))
+    response = replace(
+        related,
+        readiness=readiness,
+        document_ids=("setting-1", "setting-1", "draft-1"),
+        relations=(
+            edge,
+            replace(edge, source_id=edge.target_id, target_id=edge.source_id),
+            replace(edge, project_id="other"),
+        ),
+    )
     fake = FakeRelations(response)
     assert fake.find_related(request) == response
     assert fake.find_related(request) is not response
@@ -65,17 +70,23 @@ def test_document_fake_reports_missing_deleted_and_latest_fixture_revision():
     batch = documents.fetch_documents("project-1", ("setting-1", "missing"))
     assert batch.documents == (setting,)
     assert batch.missing_ids == ("missing",)
-    documents.documents[("project-1", "setting-1")] = replace(setting, revision=8, state=DocumentState.DELETED)
+    documents.documents[("project-1", "setting-1")] = replace(
+        setting, revision=8, state=DocumentState.DELETED
+    )
     updated = documents.fetch_documents("project-1", ("setting-1",))
     assert updated.documents[0].state == DocumentState.DELETED
     assert batch.documents[0].revision == 7
-    assert documents.fetch_documents("other", ("setting-1",)).missing_ids == ("setting-1",)
+    assert documents.fetch_documents("other", ("setting-1",)).missing_ids == (
+        "setting-1",
+    )
 
 
 @pytest.mark.parametrize("code", ["CONTENT_DENIED", "CONTENT_TIMEOUT"])
 def test_document_errors_and_trace_are_isolated(code):
     calls = Calls()
-    calls.failures["documents.fetch_documents"].append(RefreshFailure(Failure(code, code)))
+    calls.failures["documents.fetch_documents"].append(
+        RefreshFailure(Failure(code, code))
+    )
     fake = FakeDocuments(calls=calls)
     with pytest.raises(RefreshFailure):
         fake.fetch_documents("p", ("d",))

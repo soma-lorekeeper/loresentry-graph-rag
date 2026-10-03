@@ -16,6 +16,7 @@ class NeptuneStatusSource:
         endpoint: /status를 붙여 호출할 기본 주소.
         timeout_seconds: HTTP 클라이언트의 타임아웃 설정값. 전체 처리 시간의 상한은 아니다.
     """
+
     endpoint: str
     timeout_seconds: float = 5.0
 
@@ -34,6 +35,10 @@ class NeptuneStatusSource:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPError as exc:
-            raise GraphStatusUnavailable(str(exc) or "Neptune status request failed") from exc
+            raise GraphStatusUnavailable(
+                str(exc) or "Neptune status request failed"
+            ) from exc
         except (JSONDecodeError, UnicodeDecodeError) as exc:
-            raise GraphStatusUnavailable("Neptune status response is not valid JSON") from exc
+            raise GraphStatusUnavailable(
+                "Neptune status response is not valid JSON"
+            ) from exc
