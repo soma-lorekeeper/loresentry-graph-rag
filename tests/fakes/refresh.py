@@ -126,3 +126,73 @@ class FakeModel:
     def generate(self, model_input):
         self.calls.record("model.generate", model_input)
         return deepcopy(self.candidate)
+
+
+class FakeJobs:
+    """Serial test model, not a database lock or a production lease algorithm."""
+
+    def __init__(self, records=(), calls=None):
+        self.records = {identity(r.request): deepcopy(r) for r in records}
+        self.calls = calls if calls is not None else Calls()
+
+    def load(self, request):
+        self.calls.record("jobs.load", request)
+        record = self.records.get(identity(request))
+        if record is not None and record.request != request:
+            raise RequestConflict("request ID already has different inputs")
+        return deepcopy(record)
+
+    def claim(self, request, execution_id):
+        from dataclasses import replace
+        from app.refresh.errors import JobBusy
+        from app.refresh.models import JobRecord, JobState
+
+        self.calls.record("jobs.claim", request, execution_id)
+        if not execution_id:
+            raise ValueError("execution_id is required")
+        previous = self.load(request)
+        if previous is not None:
+            if previous.state == JobState.COMPLETED:
+                return previous
+            if previous.state != JobState.RETRYABLE:
+                raise JobBusy("execution already owns this request")
+            record = replace(previous, execution_id=execution_id, state=JobState.RUNNING)
+        else:
+            record = JobRecord(request, execution_id)
+        self.records[identity(request)] = record
+        return deepcopy(record)
+
+    def checkpoint(self, record):
+        from app.refresh.errors import JobBusy
+        from app.refresh.models import JobState
+
+        self.calls.record("jobs.checkpoint", record)
+        previous = self.load(record.request)
+        if previous is None or previous.execution_id != record.execution_id:
+            raise JobBusy("checkpoint owner differs")
+        allowed = {
+            JobState.RUNNING: {JobState.RUNNING, JobState.RESULT_READY, JobState.RETRYABLE},
+            JobState.RESULT_READY: {JobState.RESULT_READY, JobState.COMPLETED, JobState.RETRYABLE},
+            JobState.RETRYABLE: set(),
+            JobState.COMPLETED: set(),
+        }
+        if record.state not in allowed[previous.state]:
+            raise ValueError("invalid job transition")
+        if record.state in {JobState.RESULT_READY, JobState.COMPLETED} and record.result_ref is None:
+            raise ValueError("result reference required")
+        for name in ("context_ref", "result_ref"):
+            old = getattr(previous, name)
+            if old is not None and getattr(record, name) != old:
+                raise RequestConflict("checkpoint cannot change saved references")
+        self.records[identity(record.request)] = deepcopy(record)
+
+
+class FakePublisher:
+    def __init__(self, calls=None):
+        self.calls = calls if calls is not None else Calls()
+        self.delivered = []
+
+    def publish(self, completion):
+        self.calls.record("publisher.publish", completion)
+        self.delivered.append(deepcopy(completion))
+        self.calls.record("publisher.ack", completion)
