@@ -12,6 +12,7 @@ from openai import OpenAI
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.refresh.errors import RefreshFailure
 from app.refresh.serialization import result_to_payload
+from evaluation.artifacts import AttemptRecorder, RecordingClient, write_json
 from evaluation.cases import cases
 from evaluation.runner import CallBudget, assemble, run_case
 
@@ -83,7 +84,7 @@ def main(argv=None) -> int:
         parser.error(str(error))
     reports = []
     with ExitStack() as stack:
-        model = None
+        client = None
         if args.live:
             client = stack.enter_context(
                 OpenAI(
@@ -92,9 +93,14 @@ def main(argv=None) -> int:
                     timeout=limits.timeout_seconds,
                 )
             )
-            model = OpenAIProposalModel(client, limits)
         for case in fixtures:
-            scenario = assemble(case, model, budget)
+            recorder = AttemptRecorder(args.output, case, limits, args.live)
+            model = (
+                OpenAIProposalModel(RecordingClient(client, recorder), limits)
+                if client is not None
+                else None
+            )
+            scenario = assemble(case, model, budget, recorder)
             report = {
                 "case": case.name,
                 "live": args.live,
@@ -116,10 +122,19 @@ def main(argv=None) -> int:
                 )
             except RefreshFailure as error:
                 report["failure"] = asdict(error.failure)
+            except Exception as error:
+                report["unexpected_error_type"] = type(error).__name__
+                raise
+            finally:
+                report["attempts"] = len(recorder.records)
+                report["observed_usage"] = [r["usage"] for r in recorder.records]
+                report["snapshot"] = (
+                    asdict(snapshot)
+                    if (snapshot := scenario.artifacts.read_context(case.request))
+                    else None
+                )
+                write_json(args.output / f"{case.name}.json", report)
             reports.append(report)
-            (args.output / f"{case.name}.json").write_text(
-                json.dumps(report, ensure_ascii=False, indent=2) + "\n"
-            )
         failed = any(
             r.get("failure") or not r["assessment"]["rules_accepted"] for r in reports
         )

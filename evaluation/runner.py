@@ -37,10 +37,18 @@ class CallBudget:
 class EvaluationModel:
     """명시적으로 선택한 실제 모델 또는 고정 오프라인 후보를 호출한다."""
 
-    def __init__(self, case, delegate, budget):
+    def __init__(self, case, delegate, budget, recorder=None):
         self.case, self.delegate, self.budget = case, delegate, budget
+        self.recorder = recorder
 
     def generate(self, model_input):
+        if self.recorder is not None:
+            return self.recorder.generate(
+                model_input, lambda: self._generate(model_input)
+            )
+        return self._generate(model_input)
+
+    def _generate(self, model_input):
         self.budget.consume()
         if self.delegate is not None:
             return self.delegate.generate(model_input)
@@ -54,7 +62,7 @@ class EvaluationModel:
         )
 
 
-def assemble(case: EvaluationCase, model, budget: CallBudget):
+def assemble(case: EvaluationCase, model, budget: CallBudget, recorder=None):
     """다섯 외부 IO를 fake로 고정하고 ProposalModel만 선택한다."""
     calls = Calls()
     artifacts = FakeJsonArtifacts({case.request.input_ref: case.source}, calls)
@@ -62,7 +70,7 @@ def assemble(case: EvaluationCase, model, budget: CallBudget):
         artifacts=artifacts,
         relations=FakeRelations(case.related, calls),
         documents=FakeDocuments(case.targets, calls),
-        model=EvaluationModel(case, model, budget),
+        model=EvaluationModel(case, model, budget, recorder),
         jobs=FakeJobs(calls=calls),
         publisher=FakePublisher(calls),
     )

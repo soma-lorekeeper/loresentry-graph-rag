@@ -33,7 +33,7 @@ def arguments(path):
 def test_offline_cli_all_cases_without_network(tmp_path):
     target = tmp_path / "run"
     assert main(arguments(target) + ["--repeat-saved"]) == 0
-    assert len(list(target.glob("*.json"))) == 6
+    assert len(list(target.glob("*.json"))) == 13
     report = json.loads((target / "both.json").read_text())
     assert not report["live"]
     assert report["assessment"]["rules_accepted"]

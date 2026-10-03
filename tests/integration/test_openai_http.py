@@ -52,7 +52,7 @@ def response_payload():
             "input_tokens": 10,
             "output_tokens": 20,
             "total_tokens": 30,
-            "input_tokens_details": {"cached_tokens": 5},
+            "input_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 0},
             "output_tokens_details": {"reasoning_tokens": 15},
         },
     }
