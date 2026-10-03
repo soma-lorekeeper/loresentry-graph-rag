@@ -1,0 +1,40 @@
+{
+  "schema_version": "refresh-result-v1",
+  "request_id": "request",
+  "project_id": "project",
+  "outcome": "FAILED",
+  "document_proposals": [],
+  "relation_proposals": [],
+  "sources": [],
+  "evidence": [],
+  "error": {
+    "code": "INVALID_EVIDENCE",
+    "message": "Evidence quote differs from original",
+    "retryable": false
+  },
+  "execution": {
+    "input_fingerprint": "fixed-input-v1",
+    "model": "unconfigured",
+    "prompt_version": null,
+    "schema_version": "refresh-result-v1",
+    "settings": {
+      "relation_keys": [],
+      "max_depth": 1,
+      "max_documents": 20,
+      "max_input_chars": 5000,
+      "policy_version": "refresh-v1",
+      "max_changed_documents": 20,
+      "max_context_chars": 240000,
+      "max_model_calls": 20,
+      "chunk_chars": 1000
+    },
+    "usage": {
+      "calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    "changed_ids": [],
+    "target_ids": [],
+    "observed_graph_version": null
+  }
+}

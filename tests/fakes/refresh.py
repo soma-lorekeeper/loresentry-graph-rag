@@ -227,3 +227,45 @@ class FakePublisher:
         self.calls.record("publisher.publish", completion)
         self.delivered.append(deepcopy(completion))
         self.calls.record("publisher.ack", completion)
+
+
+class FakeJsonArtifacts(FakeArtifacts):
+    """실제 순수 직렬화를 거쳐 JSON 바이트로 보존하는 fake. S3 내구성 검증은 아니다."""
+
+    def __init__(self, inputs=None, calls=None):
+        super().__init__(inputs, calls)
+        self.json_results = {}
+
+    def save_result(self, request, result):
+        import json
+
+        from app.refresh.serialization import result_to_payload
+
+        key = identity(request)
+        payload = result_to_payload(request, result, self.contexts.get(key))
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        if key in self.json_results and self.json_results[key] != encoded:
+            raise RequestConflict("saved JSON result is immutable")
+        ref = super().save_result(request, result)
+        self.json_results[key] = encoded
+        return ref
+
+    def read_result(self, request):
+        import json
+
+        from app.refresh.serialization import result_from_payload
+
+        result = super().read_result(request)
+        if result is None:
+            return None
+        try:
+            restored = result_from_payload(
+                json.loads(self.json_results[identity(request)])
+            )
+        except (KeyError, ValueError, TypeError) as error:
+            raise RefreshFailure(
+                Failure("RESULT_CORRUPTED", "Stored result is invalid")
+            ) from error
+        if restored != result:
+            raise RequestConflict("stored JSON and result differ")
+        return restored

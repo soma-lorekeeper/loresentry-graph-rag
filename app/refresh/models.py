@@ -293,7 +293,7 @@ class Completion:
     """완료 발행에 사용하는 결과 참조와 처리 결과. 본문 전체를 담지 않는다."""
 
     job: JobKey
-    result_ref: ArtifactRef
+    result_ref: ArtifactRef | None
     outcome: Outcome
     failure: Failure | None = None
     prompt_version: str | None = None

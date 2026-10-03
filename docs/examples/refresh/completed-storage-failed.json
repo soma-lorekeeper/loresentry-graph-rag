@@ -1,0 +1,11 @@
+{
+  "request_id": "request",
+  "project_id": "project",
+  "outcome": "FAILED",
+  "result": null,
+  "error": {
+    "code": "STORAGE_UNAVAILABLE",
+    "message": "Retry exhausted"
+  },
+  "prompt_version": "refresh-v1"
+}

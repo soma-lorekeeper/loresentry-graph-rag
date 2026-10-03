@@ -103,3 +103,26 @@ S3 결과 저장 후 발행한다. 결과 저장이 실패하면 존재하지 �
 
 문자열 설정값과 버전은 요청·실행 스냅샷으로 고정한다. 기본 모델 이름
 `unconfigured`는 실제 모델 선택이 필요함을 뜻한다. 이 단계는 fake로 검증한다.
+
+## 실행 가능한 결과 변환과 예시
+
+[serialization.py](../../app/refresh/serialization.py)의 `result_to_payload`는
+`refresh-result-v1` 결과를 JSON에 넣을 수 있는 값으로 변환한다. 공통 근거는
+최상위 `evidence`에 한 번 저장하고 각 제안의 `evidence_refs`가 참조한다.
+`sources.origin`은 변경 입력 `INPUT`과 추가 조회 `CONTENT`를 구분한다.
+`execution`에는 모델·프롬프트·후보 스키마 버전, 선택 예산, 입력 fingerprint,
+선택된 대상, 그래프 관측 버전, 이번 결과 생성 시도의 사용량을 기록한다.
+재시도에서 소모한 이전 시도의 토큰은 누적 과금 기록이 아니며 별도 관측이 필요하다.
+
+고정 예시: [제안 있음](../examples/refresh/result-proposed.json),
+[변경 없음](../examples/refresh/result-no-change.json),
+[실패](../examples/refresh/result-failed.json),
+[완료 성공](../examples/refresh/completed-success.json),
+[저장 불가 완료 실패](../examples/refresh/completed-storage-failed.json).
+실제 소비자와 합의된 JSON Schema나 배포된 Kafka producer를 뜻하지 않는다.
+`result_from_payload`는 이 내부 계산 결과를 복원하며 출처·실행 메타데이터는
+저장 JSON에 보존된다. 외부 응답 역직렬화와 S3 객체 무결성 검사는 실제 어댑터의 책임이다.
+
+서비스는 저장 실패 시 완료를 발행하지 않고 오류를 전달한다. 전달 계층이 재시도를
+소진한 뒤 `storage_failure_completion`으로 `result=null`인 실패 값을 만들 수 있다.
+이 함수 자체는 발행하지 않으며, 재시도 소진 정책·Kafka 헤더·offset은 후속 구현이다.

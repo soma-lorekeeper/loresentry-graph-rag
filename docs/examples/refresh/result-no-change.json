@@ -1,0 +1,67 @@
+{
+  "schema_version": "refresh-result-v1",
+  "request_id": "request",
+  "project_id": "project",
+  "outcome": "NO_CHANGE",
+  "document_proposals": [],
+  "relation_proposals": [],
+  "sources": [
+    {
+      "document_id": "c1",
+      "revision_no": 7,
+      "origin": "CONTENT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "i1",
+      "revision_no": 9,
+      "origin": "CONTENT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "m1",
+      "revision_no": 3,
+      "origin": "INPUT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "m2",
+      "revision_no": 5,
+      "origin": "INPUT",
+      "state": "ACTIVE"
+    }
+  ],
+  "evidence": [],
+  "error": null,
+  "execution": {
+    "input_fingerprint": "fixed-input-v1",
+    "model": "unconfigured",
+    "prompt_version": "refresh-v1",
+    "schema_version": "refresh-result-v1",
+    "settings": {
+      "relation_keys": [],
+      "max_depth": 1,
+      "max_documents": 20,
+      "max_input_chars": 5000,
+      "policy_version": "refresh-v1",
+      "max_changed_documents": 20,
+      "max_context_chars": 240000,
+      "max_model_calls": 20,
+      "chunk_chars": 1000
+    },
+    "usage": {
+      "calls": 2,
+      "input_tokens": 200,
+      "output_tokens": 100
+    },
+    "changed_ids": [
+      "m1",
+      "m2"
+    ],
+    "target_ids": [
+      "c1",
+      "i1"
+    ],
+    "observed_graph_version": null
+  }
+}

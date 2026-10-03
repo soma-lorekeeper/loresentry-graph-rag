@@ -1,0 +1,11 @@
+{
+  "request_id": "request",
+  "project_id": "project",
+  "outcome": "SUCCEEDED",
+  "result": {
+    "bucket": "fake-artifacts",
+    "key": "project/request/result"
+  },
+  "error": null,
+  "prompt_version": "refresh-v1"
+}

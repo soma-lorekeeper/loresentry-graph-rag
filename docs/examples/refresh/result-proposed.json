@@ -1,0 +1,119 @@
+{
+  "schema_version": "refresh-result-v1",
+  "request_id": "request",
+  "project_id": "project",
+  "outcome": "PROPOSED",
+  "document_proposals": [
+    {
+      "target_document_id": "c1",
+      "base_revision_no": 7,
+      "field": "body_text",
+      "value": "유나는 파란 망토를 입고 은색 검을 든다.",
+      "evidence_refs": [
+        "E0001",
+        "E0002"
+      ]
+    },
+    {
+      "target_document_id": "i1",
+      "base_revision_no": 9,
+      "field": "body_text",
+      "value": "검은 은색이다.",
+      "evidence_refs": [
+        "E0002"
+      ]
+    }
+  ],
+  "relation_proposals": [
+    {
+      "document_id": "c1",
+      "target_document_id": "i1",
+      "base_revision_no": 7,
+      "target_base_revision_no": 9,
+      "relation_key": "related_item",
+      "reverse_relation_key": "related_character",
+      "description": "유나가 소지한 검",
+      "operation": "ADD",
+      "evidence_refs": [
+        "E0001",
+        "E0002"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "document_id": "c1",
+      "revision_no": 7,
+      "origin": "CONTENT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "i1",
+      "revision_no": 9,
+      "origin": "CONTENT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "m1",
+      "revision_no": 3,
+      "origin": "INPUT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "m2",
+      "revision_no": 5,
+      "origin": "INPUT",
+      "state": "ACTIVE"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "E0001",
+      "document_id": "m1",
+      "revision_no": 3,
+      "start": 0,
+      "end": 25,
+      "quote": "유나는 파란 망토를 입었다.\n😀 다시 만났다."
+    },
+    {
+      "evidence_id": "E0002",
+      "document_id": "m2",
+      "revision_no": 5,
+      "start": 0,
+      "end": 26,
+      "quote": "유나는 은색 검을 들었다. 같은 말. 같은 말."
+    }
+  ],
+  "error": null,
+  "execution": {
+    "input_fingerprint": "fixed-input-v1",
+    "model": "unconfigured",
+    "prompt_version": "refresh-v1",
+    "schema_version": "refresh-result-v1",
+    "settings": {
+      "relation_keys": [],
+      "max_depth": 1,
+      "max_documents": 20,
+      "max_input_chars": 5000,
+      "policy_version": "refresh-v1",
+      "max_changed_documents": 20,
+      "max_context_chars": 240000,
+      "max_model_calls": 20,
+      "chunk_chars": 1000
+    },
+    "usage": {
+      "calls": 2,
+      "input_tokens": 200,
+      "output_tokens": 100
+    },
+    "changed_ids": [
+      "m1",
+      "m2"
+    ],
+    "target_ids": [
+      "c1",
+      "i1"
+    ],
+    "observed_graph_version": null
+  }
+}

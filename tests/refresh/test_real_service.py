@@ -11,9 +11,9 @@ from app.refresh.service import RefreshService
 from tests.fakes.real_rules import real_example
 from tests.fakes.refresh import (
     Calls,
-    FakeArtifacts,
     FakeDocuments,
     FakeJobs,
+    FakeJsonArtifacts,
     FakeModel,
     FakePublisher,
     FakeRelations,
@@ -33,7 +33,7 @@ def real_scenario():
         source=source,
         candidate=candidate,
         calls=calls,
-        artifacts=FakeArtifacts({request.input_ref: source}, calls),
+        artifacts=FakeJsonArtifacts({request.input_ref: source}, calls),
         relations=FakeRelations(related, calls),
         documents=FakeDocuments(targets, calls),
         model=FakeModel(ModelCandidate(()), calls, responses),
