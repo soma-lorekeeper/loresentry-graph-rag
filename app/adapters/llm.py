@@ -4,7 +4,7 @@ import json
 import math
 from dataclasses import dataclass
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from app.adapters.llm_schema import (
     CANDIDATE_VERSION,
@@ -58,7 +58,7 @@ class ModelLimits:
 
 def fail(code: str, message: str, retryable: bool = False) -> None:
     """공급자 원문을 노출하지 않는 실패 값으로 변환한다."""
-    raise RefreshFailure(Failure(code, message, retryable))
+    raise RefreshFailure(Failure(code, message, retryable)) from None
 
 
 class OpenAIProposalModel:
@@ -99,24 +99,65 @@ class OpenAIProposalModel:
         )
         if estimate > self.limits.max_input_tokens:
             fail("MODEL_REQUEST_INVALID", "Model input token budget exceeded")
-        response = self.client.responses.create(
-            model=model_input.model,
-            instructions=model_input.instructions,
-            input=[{"role": "user", "content": model_input.prompt}],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "refresh_candidate",
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-            max_output_tokens=self.limits.max_output_tokens,
-            timeout=self.limits.timeout_seconds,
-            store=False,
-            truncation="disabled",
-        )
-        return parse_candidate(
-            response.output_text,
-            response_usage(response.usage.model_dump() if response.usage else None),
-        )
+        try:
+            response = self.client.responses.create(
+                model=model_input.model,
+                instructions=model_input.instructions,
+                input=[{"role": "user", "content": model_input.prompt}],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "refresh_candidate",
+                        "strict": True,
+                        "schema": schema,
+                    }
+                },
+                max_output_tokens=self.limits.max_output_tokens,
+                timeout=self.limits.timeout_seconds,
+                store=False,
+                truncation="disabled",
+            )
+        except APITimeoutError:
+            fail("MODEL_TIMEOUT", "Model request timed out", True)
+        except APIConnectionError:
+            fail("MODEL_CONNECTION_FAILED", "Model connection failed", True)
+        except APIStatusError as error:
+            raise RefreshFailure(status_failure(error)) from None
+        return decode_response(response)
+
+
+def status_failure(error: APIStatusError) -> Failure:
+    """기존 AI의 일시 오류·할당량 오류 분류를 Responses SDK 계약으로 옮긴다."""
+    body = error.body if isinstance(error.body, dict) else {}
+    body = body.get("error", body)
+    code = body.get("code") if isinstance(body, dict) else None
+    if code in {
+        "insufficient_quota",
+        "billing_hard_limit_reached",
+        "usage_limit_reached",
+    }:
+        return Failure("MODEL_QUOTA_EXHAUSTED", "Model quota exhausted")
+    if error.status_code in {401, 403}:
+        return Failure("MODEL_AUTH_FAILED", "Model authorization failed")
+    if error.status_code == 429:
+        return Failure("MODEL_RATE_LIMITED", "Model temporarily rate limited", True)
+    if error.status_code >= 500 or error.status_code in {408, 409}:
+        return Failure("MODEL_UNAVAILABLE", "Model temporarily unavailable", True)
+    return Failure("MODEL_REQUEST_INVALID", "Model request rejected")
+
+
+def decode_response(response) -> ModelCandidate:
+    """완료 상태·거절·본문을 검증한 뒤 DTO로 변환한다."""
+    if response.status != "completed":
+        fail("MODEL_INCOMPLETE", "Model response incomplete")
+    for item in response.output:
+        if item.type == "message" and any(
+            part.type == "refusal" for part in item.content
+        ):
+            fail("MODEL_REFUSED", "Model refused the request")
+    if not response.output_text or not response.output_text.strip():
+        fail("MODEL_EMPTY_RESPONSE", "Model returned no candidate")
+    return parse_candidate(
+        response.output_text,
+        response_usage(response.usage.model_dump() if response.usage else None),
+    )
