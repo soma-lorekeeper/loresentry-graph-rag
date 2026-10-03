@@ -14,6 +14,7 @@ from app.refresh.errors import RefreshFailure
 from app.refresh.serialization import result_to_payload
 from evaluation.artifacts import AttemptRecorder, RecordingClient, write_json
 from evaluation.cases import cases
+from evaluation.novel import novel_case
 from evaluation.replay import ResponseReplay
 from evaluation.runner import CallBudget, assemble, run_case
 
@@ -39,6 +40,7 @@ def main(argv=None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--live", action="store_true")
     mode.add_argument("--responses-dir", type=Path)
+    parser.add_argument("--suite", choices=("basic", "novel"), default="basic")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--timeout", type=float)
@@ -71,7 +73,11 @@ def main(argv=None) -> int:
         )
         limits.validate()
         budget = CallBudget(option("max_calls", "OPENAI_MAX_CALLS", int))
-        fixtures = cases(limits.model, args.trial)
+        fixtures = (
+            (novel_case(limits.model, args.trial),)
+            if args.suite == "novel"
+            else cases(limits.model, args.trial)
+        )
         if args.selected:
             if not set(args.selected) <= {c.name for c in fixtures}:
                 raise ValueError("Unknown evaluation case")

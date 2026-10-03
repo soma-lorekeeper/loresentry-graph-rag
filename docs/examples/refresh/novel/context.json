@@ -1,0 +1,44 @@
+{
+  "documents": [
+    {
+      "project_id": "the-thirteenth-bell",
+      "document_id": "character-doyun",
+      "revision_no": 4,
+      "body_text": "백도윤은 해무시 배달부 조합 소속 배달부다. 대홍수 때 윤준에게 구조되어 빚을 갚으려 편지를 전달했다. 오른손 검지 끝은 윤서하가 만든 황동 덮개와 강철 나사축의 의지다. 평소 조합의 배달 노선을 맡는다.",
+      "properties": [],
+      "relations": [],
+      "state": "ACTIVE",
+      "folder_code": "CHARACTER"
+    },
+    {
+      "project_id": "the-thirteenth-bell",
+      "document_id": "character-haeju",
+      "revision_no": 3,
+      "body_text": "민해주는 전직 남쪽 수문 관리인이며 현재 기억 반환소를 맡는다. 회색 머리를 짧게 잘랐고 목덜미에 화상 자국이 있다. 반환 원장의 번호와 당사자의 확인을 대조해 남아 있는 기억을 돌려준다.",
+      "properties": [],
+      "relations": [],
+      "state": "ACTIVE",
+      "folder_code": "CHARACTER"
+    },
+    {
+      "project_id": "the-thirteenth-bell",
+      "document_id": "item-finger",
+      "revision_no": 2,
+      "body_text": "백도윤의 오른손 검지 의지. 윤서하가 황동 덮개와 더 긴 강철 나사축으로 새로 만들었다. 덮개는 쉽게 교체할 수 있다. 수리비는 중앙 기록청에 청구했다.",
+      "properties": [],
+      "relations": [],
+      "state": "ACTIVE",
+      "folder_code": "ITEM"
+    }
+  ],
+  "relations": [
+    {
+      "project_id": "the-thirteenth-bell",
+      "document_id": "character-doyun",
+      "target_document_id": "item-finger",
+      "relation_key": "related_item",
+      "description": "백도윤이 사용하는 검지 의지"
+    }
+  ],
+  "observed_version": "novel-before-05r2-06r1"
+}

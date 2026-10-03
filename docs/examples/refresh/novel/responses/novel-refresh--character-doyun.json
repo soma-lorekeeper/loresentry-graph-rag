@@ -1,0 +1,10 @@
+{
+  "response_source": "conversation-assistant",
+  "input_fingerprint": "e6adcd1419c719b5aeaf49a176c8e4f5fc768311b670a569bcc7c30a23443578",
+  "target_ids": [
+    "character-doyun"
+  ],
+  "schema_version": "refresh-candidate-v1",
+  "prompt_version": "refresh-prompt-v2",
+  "response_text": "{\"document_proposals\": [{\"target_document_id\": \"character-doyun\", \"base_revision_no\": 4, \"field\": \"body_text\", \"value\": \"백도윤은 해무시 배달부 조합 소속 배달부다. 대홍수 때 윤준에게 구조되어 빚을 갚으려 편지를 전달했다. 오른손 검지 끝은 윤서하가 만든 검게 산화시킨 강철 덮개와 강철 나사축의 의지다. 민해주가 맡은 기억 반환소의 방문 전달 담당으로 물통 운반과 수령 확인을 맡는다. 오전 배달 노선은 다른 조합원에게 넘겼고 오후에는 조합 우편물을 계속 나른다.\", \"evidence\": [{\"document_id\": \"chapter-05\", \"revision_no\": 2, \"start\": 3909, \"end\": 3986, \"quote\": \"도윤의 새 검지 끝은 은이 아니라 검게 산화시킨 강철로 만들었다. 안쪽 나사축은 더 긴 강철로 바꿨고, 바깥 덮개는 쉽게 교체하도록 했다.\"}, {\"document_id\": \"chapter-06\", \"revision_no\": 1, \"start\": 697, \"end\": 771, \"quote\": \"해주는 도윤에게 방문 전달 담당을 맡겼다. 반환 승인과 봉인 해제는 자신이 책임지고, 도윤은 물통의 운반과 수령 확인만 맡기로 했다.\"}, {\"document_id\": \"chapter-06\", \"revision_no\": 1, \"start\": 45, \"end\": 102, \"quote\": \"일을 그만둔 것은 아니었다. 오전 배달 노선을 다른 조합원에게 넘기고 오후에만 우편물을 나르기로 했다.\"}]}], \"relation_proposals\": [{\"document_id\": \"character-doyun\", \"target_document_id\": \"character-haeju\", \"base_revision_no\": 4, \"target_base_revision_no\": 3, \"relation_key\": \"related_character\", \"reverse_relation_key\": \"related_character\", \"description\": \"민해주가 백도윤에게 기억 반환소의 방문 전달을 맡겼다.\", \"evidence\": [{\"document_id\": \"chapter-06\", \"revision_no\": 1, \"start\": 697, \"end\": 771, \"quote\": \"해주는 도윤에게 방문 전달 담당을 맡겼다. 반환 승인과 봉인 해제는 자신이 책임지고, 도윤은 물통의 운반과 수령 확인만 맡기로 했다.\"}], \"operation\": \"ADD\"}]}"
+}

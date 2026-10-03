@@ -41,3 +41,9 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 프로젝트 README에 명시된 문서 참조 기반 관계 구성과 프로젝트·접근 권한·휴지통 제외 조건은
 운영 조회 어댑터에서 검증해야 할 요구사항이다. 내부 rules는 전달된 자료의 프로젝트·상태를
 검증하지만 실제 사용자 인가나 Neptune 조회를 수행하지 않는다.
+
+## 테스트용 소설 원문
+
+[열세 번째 종 — 6화](examples/novel/the-thirteenth-bell/README.md)은 회차당 약 5,000자의
+가상 소설이다. 수정된 5화와 새 6화를 [fake S3 입력](examples/refresh/novel/README.md)으로
+연결했으며 `--suite novel`로 갱신안 흐름을 실행한다.
