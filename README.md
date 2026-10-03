@@ -17,7 +17,7 @@ Cloudflare → ALB → gateway → graph-rag
 Browsers never reach this service, so it has no CORS configuration — the gateway is
 the only CORS boundary.
 
-Relationships come from **explicitly stored file references**, never from guessing
+Relationships come from **explicitly stored document references**, never from guessing
 at names that happen to appear in body text. Trash, other projects, and data the
 caller cannot access must stay out of retrieval results.
 
@@ -25,6 +25,8 @@ caller cannot access must stay out of retrieval results.
 
 See [the documentation guide](docs/README.md) for the current implementation,
 provided and outgoing APIs, code navigation, and verification scope.
+The [Content domain glossary](docs/domain-glossary.md) defines document, body text,
+relation keys, revisions, and proposals across the internal contracts.
 
 ## Stack
 

@@ -54,7 +54,12 @@ def test_relation_fixture_preserves_duplicates_cycles_scope_and_readiness(readin
         document_ids=("setting-1", "setting-1", "draft-1"),
         relations=(
             edge,
-            replace(edge, source_id=edge.target_id, target_id=edge.source_id),
+            replace(
+                edge,
+                document_id=edge.target_document_id,
+                target_document_id=edge.document_id,
+                relation_key="related_manuscript",
+            ),
             replace(edge, project_id="other"),
         ),
     )
@@ -71,11 +76,11 @@ def test_document_fake_reports_missing_deleted_and_latest_fixture_revision():
     assert batch.documents == (setting,)
     assert batch.missing_ids == ("missing",)
     documents.documents[("project-1", "setting-1")] = replace(
-        setting, revision=8, state=DocumentState.DELETED
+        setting, revision_no=8, state=DocumentState.DELETED
     )
     updated = documents.fetch_documents("project-1", ("setting-1",))
     assert updated.documents[0].state == DocumentState.DELETED
-    assert batch.documents[0].revision == 7
+    assert batch.documents[0].revision_no == 7
     assert documents.fetch_documents("other", ("setting-1",)).missing_ids == (
         "setting-1",
     )

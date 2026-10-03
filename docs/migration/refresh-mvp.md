@@ -6,7 +6,8 @@
 >
 > **상태:** 실행 계획. 실제 Kafka 구현·운영 연동 또는 갱신안 생성 완료를 뜻하지 않는다.
 
-원고와 기존 설정 문서의 스냅샷을 받아, 원본을 수정하지 않고 검토 가능한 갱신안과 근거를 반환하는 것이 목표다.
+변경 문서 전체와 기존 설정 문서의 스냅샷을 받아, 문서 내용 변경과 새로운 관계를 제안하는 것이 목표다. 제안은 S3에만 저장하고 결과 위치·처리 상태를 Kafka로 전달한다. 원본 문서·확정 그래프에는 적용하지 않는다.
+입력 한도·다중 대상·문서/관계 제안·결과 상태의 기준은 [갱신안 입력·결과 계약](proposal-contract.md)을 따른다.
 S3 입력, 명시적 관계 조회, 부족한 문서의 Content 조회를 인터페이스로 연결하고 fake로 먼저 검증한다.
 벡터·전문 검색 구현을 기다리지 않고 생성 결과의 적절성과 추적 가능성을 평가한다.
 전체 원본 코드 매핑은 [이전 범위](overview.md), 저장·검색 확장은 [후속 계획](follow-up.md)을 따른다.
@@ -15,11 +16,11 @@ S3 입력, 명시적 관계 조회, 부족한 문서의 Content 조회를 인터
 
 | 포함 | 범위 |
 |---|---|
-| 입력 검증 | 프로젝트·문서 ID, 기준 revision, 원고·기존 설정 스냅샷과 허용된 갱신 대상 확인 |
+| 입력 검증 | 프로젝트·문서 ID, 기준 revision_no, 원고·기존 설정 스냅샷과 허용된 갱신 대상 확인 |
 | 자료 확보 | S3 입력 읽기, 관계 기반 관련 문서 탐색, 부족한 자료의 Content 조회. 각 경계는 fake로 먼저 연결 |
 | 문맥 구성 | 확보한 스냅샷의 텍스트 정리, 필요한 청킹, 근거 위치 보존, 입력 크기 처리 |
 | 갱신안 추출 | 원본의 한국어 추출 프롬프트·사례·구조화 출력 아이디어를 설정 문서 변경 제안으로 전환 |
-| 결과 검증 | 대상 문서·필드·자료형, 기준 revision, 근거 연결, 변경 없음·검증 실패 구분 |
+| 결과 검증 | 대상 문서·필드·자료형, 기준 revision_no, 근거 연결, 변경 없음·검증 실패 구분 |
 | 호출 제어 | LLM 오류·사용량·시간 제한·재시도 경계와 결과 기록에 필요한 정보 |
 | 검증 | 대체 IO를 이용한 기능 테스트, 실제 LLM 품질 평가, 준비된 Kafka 어댑터와의 연동 검증 |
 
@@ -29,7 +30,7 @@ S3 입력, 명시적 관계 조회, 부족한 문서의 Content 조회를 인터
 
 사용자 확정과 문서 저장은 Content 책임이다. GraphRAG는 갱신안을 반환하며 원고·설정 문서·확정 관계를 직접 수정하지 않는다.
 Content의 검토·확정 화면까지 완성해야만 생성 기능을 검증할 수 있는 것은 아니지만,
-실제 제품 연동에서는 기준 revision 충돌과 확정 전 원본 불변을 함께 확인한다.
+실제 제품 연동에서는 기준 revision_no 충돌과 확정 전 원본 불변을 함께 확인한다.
 
 ## 1.1. 원본 기능을 가져와 사용할 위치
 
@@ -39,19 +40,19 @@ Content의 검토·확정 화면까지 완성해야만 생성 기능을 검증�
 
 | 이전 단위·원본 코드 | 가져올 내용과 바꿀 내용 | 대상 위치·활용 지점 | 이전 확인 기준 |
 |---|---|---|---|
-| [splitters.py](../../../lorekeeper-ai/src/service/index/splitters.py)의 `_sentence_spans`, `_split_oversized_span`, `_group_sentences`, `KSSSentenceSplitter` | 원문 구간 기반 청킹 정책을 분리. Neo4j `TextChunks` 대신 문서 ID·revision·시작/끝 위치를 가진 값 반환. 원문에서 찾지 못한 문장을 조용히 누락하는 처리는 보완 | `app/text/chunking.py`: 입력 원고를 근거 단위로 나누는 순수 계산. 추출 입력 전체를 반드시 작은 청크별로 호출한다는 뜻은 아님 | 반복 문장·줄바꿈·긴 문장에서도 원문과 위치 일치, 누락 검출 |
-| [indexing_service.py](../../../lorekeeper-ai/src/service/index/indexing_service.py)의 `indexing` 내 `[C{index}]` 마커 조립 | 청크 번호로 LLM 출력과 원문을 연결하는 방식. 회차 번호를 문서·revision과 연결된 근거 ID로 변경 | `app/refresh/context.py`: LLM에 전달할 근거 목록과 마커 텍스트 구성 | 반환된 근거 ID를 같은 입력 스냅샷의 구간으로 역추적 |
+| [splitters.py](../../../lorekeeper-ai/src/service/index/splitters.py)의 `_sentence_spans`, `_split_oversized_span`, `_group_sentences`, `KSSSentenceSplitter` | 원문 구간 기반 청킹 정책을 분리. Neo4j `TextChunks` 대신 문서 ID·revision_no·시작/끝 위치를 가진 값 반환. 원문에서 찾지 못한 문장을 조용히 누락하는 처리는 보완 | `app/text/chunking.py`: 입력 원고를 근거 단위로 나누는 순수 계산. 추출 입력 전체를 반드시 작은 청크별로 호출한다는 뜻은 아님 | 반복 문장·줄바꿈·긴 문장에서도 원문과 위치 일치, 누락 검출 |
+| [indexing_service.py](../../../lorekeeper-ai/src/service/index/indexing_service.py)의 `indexing` 내 `[C{index}]` 마커 조립 | 청크 번호로 LLM 출력과 원문을 연결하는 방식. 회차 번호를 문서·revision_no와 연결된 근거 ID로 변경 | `app/refresh/context.py`: LLM에 전달할 근거 목록과 마커 텍스트 구성 | 반환된 근거 ID를 같은 입력 스냅샷의 구간으로 역추적 |
 | [context_service.py](../../../lorekeeper-ai/src/service/index/context_service.py)의 `build_context` | 배경 자료를 묶는 구성 방식 참고. `dump_graph_text`·`load_summaries`의 DB 조회는 제외하고 기존 설정 스냅샷을 인자로 받음 | `app/refresh/context.py`: 원고·현재 설정·허용 대상·입력 예산을 추출 문맥으로 조립 | 같은 입력의 같은 문맥, 예산 초과와 누락 자료의 명시적 처리 |
 | [extractor.py](../../../lorekeeper-ai/src/service/index/extractor.py)의 `KoreanWebNovelERTemplate`, `NovelContextExtractor`와 [extraction_examples.py](../../../lorekeeper-ai/src/service/index/extraction_examples.py)의 `EXTRACTION_FEW_SHOT` | 한국어 원고·배경 문맥·사례를 넣는 프롬프트 구성 재사용. 엔티티·관계 JSON을 설정 변경 제안·근거 JSON으로 재작성. Neo4j 클래스 상속은 제거 | `app/refresh/prompts.py`: 순수 프롬프트 생성. `app/adapters/llm.py`: 구조화 출력 호출. 생성 서비스가 두 단계를 연결 | 기존 사례를 목표 설정 필드와 기대 제안으로 다시 작성해 실제 LLM 평가 |
-| [graph_schema.py](../../../lorekeeper-ai/src/service/index/graph_schema.py)의 노드·관계 정의, [extraction_pipeline.py](../../../lorekeeper-ai/src/service/index/extraction_pipeline.py)의 `build_pipeline` | 도메인 의미와 출력 검증 흐름 참고. `GraphPruning`·writer·resolver 조립은 이전하지 않음. 갱신 대상·필드·revision·근거를 검증하는 규칙은 신규 작성 | `app/refresh/models.py`, `app/refresh/rules.py`: 입력·제안 값과 순수 검증. `app/refresh/service.py`: 문맥 구성, 호출, 검증 조율 | 잘못된 필드·다른 프로젝트·없는 근거 거절, 변경 없음 구분, 원본 쓰기 없음 |
-| [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py)의 `build_docstore`, `render_docstore` | 근거를 한 번만 담고 참조하는 정책을 선별. 모순 탐지의 claim/channel 입력과 Neo4j element ID는 제거 | `app/text/evidence.py`: 갱신안 여러 항목이 공유하는 원문 근거 정리. 후속 검색 결과에서도 같은 값 사용 | 동일 근거 중복 제거, 서로 다른 revision의 근거는 합치지 않음 |
+| [graph_schema.py](../../../lorekeeper-ai/src/service/index/graph_schema.py)의 노드·관계 정의, [extraction_pipeline.py](../../../lorekeeper-ai/src/service/index/extraction_pipeline.py)의 `build_pipeline` | 도메인 의미와 출력 검증 흐름 참고. `GraphPruning`·writer·resolver 조립은 이전하지 않음. 갱신 대상·필드·revision_no·근거를 검증하는 규칙은 신규 작성 | `app/refresh/models.py`, `app/refresh/rules.py`: 입력·제안 값과 순수 검증. `app/refresh/service.py`: 문맥 구성, 호출, 검증 조율 | 잘못된 필드·다른 프로젝트·없는 근거 거절, 변경 없음 구분, 원본 쓰기 없음 |
+| [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py)의 `build_docstore`, `render_docstore` | 근거를 한 번만 담고 참조하는 정책을 선별. 모순 탐지의 claim/channel 입력과 Neo4j element ID는 제거 | `app/text/evidence.py`: 갱신안 여러 항목이 공유하는 원문 근거 정리. 후속 검색 결과에서도 같은 값 사용 | 동일 근거 중복 제거, 서로 다른 revision_no의 근거는 합치지 않음 |
 | [openai_client.py](../../../lorekeeper-ai/src/common/openai_client.py)의 `create_completion`, `create_response`, `_request`, [graphrag.py](../../../lorekeeper-ai/src/common/graphrag.py)의 `MeteredLLM` | 호출·오류·재시도 처리 재사용. Neo4j `LLMResponse` 변환과 전역 클라이언트 결합을 제거하고 필요한 호출 경계를 주입 | `app/adapters/llm.py`: 생성 서비스의 LLM 포트 구현. 모델 응답을 내부 제안 후보와 사용량으로 변환 | timeout·출력 오류·재시도 소진의 실패 변환, 실제 LLM 연결 검증 |
 | [usage.py](../../../lorekeeper-ai/src/common/usage.py)의 `empty`, `from_response`, `merge`, [llm_limit.py](../../../lorekeeper-ai/src/common/llm_limit.py), [admission.py](../../../lorekeeper-ai/src/common/admission.py) | 사용량 합산과 제한 정책 선별. 응답 파싱은 어댑터, 합산은 순수 함수. 시각·대기·세마포어와 전역 상태는 실행 쪽으로 분리 | `app/llm/usage.py`, `app/adapters/llm.py`: 작업별 비용 평가와 호출 예산 적용. Kafka 대기를 기존 HTTP 429로 처리하지 않음 | 캐시 토큰 중복 합산 방지, 제한 시 추가 호출 중단, 작업 간 사용량 격리 |
 | [index/job_service.py](../../../lorekeeper-ai/src/service/index/job_service.py)의 `submit`, `_run_index_job`, `get_status` | 접수·실행·결과·실패 역할만 참고. 메모리 큐와 회차 순차 처리는 교체 | `app/refresh/service.py`: 생성 유스케이스. 영속 상태·결과 저장·완료 발행은 병렬 전달 계층의 계약으로 연결 | 같은 요청의 결과 재사용, 저장 후 발행 실패에서 재생성 없이 복구 |
 | [tenant.py](../../../lorekeeper-ai/src/common/tenant.py)의 `Tenant`, [kg_scope.py](../../../lorekeeper-ai/src/service/kg_scope.py)의 `kg_scope` | 모든 자료에 같은 범위를 적용하는 원칙. 정수 ID·동적 Cypher 필터 구현은 제외 | `app/refresh/models.py`, `app/refresh/rules.py`: 검증된 프로젝트 범위와 입력 자료의 일치 검사. 실제 인가는 입력 공급 경계에서 수행 | 다른 프로젝트 자료를 LLM 호출 전에 거절 |
 
 기존 AI에는 **설정 문서 갱신안 유스케이스 자체는 없다**. 추출 부품을 가져오되,
-설정 스냅샷 대비 변경 제안, 기준 revision, 허용 필드와 근거 검증은 새로 구현한다.
+설정 스냅샷 대비 변경 제안, 기준 revision_no, 허용 필드와 근거 검증은 새로 구현한다.
 `resolver.py`의 자동 병합은 첫 MVP에 사용하지 않는다. 대상은 명시적 입력 또는 확정 관계에서 찾고,
 이름·의미 유사도 기반 매칭이 필요해질 때 [후속 계획](follow-up.md)의 후보 매칭으로 추가한다.
 
@@ -67,7 +68,7 @@ LLM 호출 뒤에는 결과를 검증해 제안 값으로 반환한다.
 원본 `test_splitters.py`는 `tests/test_chunking.py`, 호출·계량 테스트는
 `tests/test_llm_adapter.py`와 `tests/test_usage.py`로 변경할 계획이다.
 원본 그래프 스키마 테스트의 기대값을 그대로 쓰지 않고 `tests/test_refresh_rules.py`에
-설정 변경·근거·revision 사례를 새로 작성한다. `tests/test_refresh_service.py`에서는
+설정 변경·근거·revision_no 사례를 새로 작성한다. `tests/test_refresh_service.py`에서는
 대체 IO로 실행 흐름을 검증하고, 실제 IO 검증은 별도 통합 테스트로 둔다.
 
 ## 2. 입력·결과 계약부터 정하기
@@ -78,16 +79,16 @@ LLM 호출 뒤에는 결과를 검증해 제안 값으로 반환한다.
 | 구분 | 필요한 정보·규칙 |
 |---|---|
 | 작업 식별 | 요청 ID·프로젝트 ID. 중복 요청과 재시도에서 같은 작업인지 식별 가능해야 함 |
-| 입력 원고 | 문서 ID·revision·분석할 원문. 근거를 되짚을 위치와 원문을 보존 |
-| 기존 설정 | 갱신 대상 문서 ID·기준 revision·현재 속성·본문과 명시적 참조 |
+| 입력 원고 | 문서 ID·revision_no·분석할 원문. 근거를 되짚을 위치와 원문을 보존 |
+| 기존 설정 | 갱신 대상 문서 ID·기준 revision_no·현재 속성·본문과 명시적 참조 |
 | 접근 범위 | 호출 경계에서 검증된 프로젝트·자료 범위. 요청의 ID만으로 인가 완료를 가정하지 않음 |
-| 갱신안 | 대상 문서·필드, 기준 revision, 제안 내용, 근거 원고·revision·위치 |
+| 갱신안 | 대상 문서·필드, 기준 revision_no, 제안 내용, 근거 원고·revision_no·위치 |
 | 결과 상태 | 변경 없음, 유효한 제안, 입력·출력 검증 실패, LLM 호출 실패를 구분 |
 | 실행 정보 | 모델·프롬프트 버전·사용량 등 결과 평가와 재실행 판단에 필요한 정보 |
 
-첫 구현 전에 지원할 설정 문서 유형과 속성·본문 중 제안할 범위를 정한다.
-새 설정 문서 생성까지 지원할지도 별도 결정하며, 기존 문서 갱신에서 자동으로 확장하지 않는다.
-입력 초과 시 분할·요약·거절 중 어떤 정책을 쓸지 정하고 원문을 조용히 잘라내지 않는다.
+첫 MVP는 여러 기존 설정 문서의 본문 변경과 새로운 관계 추가를 제안한다. 새 문서 생성과 기존 관계 삭제·수정은 포함하지 않는다.
+변경 입력은 최대 20개·ACTIVE 본문당 5,000자로 제한하고 초과 시 명시적으로 거절한다. 참고 문서 조회 예산은 별도다. 단일 대상·총 10,000자 제한은 적용하지 않는다.
+필드·근거·관계 중복·실패 처리의 세부 기준은 [갱신안 입력·결과 계약](proposal-contract.md)을 따른다.
 
 Content가 최신화 요청 시 만든 S3 `input.json`을 기본 입력으로 읽는다. 주기적 원문 저장을 전제하지 않는다.
 명시적 관계에서 찾은 관련 문서가 입력에 없으면 Content API로 추가 조회한다.
@@ -97,7 +98,7 @@ S3 JSON의 상세 스키마와 Content 추가 조회 API는 아직 확정되지 
 
 ### 2.1. 외부 IO 인터페이스와 fake 구현
 
-아래 이름·메서드는 내부 Python 계약의 설계안이며 구현된 코드나 외부 API 경로가 아니다.
+아래 이름·메서드는 현재 내부 Python 포트 골격과 대응한다. 실제 외부 API 경로나 운영 어댑터가 구현되었다는 뜻은 아니다. 관계 제안·다중 대상의 새 계약은 후속 구현이 필요하다.
 `app/refresh/ports.py`에 필요한 `Protocol`, `models.py`에 입출력 값을 두고 서비스 생성 시 주입한다.
 메서드의 비동기 여부·구체 타입은 구현 시 정하되 업무 값에 SDK·HTTP·Neptune 타입을 노출하지 않는다.
 
@@ -105,7 +106,7 @@ S3 JSON의 상세 스키마와 Content 추가 조회 API는 아직 확정되지 
 |---|---|---|---|
 | `RefreshArtifactStore.read_input`, `save_context`, `read_context`, `save_result`, `read_result` | 입력 위치로 스냅샷 읽기. 작업 ID별 확보 자료·결과를 저장하고 재사용 가능한 참조 반환 | `app/adapters/refresh_artifacts.py`: S3 입력·결과 및 실행 스냅샷 저장 | 위치·작업 ID를 키로 한 메모리 저장. 객체 없음·만료·저장 실패 주입 |
 | `RelatedDocumentSource.find_related` | 검증된 프로젝트 범위, 기준 문서 ID, 탐색 제한, 필요한 반영 기준을 받고 관련 ID·관계·반영 상태 반환 | `app/adapters/graph_store.py`: Neptune 명시적 관계 조회 | 고정 관계 목록, 순환·중복·다른 프로젝트 후보·반영 지연 반환 |
-| `DocumentSource.fetch_documents` | 검증된 접근 범위와 부족한 문서 ID를 받아 본문·속성·참조·revision·상태 반환. 요청한 자료의 누락도 구분 | `app/adapters/content.py`: Content HTTP 조회 | ID별 고정 스냅샷, 삭제·권한 거절·timeout·revision 변경 주입 |
+| `DocumentSource.fetch_documents` | 검증된 접근 범위와 부족한 문서 ID를 받아 본문·속성·참조·revision_no·상태 반환. 요청한 자료의 누락도 구분 | `app/adapters/content.py`: Content HTTP 조회 | ID별 고정 스냅샷, 삭제·권한 거절·timeout·revision_no 변경 주입 |
 | `ProposalModel.generate` | 프롬프트·출력 스키마·호출 설정을 받아 후보와 사용량 반환. 후보의 업무적 타당성은 순수 함수가 검증 | `app/adapters/llm.py`: 실제 LLM 호출 | 유효한 제안·변경 없음·잘못된 필드·없는 근거·timeout 반환 |
 | `RefreshJobStore.claim`, `load`, `checkpoint` | 요청 ID·입력 식별로 원자적 접수, 진행·완료·충돌 구분. 실행 스냅샷과 결과 참조·발행 상태 기록 | `app/adapters/refresh_jobs.py`: 병렬 전달 계층과 합의한 영속 저장 구현 | 작업 상태 전이와 중복 실행 거절을 메모리로 재현 |
 | `RefreshCompletionPublisher.publish` | 작업 ID·성공/실패·결과 참조로 완료 이벤트 발행 | `app/adapters/refresh_events.py`: 병렬 Kafka 발행 구현 연결 | 발행 목록 기록, 발행 실패와 응답 유실 주입 |
@@ -118,16 +119,16 @@ S3 JSON의 상세 스키마와 Content 추가 조회 API는 아직 확정되지 
 ### 2.2. 조회·판단·실행 흐름
 
 1. 전달 계층이 Kafka 요청을 내부 요청으로 변환한다. 작업 상태에서 중복·입력 충돌을 확인하고 접수한다. 이미 결과가 있으면 생성하지 않고 완료 전달을 재개한다.
-2. S3 입력을 읽어 프로젝트·문서 상태·revision·허용 대상을 순수 함수로 검증한다. 저장된 실행 스냅샷이 있으면 이를 재사용한다.
-3. 관련 자료 자동 선택이 필요한 경우 명시적 관계를 조회한다. 관계 종류·탐색 깊이·최대 문서 수 정책에 따라 후보를 정리하고 입력에 없는 ID를 계산한다.
+2. S3 입력을 읽어 프로젝트·문서 상태·revision_no·허용 대상을 순수 함수로 검증한다. 저장된 실행 스냅샷이 있으면 이를 재사용한다.
+3. 관련 자료 자동 선택이 필요한 경우 명시적 관계를 조회한다. 관계 키·탐색 깊이·최대 문서 수 정책에 따라 후보를 정리하고 입력에 없는 ID를 계산한다.
 4. 부족한 문서를 Content에서 조회하고 범위·상태·필수 자료 누락을 검증한다. 기본 입력의 동일 문서를 최신 조회 값으로 조용히 교체하지 않는다.
-5. 선택한 관계와 확보한 모든 문서·revision·선택 설정을 작업별 실행 스냅샷으로 저장한다. 저장 성공 후 이 자료로 청킹·문맥·프롬프트를 구성한다.
+5. 선택한 관계와 확보한 모든 문서·revision_no·선택 설정을 작업별 실행 스냅샷으로 저장한다. 저장 성공 후 이 자료로 청킹·문맥·프롬프트를 구성한다.
 6. LLM을 호출하고 허용 대상·필드·자료형·근거·변경 없음 여부를 순수 함수로 검증한다.
 7. 유효한 결과를 S3에 저장하고 작업 상태에 결과 참조를 기록한 뒤 완료 이벤트를 발행한다. 실패는 계약에 맞는 실패 결과로 전달한다.
 
 대상 설정과 필요한 자료가 입력에 모두 명시돼 있으면 관계·추가 문서 조회를 생략할 수 있다.
 자동 선택 경로에서 그래프는 관련 ID와 관계를 제공하며, 본문의 기준은 S3·Content 스냅샷이다.
-이 흐름은 관계 읽기만 사용한다. 생성 결과를 확정 그래프에 쓰지 않고 Content의 사용자 확정을 거친다.
+이 흐름에서 확정 그래프 접근은 읽기만 사용한다. 새로운 관계 후보는 결과 S3에 제안으로만 기록한다. 생성 결과를 확정 그래프에 쓰지 않고 Content의 사용자 확정을 거친다.
 
 ### 2.3. 자료 고정과 실제 연결 전 결정 사항
 
@@ -139,11 +140,11 @@ S3 JSON의 상세 스키마와 Content 추가 조회 API는 아직 확정되지 
 문서 변경 topic과 생성 요청 topic의 도착 순서를 동일하다고 가정하지 않는다.
 관계 조회는 `준비됨`, `반영 대기`, `확인 불가`를 구분해야 한다. 반영 대기·확인 불가를 관련 문서 없음으로 처리하지 않는다.
 fake에서는 이 분기를 먼저 검증하고, 실제 연결 전 반영 기준 값과 대기 예산·종료 정책을 정한다.
-본문 `revision_no`만으로 관계·휴지통 등 모든 변경의 반영을 판별하지 않는다.
+문서 `revision_no`만으로 관계·휴지통 등 모든 변경의 반영을 판별하지 않는다.
 
-Content 조회의 인증·권한, 일괄 조회 한도, 누락/삭제 응답과 revision 의미도 실제 연결 전 합의한다.
+Content 조회의 인증·권한, 일괄 조회 한도, 누락/삭제 응답과 revision_no 의미도 실제 연결 전 합의한다.
 관계 탐색 범위·입력 예산과 필수 자료 판단은 순수 정책으로 두며 어댑터가 임의로 선택하지 않는다.
-Content의 최종 확정에서는 대상 revision 충돌을 검사하고, 근거 원고가 바뀐 제안을 어떻게 처리할지도 정한다.
+Content의 최종 확정에서는 대상 revision_no 충돌을 검사하고, 근거 원고가 바뀐 제안을 어떻게 처리할지도 정한다.
 
 ## 3. Kafka 병렬 작업과의 경계
 
@@ -187,7 +188,7 @@ fake 기반 생성 흐름 완료, 실제 LLM 평가 완료, 실제 IO 연동 완
 회차별 전역 요약, 엔티티 자동 병합, 전체 그래프 덤프는 필수 경로로 가져오지 않는다.
 
 IO 결과에 따라 판단이 달라지면 서비스가 다시 조회·판단한다.
-작업 데이터는 갱신안·근거·기대 revision처럼 검증할 의미가 있는 값에 사용하고 범용 명령 실행기는 만들지 않는다.
+작업 데이터는 갱신안·근거·기대 revision_no처럼 검증할 의미가 있는 값에 사용하고 범용 명령 실행기는 만들지 않는다.
 
 | 실패·경쟁 | 구현·합의할 처리 |
 |---|---|
@@ -195,7 +196,7 @@ IO 결과에 따라 판단이 달라지면 서비스가 다시 조회·판단한
 | 관계 반영 지연·필수 문서 누락·Content 권한 거절 | 준비되지 않은 자료로 LLM을 실행하지 않음. 재시도 가능한 IO 실패와 업무상 거절을 구분 |
 | 실행 스냅샷 저장 실패 | LLM 호출 전 중단. 저장된 스냅샷이 있으면 재시도에서 같은 자료 재사용 |
 | LLM timeout·출력 스키마 실패·근거 없는 제안 | 정상 결과로 포장하지 않음. 호출 재시도와 결과 재검증의 예산을 구분 |
-| 생성 중 기존 설정 revision 변경 | 제안의 기준 revision을 유지. Content 확정 시 충돌을 확인하며 최신 값을 몰래 덮어쓰지 않음 |
+| 생성 중 기존 설정 revision_no 변경 | 제안의 기준 revision_no를 유지. Content 확정 시 충돌을 확인하며 최신 값을 몰래 덮어쓰지 않음 |
 | 같은 요청 중복 수신·동시 실행 | 요청 ID와 입력 식별을 기준으로 기존 작업·결과 재사용 또는 충돌 처리. 원자적 접수 책임은 상태 저장 계층과 합의 |
 | 결과 저장 후 완료 이벤트 발행 실패 | 저장된 결과로 완료를 재발행할 수 있게 함. LLM 전체를 다시 호출하는 것을 기본 복구로 두지 않음 |
 | 처리 중 재시작·입력 객체 만료 | 마지막 영속 상태에서 재개·재시도·실패 종료 중 하나로 수렴. offset 처리와의 연결은 병렬 전달 계층과 검증 |
@@ -223,7 +224,7 @@ LLM 응답 후 결과 저장 전 장애는 재호출이 필요할 수 있으므�
 - 단위·서비스 테스트: 입력 불변, 허용 범위 검증, 결과 근거 확인, 변경 없음, 실패 후 후속 실행 중단.
 - 실제 LLM 평가: 기대 변경의 누락, 근거 없는 추가·변경, 잘못된 대상 문서 매칭, 스키마 준수와 근거 추적.
 - 재현 조건: 원고·설정의 버전, 모델·프롬프트, 문맥 구성 설정, 사용량과 실행 결과.
-- 실제 연동: 같은 요청의 중복, 재시작, 결과 저장 후 발행 실패, 기준 revision 충돌과 확정 전 원본 불변.
+- 실제 연동: 같은 요청의 중복, 재시작, 결과 저장 후 발행 실패, 기준 revision_no 충돌과 확정 전 원본 불변.
 
 품질 수치의 합격선은 평가 자료와 함께 정한다. 기존 모순 탐지의 과거 성능 수치를 갱신안의 성능으로 사용하지 않는다.
 이 문서 작성에서는 LLM 호출·Kafka 연동·기능 구현을 수행하지 않았다.

@@ -30,7 +30,9 @@ class ScriptedRules(RefreshRules):
 
     def chunk(self, snapshot):
         self.calls.record("rules.chunk", snapshot)
-        return tuple(Chunk(e) for p in self.result.proposals for e in p.evidence)
+        return tuple(
+            Chunk(e) for p in self.result.document_proposals for e in p.evidence
+        )
 
     def build_context(self, snapshot, chunks):
         self.calls.record("rules.build_context", snapshot, chunks)

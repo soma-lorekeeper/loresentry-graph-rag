@@ -65,7 +65,7 @@ def test_terminal_rejection_is_failed_completion_not_success(operation, code):
     done = s.service().run(s.request, "execution-1")
     assert done.outcome == Outcome.FAILED
     assert done.failure.code == code
-    assert s.artifacts.read_result(s.request).proposals == ()
+    assert s.artifacts.read_result(s.request).document_proposals == ()
     assert "model.generate" not in s.calls.names()
     assert s.jobs.load(s.request).state == JobState.COMPLETED
 
@@ -77,7 +77,7 @@ def test_candidate_validation_rejection_does_not_publish_proposal(code):
     done = s.service().run(s.request, "execution-1")
     assert done.outcome == Outcome.FAILED
     assert done.failure.code == code
-    assert s.artifacts.read_result(s.request).proposals == ()
+    assert s.artifacts.read_result(s.request).document_proposals == ()
     assert len(s.publisher.delivered) == 1
 
 

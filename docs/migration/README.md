@@ -16,3 +16,5 @@ S3·관계·Content·LLM·작업 상태/완료 전달을 포트와 fake로 먼�
 이벤트 필드·topic·S3·DLQ는 [메시지 계약 초안](../reference/message-contract.md)이 담당한다.
 전체 이전 여부는 overview에서, 단계별로 가져올 코드와 사용할 위치는 각 실행 계획에서 관리한다.
 이벤트 명세는 중복 작성하지 않고 메시지 계약을 참조한다.
+
+- [갱신안 입력·결과 계약](proposal-contract.md): 변경 문서 한도, 다중 문서·관계 제안, S3 저장과 Kafka 완료 전달의 확정된 MVP 책임.

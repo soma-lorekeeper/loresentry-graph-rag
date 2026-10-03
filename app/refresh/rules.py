@@ -57,7 +57,7 @@ class RefreshRules:
     ) -> ExecutionSnapshot:
         """조회 결과의 범위·상태·누락을 검증하고 실행 입력을 조립할 경계.
 
-        원본의 revision을 보존해야 한다. 추가 조회 자체는 서비스가 IO 포트로 수행한다.
+        원본의 revision_no를 보존해야 한다. 추가 조회 자체는 서비스가 IO 포트로 수행한다.
 
         Returns:
             구현 시 재실행에도 사용할 확정된 ExecutionSnapshot.
@@ -101,7 +101,7 @@ class RefreshRules:
         candidate: ModelCandidate,
         model_input: ModelInput,
     ) -> RefreshResult:
-        """모델 후보의 대상·revision·근거를 검증하여 결과를 결정할 경계.
+        """모델 후보의 대상·revision_no·근거를 검증하여 결과를 결정할 경계.
 
         Args:
             snapshot: 판단의 기준이 되는 확정된 입력.

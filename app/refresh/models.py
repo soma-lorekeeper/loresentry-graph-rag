@@ -1,7 +1,7 @@
 """갱신안 처리에 사용하는 내부 값. S3 JSON·Kafka·Content의 전송 스키마는 아니다.
 
 frozen 데이터 클래스와 tuple 필드로 스냅샷을 표현한다. 생성자 자체는 입력의
-권한·범위·revision 유효성을 검증하지 않는다. ID와 revision은 호출자가 전달한다.
+권한·범위·revision_no 유효성을 검증하지 않는다. ID와 revision_no은 호출자가 전달한다.
 """
 
 from dataclasses import dataclass
@@ -63,16 +63,20 @@ class JobKey:
 
 @dataclass(frozen=True)
 class SelectionSettings:
-    """문서 선택 정책에 전달할 관계 종류·탐색 깊이·입력 크기 제한.
+    """문서 선택 정책에 전달할 관계 키·탐색 깊이·입력 크기 제한.
 
-    기본 policy_version은 미구현을 뜻한다. 값 생성만으로 제한이 적용되지는 않는다.
+    변경 입력 한도와 추가 조회·문맥·호출 예산은 각각 독립적으로 적용한다.
     """
 
-    relation_kinds: tuple[str, ...] = ()
+    relation_keys: tuple[str, ...] = ()
     max_depth: int = 1
-    max_documents: int = 10
-    max_input_chars: int = 10000
-    policy_version: str = "unimplemented"
+    max_documents: int = 20
+    max_input_chars: int = 5000
+    policy_version: str = "refresh-v1"
+    max_changed_documents: int = 20
+    max_context_chars: int = 240000
+    max_model_calls: int = 20
+    chunk_chars: int = 1000
 
 
 @dataclass(frozen=True)
@@ -99,25 +103,32 @@ class RefreshRequest:
 
 @dataclass(frozen=True)
 class Relation:
-    """프로젝트 안의 출발 문서·도착 문서·관계 종류로 표현한 명시적 관계."""
+    """Content의 한 문서에서 바라본 관계 행의 내부 표현.
+
+    document_id가 target_document_id를 참조하며 relation_key는 대상 분류를 뜻한다.
+    반대쪽 행의 키는 달라질 수 있다. 업무상 연결은 무방향이다."""
 
     project_id: str
-    source_id: str
-    target_id: str
-    kind: str
+    document_id: str
+    target_document_id: str
+    relation_key: str
+    description: str = ""
 
 
 @dataclass(frozen=True)
 class DocumentSnapshot:
-    """조회 시점의 문서 본문·속성·관계·상태와 해당 revision."""
+    """조회 시점의 본문 텍스트·속성·관계·상태와 문서 revision_no.
+
+    body_text는 분석용 문자열이며 Content의 구조화 본문 body JSON과 다르다."""
 
     project_id: str
     document_id: str
-    revision: int
-    body: str
+    revision_no: int
+    body_text: str
     properties: tuple[tuple[str, str], ...] = ()
     relations: tuple[Relation, ...] = ()
     state: DocumentState = DocumentState.ACTIVE
+    folder_code: str = "MANUSCRIPT"
 
 
 @dataclass(frozen=True)
@@ -161,18 +172,20 @@ class ExecutionSnapshot:
     request: RefreshRequest
     documents: tuple[DocumentSnapshot, ...]
     related: RelatedDocuments
+    target_ids: tuple[str, ...] = ()
+    changed_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class Evidence:
-    """후보의 근거가 되는 문서 revision, 본문 위치와 인용문.
+    """후보의 근거가 되는 문서 revision_no, 본문 위치와 인용문.
 
     start·end의 해석과 quote 일치 여부는 분할·검증 규칙에서 정의하고 확인해야 한다.
     이 데이터 클래스는 위치 범위나 인용문을 검증하지 않는다.
     """
 
     document_id: str
-    revision: int
+    revision_no: int
     start: int
     end: int
     quote: str
@@ -186,14 +199,38 @@ class Chunk:
 
 
 @dataclass(frozen=True)
-class Proposal:
-    """기준 revision의 문서 필드에 제안하는 값과 근거. 생성만으로 문서를 변경하지 않는다."""
+class DocumentProposal:
+    """기준 revision_no의 문서 필드에 제안하는 값과 근거. 생성만으로 문서를 변경하지 않는다."""
 
-    document_id: str
-    base_revision: int
+    target_document_id: str
+    base_revision_no: int
     field: str
     value: str
     evidence: tuple[Evidence, ...]
+
+
+@dataclass(frozen=True)
+class RelationProposal:
+    """새 연결 ADD 제안. 두 방향 키는 반대 문서의 folder_code를 가리킨다."""
+
+    document_id: str
+    target_document_id: str
+    base_revision_no: int
+    target_base_revision_no: int
+    relation_key: str
+    reverse_relation_key: str
+    description: str
+    evidence: tuple[Evidence, ...]
+    operation: str = "ADD"
+
+
+@dataclass(frozen=True)
+class ModelSettings:
+    """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
+
+    model: str = "unconfigured"
+    prompt_version: str = "refresh-v1"
+    schema_version: str = "refresh-result-v1"
 
 
 @dataclass(frozen=True)
@@ -219,8 +256,9 @@ class ModelInput:
 class ModelCandidate:
     """모델이 반환한 갱신안 후보와 사용량. 아직 업무 검증을 통과하지 않은 값."""
 
-    proposals: tuple[Proposal, ...]
+    document_proposals: tuple[DocumentProposal, ...]
     usage: Usage = Usage()
+    relation_proposals: tuple[RelationProposal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -241,10 +279,11 @@ class RefreshResult:
 
     job: JobKey
     outcome: Outcome
-    proposals: tuple[Proposal, ...] = ()
+    document_proposals: tuple[DocumentProposal, ...] = ()
     usage: Usage = Usage()
     failure: Failure | None = None
     prompt_version: str | None = None
+    relation_proposals: tuple[RelationProposal, ...] = ()
 
 
 @dataclass(frozen=True)

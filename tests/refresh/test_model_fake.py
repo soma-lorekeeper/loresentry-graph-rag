@@ -12,16 +12,23 @@ from tests.fakes.refresh import FakeModel
 def test_model_returns_scripted_candidates_without_validating_them(variant):
     candidate = example()[4]
     if variant == "no_change":
-        candidate = replace(candidate, proposals=())
+        candidate = replace(candidate, document_proposals=())
     elif variant == "bad_field":
         candidate = replace(
-            candidate, proposals=(replace(candidate.proposals[0], field="unsupported"),)
+            candidate,
+            document_proposals=(
+                replace(candidate.document_proposals[0], field="unsupported"),
+            ),
         )
     elif variant == "bad_evidence":
-        evidence = replace(candidate.proposals[0].evidence[0], document_id="missing")
+        evidence = replace(
+            candidate.document_proposals[0].evidence[0], document_id="missing"
+        )
         candidate = replace(
             candidate,
-            proposals=(replace(candidate.proposals[0], evidence=(evidence,)),),
+            document_proposals=(
+                replace(candidate.document_proposals[0], evidence=(evidence,)),
+            ),
         )
     model = FakeModel(candidate)
     model_input = ModelInput("fixed", "fixture", "v1", "fake")

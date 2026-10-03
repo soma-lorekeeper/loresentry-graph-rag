@@ -48,7 +48,7 @@ class RefreshArtifactStore(Protocol):
         """실행 스냅샷을 멱등적으로 저장하고 위치를 반환한다.
 
         같은 요청의 같은 내용은 재사용하며, 다른 내용은 RequestConflict로 거절한다.
-        문서 원문과 revision을 보존해 재실행에서 조회 시점이 바뀌지 않게 한다.
+        문서 원문과 revision_no를 보존해 재실행에서 조회 시점이 바뀌지 않게 한다.
         """
         ...
 
@@ -96,7 +96,7 @@ class DocumentSource(Protocol):
             document_ids: 추가로 읽을 문서 식별자.
 
         Returns:
-            조회한 본문·revision과 찾지 못한 ID. 누락을 조용히 생략하지 않는다.
+            조회한 본문·revision_no와 찾지 못한 ID. 누락을 조용히 생략하지 않는다.
         """
         ...
 

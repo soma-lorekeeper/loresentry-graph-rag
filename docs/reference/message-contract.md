@@ -1,5 +1,7 @@
 # Lore Sentry 메시지 계약 초안
 
+문서·본문·관계·revision_no의 의미는 [Content 기준 용어집](../domain-glossary.md)을 따른다. 이벤트의 FileChanged·file_id·files는 Content API 이름을 유지하지만 모두 도메인 문서를 가리킨다. 아래 payload는 구현 전 계약 초안이며 기존 배포 스키마의 변경 완료를 뜻하지 않는다.
+
 이벤트·topic·키·value·header·호환성·크기·S3 Claim Check·DLQ 규약을 모은다. 원문에 적힌 설계안이며 배포된 설정을 확인한 문서는 아니다.
 
 관련 문서: [Outbox 구현 예시](outbox.md), [Inbox 구현 예시](inbox.md), [미결정 사항](README.md#미결정과-미작성-항목).
@@ -18,7 +20,7 @@
 - **FileChanged**
   - 변경분이 아니라 파일의 현재 상태 전체를 담음.
   - 본문만 바뀐 저장도 발행함. search는 본문으로 색인하고, graph-rag는 changed_fields를 보고 할 일이 없으면 바로 offset commit.
-  - 관계는 무방향이라 관계가 추가, 삭제, 수정되면 양쪽 파일의 이벤트를 모두 발행.
+  - 관계는 업무상 무방향 연결이고 현재 Content 저장은 양방향 두 행이다. 관계 변경 시 양쪽 문서 이벤트 발행이 필요하며, 대상 분류에 따라 양쪽 relation_key가 달라진다.
   - 파일을 영구 삭제하면 관계가 있던 상대 파일들의 이벤트도 발행. 관계 행이 CASCADE로 같이 지워지므로.
   - 휴지통 이동은 graph-rag, search에서 지우지 않고 trashed_at, is_trashed로 표시만 함. 조회와 그래프 탐색에서 휴지통 파일을 거르고, 복원하면 RESTORED 스냅샷으로 덮어쓰며 표시를 지움.
   ```json
@@ -37,20 +39,21 @@
       {
         "relation_id": "…",
         "relation_key": "related_character",
-        "other_file_id": "…"
+        "target_document_id": "…",
+        "description": "이 연결의 설명"
       }
     ]
   }
   ```
 
-  - **version — 미결정**: 본문 저장에서만 증가하는 `revision_no`와 별도로, 이름 변경·폴더 이동·휴지통 처리까지 포함한 파일 이벤트의 순서를 표현하려는 값이다.
+  - **version — 미결정**: 문서 조건부 저장에서 증가하는 `revision_no`와 별도로, 이름 변경·폴더 이동·휴지통 처리까지 포함한 파일 이벤트의 순서를 표현하려는 값이다.
     - 원문에는 파일별 증가 컬럼을 추가하는 안과 `outbox_id`를 사용하는 메모가 함께 있다.
     - 아래 헤더 규약은 outbox 행 id를 UUID로 정의한다. 이벤트 식별자와 순서 비교 값의 관계를 확정하기 전에는 두 안을 하나의 구현 계약으로 취급하지 않는다.
     - `revision_no`와 관계 저장 구조도 함께 결정해야 한다.
   - **change_type**: CREATED, UPDATED, TRASHED, RESTORED, DELETED. TRASHED와 DELETED면 file, relations는 null.
   - **changed_fields**: TITLE, BODY, FOLDER, RELATIONS 중 바뀐 것. 소비자가 건너뛸지 판단하는 힌트라서, 무시하고 전체를 적용해도 결과가 같아야 함.
   - **body_text**: 서버가 에디터 JSON(body_json)에서 뽑은 순수 텍스트. 에디터 JSON은 싣지 않음. 상한이 100만 자라 크기 제한 섹션에서 claim check 기준을 정함.
-  - **relations**: 이 파일이 속한 관계 전체. 관계 하나는 DB에 한 행이라 양쪽 파일 이벤트에 같은 relation_id, relation_key로 나옴.
+  - **relations**: 현재 문서에서 바라본 관계 행 목록. target_document_id는 상대 문서, relation_key는 상대 분류의 참조 키, description은 연결 자체의 설명이다. relation_id는 방향별 저장 행 ID이므로 양쪽 이벤트에서 같은 ID·키를 공유한다고 가정하지 않는다. 관계도 연결은 문서 쌍으로 중복 제거한다.
 - **ProjectDeleted**
   - 프로젝트를 영구 삭제하는 트랜잭션에서 같이 씀. 휴지통 이동은 발행하지 않음.
   - 유저 삭제도 이 이벤트로 전파됨. content가 UserDeleted를 받아 그 유저의 프로젝트를 지우면서 프로젝트마다 하나씩 발행.
@@ -67,7 +70,8 @@
   ```
 - **GraphRefreshRequested**
   - 마지막 최신화 이후 revision_no가 오른 파일을 보냄. 관계로 이어진 추가 파일은 graph-rag가 content HTTP API로 가져감.
-  - 파일 수에 상한이 없어서 본문은 S3에 올리고, 이벤트에는 목록과 S3 위치만 담음.
+  - Content가 변경 문서 전체의 본문·revision·현재 관계를 S3에 올리고, 이벤트에는 변경 목록과 S3 위치만 담음. 첫 MVP는 최대 20개·ACTIVE 본문당 5,000자를 지원하며 초과 시 명시적 입력 실패로 처리함. 일부 문서나 본문을 조용히 잘라내지 않음.
+  - 문서 내용 변경·새로운 관계 제안과 결과 S3의 의미는 [갱신안 입력·결과 계약](../migration/proposal-contract.md)을 따름. 추가 조회 자료는 변경 입력 한도와 별도로 관리함.
   - 프로젝트당 진행 중인 요청은 하나.
   ```json
   {
@@ -83,7 +87,7 @@
 
   - **request_id**: refresh_runs 행의 id. 결과 이벤트와 짝을 맞추는 키.
   - **files**: 휴지통, 삭제된 파일도 포함. state는 ACTIVE, TRASHED, DELETED이고 본문(body_text)은 ACTIVE만 S3에 올림.
-  - **revision_no**: 본문 revision. FileChanged의 version과 다른 번호.
+  - **revision_no**: 문서 조건부 저장의 충돌 판정 번호. 본문 내용이 달라진 횟수가 아니며, 새 저장이 성공하면 같은 본문이어도 증가할 수 있다. 역관계·휴지통 등 모든 변경 순서를 보장하는 FileChanged version과 구분한다.
 - **GraphRefreshCompleted**
   - 최신화가 끝나면 graph-rag가 결과를 S3에 쓰고 발행. 실패도 같은 이벤트로 보냄.
   ```json
@@ -100,9 +104,11 @@
   }
   ```
 
-  - **outcome**: SUCCEEDED면 result, FAILED면 error(code, message)를 채움.
+  - **outcome**: SUCCEEDED면 저장된 result 위치를 채움. 이는 제안 생성 완료이며 문서·그래프 적용 완료가 아님. S3의 PROPOSED와 NO_CHANGE는 모두 SUCCEEDED로 전달함.
+  - FAILED면 error(code, message)를 채움. 실패 결과를 S3에 저장했다면 result 위치도 전달하고, 저장 자체가 불가능한 전달 계층 실패는 result=null로 구분함. 결과 저장 실패를 성공으로 발행하지 않음.
   - **prompt_version**: 추출에 쓴 규칙 버전. refresh_runs에 기록.
-  - 결과 파일에는 근거로 쓴 파일과 revision_no를 담음. HTTP로 가져온 파일도 포함.
+  - 결과 파일에는 문서 내용 변경 제안과 새로운 관계 추가 제안을 별도 목록으로 담음. 근거 문서·revision_no·원문 위치를 포함하며 HTTP로 가져온 자료도 기록함. Kafka에는 제안 본문을 복제하지 않음.
+  - Content는 완료를 수신해도 자동 적용하지 않음. 사용자 확정 후 Content 원본에 반영하고 확정 변경 이벤트로 그래프를 동기화함.
 
 ## Topic 네이밍 · 파티션 수 · 키 선택
 
@@ -126,7 +132,7 @@
   - `content.project.changed.v1`은 project_id. 프로젝트 안의 모든 변경(파일, 관계, 삭제)이 커밋 순서대로 처리되고, 한 파일의 순서도 같이 지켜짐.
   - file_id로 하면 ProjectDeleted가 그 프로젝트의 파일 이벤트보다 먼저 처리될 수 있고, 관계 변경으로 함께 나가는 두 파일 이벤트의 순서도 섞임.
   - 대신 한 프로젝트 안에서는 병렬 처리가 안 됨. 프로젝트끼리는 partition에 나뉘어 병렬로 처리되고, 지금 트래픽에는 충분함.
-  - 그래프 최신화 topic도 project_id. graph-rag가 프로젝트의 결과를 증분으로 갱신하므로 같은 프로젝트의 요청은 순서대로 하나씩 처리되어야 함. 요청과 결과의 짝은 key가 아니라 payload의 request_id로 맞춤.
+  - 그래프 최신화 topic도 project_id. 프로젝트별 갱신안 요청을 직렬로 관리하므로 같은 프로젝트의 요청은 순서대로 하나씩 처리되어야 함. 요청과 결과의 짝은 key가 아니라 payload의 request_id로 맞춤.
 - **ProjectDeleted를 FileChanged와 같은 topic에 둔 이유**
   - Kafka는 같은 topic, 같은 key 안에서만 순서를 보장함. topic을 나누면 밀려 있던 FileChanged가 ProjectDeleted보다 늦게 처리되어, 지운 프로젝트의 데이터를 다시 만들 수 있음.
   - 두 이벤트를 모두 graph-rag와 search가 구독하므로 합쳐도 필요 없는 이벤트를 받는 쪽이 없음. consumer는 event_type으로 구분.
@@ -214,7 +220,7 @@
   - key: `refresh/{project_id}/{request_id}/input.json`, `refresh/{project_id}/{request_id}/result.json`
   - input을 먼저 올리고 그다음 refresh_runs와 outbox를 한 트랜잭션으로 씀. key에 request_id가 있어 덮어쓰지 않음.
   - graph-rag는 result가 이미 있으면 LLM을 다시 돌리지 않고 완료 이벤트만 다시 보냄.
-  - 권한: content는 `refresh/*` Put, Get, Delete. graph-rag는 input Get, result Put, Get(Pod Identity 추가 필요).
+  - 권한: content는 `refresh/*` Put, Get, Delete. graph-rag는 input Get, result 및 실행 스냅샷 Put, Get이 필요함(Pod Identity 추가 필요). 실행 스냅샷의 객체 키는 실제 연동 전에 고정함. Content 원본·확정 그래프 쓰기 권한을 갱신안 생성에 사용하지 않음.
 - **S3 만료와 삭제**
   - Lifecycle 규칙: `refresh/`는 생성 후 3일에 만료, 끝나지 않은 multipart 업로드는 1일 뒤 정리.
   - 3일인 이유: content의 최신화 타임아웃(예: 1시간)이 지나면 객체를 다시 쓰지 않음. 장애를 들여다볼 여유만 둠.

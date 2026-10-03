@@ -38,14 +38,14 @@ GraphRAG에는 문서 청킹·검색·근거 구성과 설정 문서 갱신안 �
 따라서 원본의 추출 결과를 그대로 확정 관계로 쓰는 방식은 이전하지 않는다.
 
 - **확정 데이터:** Content의 문서·속성·명시적 참조가 원본이다. GraphRAG는 이를 조회·검색용으로 반영한다.
-- **AI 갱신안:** 원고를 근거로 설정 문서의 변경을 제안한다. 사용자가 확정하기 전에는 원본 문서나 확정 관계를 바꾸지 않는다.
+- **AI 갱신안:** 원고를 근거로 여러 설정 문서의 내용 변경과 새로운 관계를 제안하여 S3에 보관하고, 결과 위치를 Kafka로 전달한다. 상세 범위는 [갱신안 계약](proposal-contract.md)을 따른다. 사용자가 확정하기 전에는 원본 문서나 확정 관계를 바꾸지 않는다.
 - **검색용 파생 데이터:** 청크·임베딩·요약과 필요 시 추출 사실을 사용한다. 추출 사실을 별도 저장할지는 미결정이며, 사용자가 확정한 사실과 구분해야 한다.
 
 ### 서버별 담당
 
 | 서버 | 이전 후 담당할 범위 |
 |---|---|
-| Content | 문서·revision·참조의 원본, 갱신안 검토·확정과 저장, 원본 변경 이벤트 |
+| Content | 문서·revision_no·참조의 원본, 갱신안 검토·확정과 저장, 원본 변경 이벤트 |
 | GraphRAG | 문서의 그래프·검색 투영, 관련 문서와 근거 검색, 갱신안 추출 계산과 결과 반환 |
 | AI Chat | 대화·에이전트 실행, 검색 도구 호출, 응답 생성·스트리밍·중단·재시도 |
 | Gateway 및 각 서비스 | 검증된 사용자 컨텍스트 전달과 서비스별 접근 범위 확인. 원본의 테넌트 필터만으로 인가 완료를 가정하지 않음 |
@@ -57,10 +57,10 @@ GraphRAG에는 문서 청킹·검색·근거 구성과 설정 문서 갱신안 �
 
 | 기능 | 원본 코드 | 판단 | 대상에서 필요한 변경 |
 |---|---|---|---|
-| 한국어 문장 분리·청킹 | [splitters.py](../../../lorekeeper-ai/src/service/index/splitters.py) | 정책 재사용 | KSS·Kiwi 분리와 원문 위치 보존을 평가하고, 청크 식별자를 프로젝트·문서·revision 기준으로 변경. Neo4j TextSplitter 타입 의존 분리 |
-| 청크 저장·임베딩 | [chunk.py](../../../lorekeeper-ai/src/repository/neo4j/chunk.py) | 기능 이전, 저장 구현 교체 | `Chapter`·회차 번호 기반 저장을 문서 기반으로 변경. 임베딩 생성·검색 모델을 일치시키고 수정·삭제 시 옛 revision 처리 추가 |
+| 한국어 문장 분리·청킹 | [splitters.py](../../../lorekeeper-ai/src/service/index/splitters.py) | 정책 재사용 | KSS·Kiwi 분리와 원문 위치 보존을 평가하고, 청크 식별자를 프로젝트·문서·revision_no 기준으로 변경. Neo4j TextSplitter 타입 의존 분리 |
+| 청크 저장·임베딩 | [chunk.py](../../../lorekeeper-ai/src/repository/neo4j/chunk.py) | 기능 이전, 저장 구현 교체 | `Chapter`·회차 번호 기반 저장을 문서 기반으로 변경. 임베딩 생성·검색 모델을 일치시키고 수정·삭제 시 옛 revision_no 처리 추가 |
 | 원문·사실·엔티티 검색 | [retrieval.py](../../../lorekeeper-ai/src/repository/neo4j/retrieval.py), [retrieval_tools.py](../../../lorekeeper-ai/src/service/retrieval_tools.py) | 검색 전략 재사용 | 원문 하이브리드 검색과 식별자 기반 관계 조회부터 설계. `HybridCypherRetriever`·Neo4j 쿼리는 교체. 사실 검색은 추출 사실 저장 여부 결정 후 포함 |
-| 근거 연결·중복 제거 | [evidence.py](../../../lorekeeper-ai/src/repository/neo4j/evidence.py), [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py) | 정책 재사용 | 청크·사실·엔티티를 중복 없이 묶는 방식을 활용. 회차·Neo4j element ID 대신 문서 ID·revision·원문 위치를 반환 |
+| 근거 연결·중복 제거 | [evidence.py](../../../lorekeeper-ai/src/repository/neo4j/evidence.py), [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py) | 정책 재사용 | 청크·사실·엔티티를 중복 없이 묶는 방식을 활용. 회차·Neo4j element ID 대신 문서 ID·revision_no·원문 위치를 반환 |
 | 문맥 구성·요약 | [context_service.py](../../../lorekeeper-ai/src/service/index/context_service.py) | 부분 이전 | 관련 자료와 요약을 추출 문맥으로 사용. 회차 순서와 누적 Story 요약 전제를 문서 변경 모델에 맞게 수정하고, 근거가 바뀐 요약의 무효화 규칙 추가 |
 | 구조화된 정보 추출 | [extractor.py](../../../lorekeeper-ai/src/service/index/extractor.py), [extraction_examples.py](../../../lorekeeper-ai/src/service/index/extraction_examples.py) | 갱신안 생성으로 전환 | 한국어 원고 추출 프롬프트·사례를 참고하되, 목표 출력은 설정 문서의 변경 제안과 근거. 추출 후 확정 그래프에 즉시 쓰는 단계 제거 |
 | 추출 스키마·파이프라인 | [graph_schema.py](../../../lorekeeper-ai/src/service/index/graph_schema.py), [extraction_pipeline.py](../../../lorekeeper-ai/src/service/index/extraction_pipeline.py) | 의미 참고, 조립 재설계 | Character·Event·CharacterState 모델을 그대로 확정하지 않음. Content의 설정 문서·속성 모델에 맞춰 출력 스키마와 검증 구성 |
@@ -94,8 +94,8 @@ GraphRAG에는 문서 청킹·검색·근거 구성과 설정 문서 갱신안 �
 |---|---|
 | Content 변경 수신 | 메시지 계약에 따라 파일·프로젝트 변경을 소비하고, 중복·오래된 이벤트·삭제 후 늦은 이벤트를 처리 |
 | 명시적 참조 그래프 | 사용자 확정 참조를 Neptune에 반영. 프로젝트·휴지통·삭제 조건이 검색과 관계 확장 모두에 적용되도록 구성 |
-| 문서 조회 계약 | Content에서 접근 범위가 확인된 문서·revision을 가져오는 방법과 오류·삭제·revision 변경 처리 정의 |
-| 검색 응답 계약 | AI Chat이 사용할 검색 요청과 문서 ID·revision·근거 위치를 포함한 응답 정의. Neo4j 라이브러리 타입을 외부에 노출하지 않음 |
+| 문서 조회 계약 | Content에서 접근 범위가 확인된 문서·revision_no를 가져오는 방법과 오류·삭제·revision_no 변경 처리 정의 |
+| 검색 응답 계약 | AI Chat이 사용할 검색 요청과 문서 ID·revision_no·근거 위치를 포함한 응답 정의. Neo4j 라이브러리 타입을 외부에 노출하지 않음 |
 | 최신화 입출력 | `GraphRefreshRequested` 입력과 S3 자료로 갱신안을 계산하고 결과·실패를 `GraphRefreshCompleted`로 반환하는 흐름. 상세 필드는 메시지 계약 참조 |
 | 작업 복구 | 계산 중 재시작, 결과 저장 후 완료 이벤트 발행 실패, 입력 객체 만료, 중복 요청에 대한 재개·재발행·종료 처리 |
 
@@ -107,7 +107,7 @@ GraphRAG에는 문서 청킹·검색·근거 구성과 설정 문서 갱신안 �
 
 | 구분 | 결정할 내용 | 담당 계획 |
 |---|---|---|
-| 우선 MVP | 갱신 대상 유형·필드, 입력 자료와 기준 revision, 결과 스키마, 근거·품질 판정 기준 | [갱신안 생성 우선 계획](refresh-mvp.md) |
+| 우선 MVP | 갱신 대상 유형·필드, 입력 자료와 기준 revision_no, 결과 스키마, 근거·품질 판정 기준 | [갱신안 생성 우선 계획](refresh-mvp.md) |
 | 병렬 연동 | 요청·결과 전달 계약, 작업 ID, 상태 저장·중복·재시도·offset commit·완료 재발행의 책임 경계 | [MVP의 Kafka 연동 경계](refresh-mvp.md#3-kafka-병렬-작업과의-경계) |
 | 후속 검색 | Neptune 그래프 모델, 벡터·전문 검색 저장소, 추출 사실 저장 여부, 문서 동기화 순서 값 | [후속 마이그레이션](follow-up.md) |
 | 후속 데이터 | 기존 데이터 보존 필요·양 확인, ID 변환 또는 재인덱싱 선택 | [후속 마이그레이션](follow-up.md) |
@@ -115,7 +115,7 @@ GraphRAG에는 문서 청킹·검색·근거 구성과 설정 문서 갱신안 �
 저장·검색 방식을 먼저 확정해야 갱신안 생성을 시작할 수 있는 것은 아니다.
 우선 MVP는 S3 입력과 명시적 관계 조회·Content 추가 조회를 포트로 연결해 fake로 검증한다.
 실제 관계 조회·동기화는 준비된 시점에 통합 검증하며, 벡터·전문 검색과 범용 검색 API는 후속 범위다.
-메시지 계약의 `version`·`outbox_id` 메모는 파일 동기화 설계 시 해결하며, 갱신 요청의 기준 revision과 혼동하지 않는다.
+메시지 계약의 `version`·`outbox_id` 메모는 파일 동기화 설계 시 해결하며, 갱신 요청의 기준 revision_no와 혼동하지 않는다.
 
 ## 7. 실행 계획과 우선순위
 
@@ -139,7 +139,7 @@ GraphRAG 기능 개발은 요청 전달·결과 발행 인터페이스가 제공
 - [test_index_api.py](../../../lorekeeper-ai/tests/test_index_api.py): 처리 순서·중복·실패 시나리오는 참고하되, 기존 HTTP 경로와 메모리 큐를 정답으로 고정하지 않는다.
 - [test_detect_pipeline.py](../../../lorekeeper-ai/tests/test_detect_pipeline.py), [test_harness_parity.py](../../../lorekeeper-ai/tests/test_harness_parity.py): 재사용하는 근거 구성 부분을 선별한다. 모순 탐지 성능을 갱신안 품질의 지표로 대신하지 않는다.
 
-새 검증에는 프로젝트 격리·인가 실패·삭제 자료 제외·revision 추적·중복/역순 이벤트·작업 복구를 포함한다.
+새 검증에는 프로젝트 격리·인가 실패·삭제 자료 제외·revision_no 추적·중복/역순 이벤트·작업 복구를 포함한다.
 검색과 갱신안 품질은 동일한 입력 자료·근거 기대값으로 평가하고, 모델·프롬프트·청킹·검색 설정을 기록한다.
 원본 README의 과거 평가 수치를 새 저장소·모델·제품 기능의 성능으로 승계하지 않는다.
 이 문서 작성에서는 애플리케이션 테스트·LLM 호출·운영 데이터 이전을 실행하지 않았다.

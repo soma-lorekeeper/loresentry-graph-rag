@@ -17,7 +17,7 @@
 
 | 파일 | 검증 |
 |---|---|
-| `test_contracts.py` | 내부 스냅샷·revision·근거 위치와 요청 식별 |
+| `test_contracts.py` | 내부 스냅샷·revision_no·근거 위치와 요청 식별 |
 | `test_rules_skeleton.py` | 모든 미구현 판단의 명시적 오류, 테스트 stub의 독립성 |
 | `test_data_fakes.py` | 자료 저장·조회·불변성·오류 주입·범위별 fixture |
 | `test_model_fake.py` | 고정 후보·변경 없음·잘못된 후보·timeout |

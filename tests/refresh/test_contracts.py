@@ -5,12 +5,12 @@ import pytest
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import (
     ArtifactRef,
+    DocumentProposal,
     DocumentSnapshot,
     Evidence,
     Failure,
     InputSnapshot,
     JobKey,
-    Proposal,
     RefreshRequest,
     SelectionSettings,
 )
@@ -21,12 +21,14 @@ def test_revision_and_original_positions_survive_snapshot_construction():
     source = DocumentSnapshot("project", "draft", 4, "안녕\n안녕")
     snapshot = InputSnapshot(job, (source,))
     evidence = Evidence("draft", 4, 3, 5, "안녕")
-    proposal = Proposal("setting", 9, "body", "제안", (evidence,))
-    assert snapshot.documents[0].body[evidence.start : evidence.end] == evidence.quote
-    assert proposal.base_revision == 9
-    assert proposal.evidence[0].revision == source.revision
+    proposal = DocumentProposal("setting", 9, "body_text", "제안", (evidence,))
+    assert (
+        snapshot.documents[0].body_text[evidence.start : evidence.end] == evidence.quote
+    )
+    assert proposal.base_revision_no == 9
+    assert proposal.evidence[0].revision_no == source.revision_no
     with pytest.raises(FrozenInstanceError):
-        source.body = "changed"
+        source.body_text = "changed"
 
 
 def test_request_identity_includes_selection_and_input_location():

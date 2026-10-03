@@ -2,6 +2,7 @@
 
 from app.refresh.models import (
     ArtifactRef,
+    DocumentProposal,
     DocumentSnapshot,
     Evidence,
     ExecutionSnapshot,
@@ -9,7 +10,6 @@ from app.refresh.models import (
     JobKey,
     ModelCandidate,
     Outcome,
-    Proposal,
     RefreshRequest,
     RefreshResult,
     RelatedDocuments,
@@ -37,12 +37,16 @@ def example():
     )
     snapshot = ExecutionSnapshot(request, (source, setting), related)
     evidence = Evidence(
-        source.document_id, source.revision, 0, len(source.body), source.body
+        source.document_id,
+        source.revision_no,
+        0,
+        len(source.body_text),
+        source.body_text,
     )
-    proposal = Proposal(
+    proposal = DocumentProposal(
         setting.document_id,
-        setting.revision,
-        "body",
+        setting.revision_no,
+        "body_text",
         "유나의 망토는 파랗다.",
         (evidence,),
     )
@@ -50,7 +54,7 @@ def example():
     result = RefreshResult(
         job,
         Outcome.PROPOSED,
-        candidate.proposals,
+        candidate.document_proposals,
         candidate.usage,
         prompt_version="fixture-v1",
     )

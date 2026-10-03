@@ -52,11 +52,11 @@ def test_explicit_complete_input_skips_relations_and_content_queries():
 
 def test_no_change_is_explicit_in_result_and_completion():
     s = scenario()
-    s.model.candidate = replace(s.model.candidate, proposals=())
-    s.rules.result = replace(s.result, outcome=Outcome.NO_CHANGE, proposals=())
+    s.model.candidate = replace(s.model.candidate, document_proposals=())
+    s.rules.result = replace(s.result, outcome=Outcome.NO_CHANGE, document_proposals=())
     completion = s.service().run(s.request, "execution-1")
     assert completion.outcome == Outcome.NO_CHANGE
-    assert s.artifacts.read_result(s.request).proposals == ()
+    assert s.artifacts.read_result(s.request).document_proposals == ()
 
 
 def test_default_unimplemented_rules_never_publish_or_report_success():
