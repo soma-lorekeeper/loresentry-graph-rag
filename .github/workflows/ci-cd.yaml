@@ -43,8 +43,8 @@ jobs:
 
       - name: Check lint and formatting
         run: |
-          ruff check app tests
-          ruff format --check app tests
+          ruff check app tests evaluation scripts
+          ruff format --check app tests evaluation scripts
 
       - name: Run tests
         run: |
