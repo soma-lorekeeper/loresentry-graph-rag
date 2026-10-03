@@ -2,9 +2,9 @@
 
 from app.refresh import selection as selection_rules
 from app.refresh.context import build_context
-from app.refresh.errors import RulesNotImplemented
 from app.refresh.evidence import make_chunks
 from app.refresh.prompts import build_prompt
+from app.refresh.validation import validate_candidate
 
 
 class RefreshRules:
@@ -35,5 +35,5 @@ class RefreshRules:
         return build_prompt(context)
 
     def validate_candidate(self, snapshot, candidate, model_input):
-        """후보 검증 구현 전에는 결과를 신뢰하거나 성공 처리하지 않는다."""
-        raise RulesNotImplemented("validate_candidate")
+        """대상·revision·근거를 검증하고 전체 요청의 처리 결과를 반환한다."""
+        return validate_candidate(snapshot, candidate, model_input)

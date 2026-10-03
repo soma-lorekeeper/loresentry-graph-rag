@@ -1,8 +1,5 @@
 from dataclasses import replace
 
-import pytest
-
-from app.refresh.errors import RulesNotImplemented
 from app.refresh.models import JobState, Outcome, Selection
 from tests.fakes.scenario import scenario
 
@@ -59,10 +56,12 @@ def test_no_change_is_explicit_in_result_and_completion():
     assert s.artifacts.read_result(s.request).document_proposals == ()
 
 
-def test_default_unimplemented_rules_never_publish_or_report_success():
+def test_default_rules_validate_and_publish_a_real_proposal():
     s = scenario()
-    with pytest.raises(RulesNotImplemented, match="validate_candidate"):
-        s.service(use_stub=False).run(s.request, "execution-1")
-    assert s.publisher.delivered == []
-    assert s.artifacts.read_result(s.request) is None
-    assert s.jobs.load(s.request).state == JobState.RETRYABLE
+    done = s.service(use_stub=False).run(s.request, "execution-1")
+    assert done.outcome == Outcome.PROPOSED
+    assert s.jobs.load(s.request).state == JobState.COMPLETED
+    assert (
+        s.artifacts.read_result(s.request).document_proposals
+        == s.model.candidate.document_proposals
+    )
