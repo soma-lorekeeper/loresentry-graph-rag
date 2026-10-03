@@ -4,6 +4,7 @@
 조용히 통과시키거나 갱신안을 생성하지 않도록 RulesNotImplemented를 발생시킨다.
 """
 
+from app.refresh import selection as selection_rules
 from app.refresh.errors import RulesNotImplemented
 from app.refresh.models import (
     Chunk,
@@ -32,7 +33,7 @@ class RefreshRules:
         Raises:
             RulesNotImplemented: 입력 검증 규칙이 아직 구현되지 않아 항상 발생한다.
         """
-        raise RulesNotImplemented("validate_input")
+        return selection_rules.validate_input(request, source)
 
     def select(
         self, request: RefreshRequest, source: InputSnapshot, related: RelatedDocuments
@@ -45,7 +46,7 @@ class RefreshRules:
         Raises:
             RulesNotImplemented: 문서 선택 규칙이 아직 구현되지 않아 항상 발생한다.
         """
-        raise RulesNotImplemented("select")
+        return selection_rules.select(request, source, related)
 
     def assemble(
         self,
@@ -65,7 +66,7 @@ class RefreshRules:
         Raises:
             RulesNotImplemented: 조립 규칙이 아직 구현되지 않아 항상 발생한다.
         """
-        raise RulesNotImplemented("assemble")
+        return selection_rules.assemble(request, source, related, selection, fetched)
 
     def chunk(self, snapshot: ExecutionSnapshot) -> tuple[Chunk, ...]:
         """확정된 본문을 출처 정보가 있는 조각으로 나눌 경계.

@@ -10,9 +10,6 @@ from app.refresh.rules import RefreshRules
 @pytest.mark.parametrize(
     "method",
     [
-        "validate_input",
-        "select",
-        "assemble",
         "chunk",
         "build_context",
         "build_prompt",

@@ -29,7 +29,12 @@ def example():
     )
     source = DocumentSnapshot("project-1", "draft-1", 3, "유나는 파란 망토를 입었다.")
     setting = DocumentSnapshot(
-        "project-1", "setting-1", 7, "유나의 망토는 붉다.", (("name", "유나"),)
+        "project-1",
+        "setting-1",
+        7,
+        "유나의 망토는 붉다.",
+        (("name", "유나"),),
+        folder_code="CHARACTER",
     )
     relation = Relation("project-1", "draft-1", "setting-1", "related_character")
     related = RelatedDocuments(
