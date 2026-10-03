@@ -80,6 +80,15 @@ class SelectionSettings:
 
 
 @dataclass(frozen=True)
+class ModelSettings:
+    """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
+
+    model: str = "unconfigured"
+    prompt_version: str = "refresh-v1"
+    schema_version: str = "refresh-result-v1"
+
+
+@dataclass(frozen=True)
 class RefreshRequest:
     """입력 위치와 갱신안 생성 범위를 전달하는 요청.
 
@@ -99,6 +108,7 @@ class RefreshRequest:
     discover_related: bool = True
     required_graph_version: str | None = None
     settings: SelectionSettings = SelectionSettings()
+    model_settings: ModelSettings = ModelSettings()
 
 
 @dataclass(frozen=True)
@@ -225,15 +235,6 @@ class RelationProposal:
 
 
 @dataclass(frozen=True)
-class ModelSettings:
-    """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
-
-    model: str = "unconfigured"
-    prompt_version: str = "refresh-v1"
-    schema_version: str = "refresh-result-v1"
-
-
-@dataclass(frozen=True)
 class Usage:
     """모델 호출 및 입출력 토큰 사용량을 전달하는 값."""
 
@@ -250,6 +251,7 @@ class ModelInput:
     schema_version: str
     prompt_version: str
     model: str
+    target_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
