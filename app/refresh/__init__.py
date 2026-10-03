@@ -1,1 +1,1 @@
-"""Refresh orchestration contracts. Not wired to the HTTP application."""
+"""갱신안 처리의 내부 계약과 실행 골격. HTTP 애플리케이션에는 연결하지 않았다."""
