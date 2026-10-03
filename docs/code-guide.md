@@ -43,3 +43,9 @@
 | [test_neptune_integration.py](../tests/test_neptune_integration.py) | 실제 로컬 HTTP 요청, JSON 해석·오류·타임아웃·재시도 없음·반복 조회 |
 
 실행 방법과 운영 확인 범위는 [검증 계획](implementation/TEST_PLAN.md)을 따른다.
+
+## 갱신안 내부 코드
+
+`app/refresh/models.py`에서 값의 의미, `rules.py`에서 판단 단계, `service.py`에서
+조회·판단·실행 순서를 읽는다. [Refresh 코드 안내](../app/refresh/README.md)와
+[실제 rules 실행 테스트](../tests/refresh/test_real_service.py)가 진입점이다.

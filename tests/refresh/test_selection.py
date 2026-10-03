@@ -47,7 +47,7 @@ def test_input_boundaries(count, chars, code):
     "change,code",
     [
         ({"project_id": "other"}, "PROJECT_MISMATCH"),
-        ({"revision_no": 0}, "INVALID_DOCUMENT"),
+        ({"revision_no": 0}, "MANIFEST_MISMATCH"),
         ({"body_text": None}, "BODY_MISSING"),
     ],
 )
@@ -68,6 +68,12 @@ def test_inactive_changes_count_but_do_not_expand(state):
         source,
         documents=tuple(
             replace(d, state=state, body_text=None) for d in source.documents
+        ),
+    )
+    request = replace(
+        request,
+        changed_documents=tuple(
+            replace(item, state=state) for item in request.changed_documents
         ),
     )
     selection = RefreshRules().select(request, source, related)
@@ -109,3 +115,35 @@ def test_required_references_cannot_be_missing_inactive_or_overwrite_input(kind)
         )
     with pytest.raises(RefreshFailure):
         rules.assemble(request, source, related, selection, fetched)
+
+
+def test_fetch_embedded_relation_must_match_owner_and_project():
+    request, source, related, targets, _ = real_example()
+    rules = RefreshRules()
+    relation = Relation("other", "c1", "i1", "related_item")
+    targets = (replace(targets[0], relations=(relation,)), targets[1])
+    with pytest.raises(RefreshFailure) as caught:
+        rules.assemble(
+            request,
+            source,
+            related,
+            rules.select(request, source, related),
+            DocumentBatch(targets),
+        )
+    assert caught.value.failure.code == "INVALID_RELATION"
+
+
+def test_manifest_missing_document_or_different_state_fails():
+    request, source, *_ = real_example()
+    for manifest in [
+        request.changed_documents[:1],
+        (
+            replace(request.changed_documents[0], state=DocumentState.TRASHED),
+            request.changed_documents[1],
+        ),
+    ]:
+        with pytest.raises(RefreshFailure) as caught:
+            RefreshRules().validate_input(
+                replace(request, changed_documents=manifest), source
+            )
+        assert caught.value.failure.code == "MANIFEST_MISMATCH"

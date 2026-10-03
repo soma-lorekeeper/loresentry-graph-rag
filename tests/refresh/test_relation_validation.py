@@ -129,3 +129,31 @@ def test_invalid_response_type_fails_explicitly():
         validate(ModelCandidate((), relation_proposals=("invalid",))).outcome
         == Outcome.FAILED
     )
+
+
+@pytest.mark.parametrize("kind", ["document_id", "relation_id", "evidence_id"])
+def test_malformed_model_identifiers_fail_without_crashing(kind):
+    candidate = real_example()[-1]
+    if kind == "document_id":
+        candidate = replace(
+            candidate,
+            document_proposals=(
+                replace(candidate.document_proposals[0], target_document_id={}),
+            ),
+        )
+    elif kind == "relation_id":
+        candidate = replace(
+            candidate,
+            relation_proposals=(
+                replace(candidate.relation_proposals[0], document_id={}),
+            ),
+        )
+    else:
+        p = candidate.document_proposals[0]
+        candidate = replace(
+            candidate,
+            document_proposals=(
+                replace(p, evidence=(replace(p.evidence[0], document_id={}),)),
+            ),
+        )
+    assert validate(candidate).outcome == Outcome.FAILED

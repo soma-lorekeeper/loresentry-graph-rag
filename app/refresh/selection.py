@@ -29,6 +29,17 @@ def validate_document(request, document):
         DocumentState
     ):
         reject("INVALID_DOCUMENT", "Unknown document classification or state")
+    for relation in document.relations:
+        if (
+            relation.document_id != document.document_id
+            or relation.project_id != request.job.project_id
+        ):
+            reject("INVALID_RELATION", "Embedded relation owner or project differs")
+        if (
+            relation.relation_key not in RELATION_KEYS.values()
+            or relation.document_id == relation.target_document_id
+        ):
+            reject("INVALID_RELATION", "Invalid embedded relationship")
     if document.state == DocumentState.ACTIVE:
         if not isinstance(document.body_text, str):
             reject("BODY_MISSING", "Active document requires body_text")
@@ -74,6 +85,17 @@ def validate_input(request, source):
         reject("DUPLICATE_DOCUMENT", "Duplicate changed document ID")
     if not set(request.seed_ids) <= set(ids):
         reject("SEED_MISSING", "Seed must be present in input")
+    if request.changed_documents:
+        manifest = {
+            item.document_id: (item.revision_no, item.state)
+            for item in request.changed_documents
+        }
+        actual = {
+            item.document_id: (item.revision_no, item.state)
+            for item in source.documents
+        }
+        if len(manifest) != len(request.changed_documents) or manifest != actual:
+            reject("MANIFEST_MISMATCH", "Request manifest differs from S3 input")
     for document in source.documents:
         validate_document(request, document)
 
@@ -146,7 +168,8 @@ def assemble(request, source, related, selection, fetched):
         sorted(source.documents + fetched.documents, key=lambda d: d.document_id)
     )
     by_id = {d.document_id: d for d in documents}
-    for relation in relations_for(source, related):
+    all_relations = related.relations + tuple(r for d in documents for r in d.relations)
+    for relation in all_relations:
         if relation.document_id in by_id and relation.target_document_id in by_id:
             if (
                 relation.relation_key

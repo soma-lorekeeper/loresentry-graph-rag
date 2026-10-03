@@ -12,6 +12,9 @@ S3 입력, 명시적 관계 조회, 부족한 문서의 Content 조회를 인터
 벡터·전문 검색 구현을 기다리지 않고 생성 결과의 적절성과 추적 가능성을 평가한다.
 전체 원본 코드 매핑은 [이전 범위](overview.md), 저장·검색 확장은 [후속 계획](follow-up.md)을 따른다.
 
+현재 1~3단계의 구현·검증 내용은 [rules 이식 결과](rules-implementation.md)에 기록했다.
+실제 LLM 평가와 IO 통합은 남아 있다.
+
 ## 1. 이번 단계의 범위
 
 | 포함 | 범위 |
@@ -45,7 +48,7 @@ Content의 검토·확정 화면까지 완성해야만 생성 기능을 검증�
 | [context_service.py](../../../lorekeeper-ai/src/service/index/context_service.py)의 `build_context` | 배경 자료를 묶는 구성 방식 참고. `dump_graph_text`·`load_summaries`의 DB 조회는 제외하고 기존 설정 스냅샷을 인자로 받음 | `app/refresh/context.py`: 원고·현재 설정·허용 대상·입력 예산을 추출 문맥으로 조립 | 같은 입력의 같은 문맥, 예산 초과와 누락 자료의 명시적 처리 |
 | [extractor.py](../../../lorekeeper-ai/src/service/index/extractor.py)의 `KoreanWebNovelERTemplate`, `NovelContextExtractor`와 [extraction_examples.py](../../../lorekeeper-ai/src/service/index/extraction_examples.py)의 `EXTRACTION_FEW_SHOT` | 한국어 원고·배경 문맥·사례를 넣는 프롬프트 구성 재사용. 엔티티·관계 JSON을 설정 변경 제안·근거 JSON으로 재작성. Neo4j 클래스 상속은 제거 | `app/refresh/prompts.py`: 순수 프롬프트 생성. `app/adapters/llm.py`: 구조화 출력 호출. 생성 서비스가 두 단계를 연결 | 기존 사례를 목표 설정 필드와 기대 제안으로 다시 작성해 실제 LLM 평가 |
 | [graph_schema.py](../../../lorekeeper-ai/src/service/index/graph_schema.py)의 노드·관계 정의, [extraction_pipeline.py](../../../lorekeeper-ai/src/service/index/extraction_pipeline.py)의 `build_pipeline` | 도메인 의미와 출력 검증 흐름 참고. `GraphPruning`·writer·resolver 조립은 이전하지 않음. 갱신 대상·필드·revision_no·근거를 검증하는 규칙은 신규 작성 | `app/refresh/models.py`, `app/refresh/rules.py`: 입력·제안 값과 순수 검증. `app/refresh/service.py`: 문맥 구성, 호출, 검증 조율 | 잘못된 필드·다른 프로젝트·없는 근거 거절, 변경 없음 구분, 원본 쓰기 없음 |
-| [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py)의 `build_docstore`, `render_docstore` | 근거를 한 번만 담고 참조하는 정책을 선별. 모순 탐지의 claim/channel 입력과 Neo4j element ID는 제거 | `app/text/evidence.py`: 갱신안 여러 항목이 공유하는 원문 근거 정리. 후속 검색 결과에서도 같은 값 사용 | 동일 근거 중복 제거, 서로 다른 revision_no의 근거는 합치지 않음 |
+| [docstore.py](../../../lorekeeper-ai/src/service/detect/docstore.py)의 `build_docstore`, `render_docstore` | 근거를 한 번만 담고 참조하는 정책을 선별. 모순 탐지의 claim/channel 입력과 Neo4j element ID는 제거 | `app/refresh/evidence.py`: 갱신안 여러 항목이 공유하는 원문 근거 정리. 후속 검색 결과에서도 같은 값 사용 | 동일 근거 중복 제거, 서로 다른 revision_no의 근거는 합치지 않음 |
 | [openai_client.py](../../../lorekeeper-ai/src/common/openai_client.py)의 `create_completion`, `create_response`, `_request`, [graphrag.py](../../../lorekeeper-ai/src/common/graphrag.py)의 `MeteredLLM` | 호출·오류·재시도 처리 재사용. Neo4j `LLMResponse` 변환과 전역 클라이언트 결합을 제거하고 필요한 호출 경계를 주입 | `app/adapters/llm.py`: 생성 서비스의 LLM 포트 구현. 모델 응답을 내부 제안 후보와 사용량으로 변환 | timeout·출력 오류·재시도 소진의 실패 변환, 실제 LLM 연결 검증 |
 | [usage.py](../../../lorekeeper-ai/src/common/usage.py)의 `empty`, `from_response`, `merge`, [llm_limit.py](../../../lorekeeper-ai/src/common/llm_limit.py), [admission.py](../../../lorekeeper-ai/src/common/admission.py) | 사용량 합산과 제한 정책 선별. 응답 파싱은 어댑터, 합산은 순수 함수. 시각·대기·세마포어와 전역 상태는 실행 쪽으로 분리 | `app/llm/usage.py`, `app/adapters/llm.py`: 작업별 비용 평가와 호출 예산 적용. Kafka 대기를 기존 HTTP 429로 처리하지 않음 | 캐시 토큰 중복 합산 방지, 제한 시 추가 호출 중단, 작업 간 사용량 격리 |
 | [index/job_service.py](../../../lorekeeper-ai/src/service/index/job_service.py)의 `submit`, `_run_index_job`, `get_status` | 접수·실행·결과·실패 역할만 참고. 메모리 큐와 회차 순차 처리는 교체 | `app/refresh/service.py`: 생성 유스케이스. 영속 상태·결과 저장·완료 발행은 병렬 전달 계층의 계약으로 연결 | 같은 요청의 결과 재사용, 저장 후 발행 실패에서 재생성 없이 복구 |
@@ -65,11 +68,9 @@ MVP에서는 그중 **근거 청킹·마커 구성·문맥 조립·구조화 추
 LLM 호출 뒤에는 결과를 검증해 제안 값으로 반환한다.
 청크 저장·임베딩·그래프 반영은 이 반환 경로에 끼워 넣지 않는다.
 
-원본 `test_splitters.py`는 `tests/test_chunking.py`, 호출·계량 테스트는
-`tests/test_llm_adapter.py`와 `tests/test_usage.py`로 변경할 계획이다.
-원본 그래프 스키마 테스트의 기대값을 그대로 쓰지 않고 `tests/test_refresh_rules.py`에
-설정 변경·근거·revision_no 사례를 새로 작성한다. `tests/test_refresh_service.py`에서는
-대체 IO로 실행 흐름을 검증하고, 실제 IO 검증은 별도 통합 테스트로 둔다.
+원문 분할의 회귀는 `tests/refresh/test_chunking.py`, 후보 검증은
+`test_document_validation.py`·`test_relation_validation.py`, 실제 rules와 fake IO 흐름은
+`test_real_service.py`에서 검증한다. 실제 LLM·IO 검증은 별도 후속 테스트로 둔다.
 
 ## 2. 입력·결과 계약부터 정하기
 
@@ -98,7 +99,7 @@ S3 JSON의 상세 스키마와 Content 추가 조회 API는 아직 확정되지 
 
 ### 2.1. 외부 IO 인터페이스와 fake 구현
 
-아래 이름·메서드는 현재 내부 Python 포트 골격과 대응한다. 실제 외부 API 경로나 운영 어댑터가 구현되었다는 뜻은 아니다. 관계 제안·다중 대상의 새 계약은 후속 구현이 필요하다.
+아래 이름·메서드는 현재 내부 Python 포트 골격과 대응한다. 실제 외부 API 경로나 운영 어댑터가 구현되었다는 뜻은 아니다. 관계 제안·다중 대상 판단과 호출 조율은 구현했고 실제 IO 연결은 후속 작업이다.
 `app/refresh/ports.py`에 필요한 `Protocol`, `models.py`에 입출력 값을 두고 서비스 생성 시 주입한다.
 메서드의 비동기 여부·구체 타입은 구현 시 정하되 업무 값에 SDK·HTTP·Neptune 타입을 노출하지 않는다.
 
@@ -227,4 +228,4 @@ LLM 응답 후 결과 저장 전 장애는 재호출이 필요할 수 있으므�
 - 실제 연동: 같은 요청의 중복, 재시작, 결과 저장 후 발행 실패, 기준 revision_no 충돌과 확정 전 원본 불변.
 
 품질 수치의 합격선은 평가 자료와 함께 정한다. 기존 모순 탐지의 과거 성능 수치를 갱신안의 성능으로 사용하지 않는다.
-이 문서 작성에서는 LLM 호출·Kafka 연동·기능 구현을 수행하지 않았다.
+실제 rules와 fake IO 검증까지 구현했다. 실제 LLM 호출·품질 평가·Kafka 연동은 수행하지 않았다.

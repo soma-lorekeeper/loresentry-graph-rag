@@ -41,3 +41,7 @@ Neptune을 별도로 준비하지 않으면 기본 주소는 `https://localhost:
 HTTP·네트워크·JSON 해석 실패는 어댑터가 `GraphStatusUnavailable`로 변환하며 라우트가 `503`으로 매핑한다.
 실제 HTTP 어댑터·라우트 연결은 로컬 HTTP 서버를 이용한 [통합 테스트](../tests/test_neptune_integration.py)로 검증한다.
 운영 Neptune의 TLS·IAM·VPC 연결은 별도 확인 대상이다.
+
+갱신안 서비스는 S3·관계·Content·모델·작업 상태·완료 발행을 Protocol로 요청한다.
+현재 연결은 테스트용 fake이며 실제 외부 API 호출은 추가하지 않았다.
+[포트 계약](../app/refresh/ports.py)과 [이식 결과](migration/rules-implementation.md)를 참고한다.

@@ -11,10 +11,13 @@ S3·관계·Content·LLM·작업 상태/완료 전달을 포트와 fake로 먼�
 | [갱신안 생성 우선 계획](refresh-mvp.md) | MVP 원본 함수·대상 모듈 매핑, 입출력·포트·fake 실행 흐름, 구현 순서와 완료 기준 | 지금 갱신안 생성부터 구현할 때 |
 | [후속 마이그레이션](follow-up.md) | 후속 원본 기능·활용 위치 매핑, 저장·동기화·검색·AI Chat 연동과 데이터 이전 | 첫 목표 이후 기능을 확장할 때 |
 
-이 문서들은 구현 계획이다. 현재 구현은 [서버 구조](../ARCHITECTURE.md)를 확인한다.
+계획과 현재 구현은 구분한다. [rules 이식 결과](rules-implementation.md)는 실제 판단과 fake IO 검증을,
+[서버 구조](../ARCHITECTURE.md)는 전체 구현 경계를 설명한다.
 순수 판단·IO·실행 조율은 [구현 원칙](../implementation/DECISION_AND_IO.md),
 이벤트 필드·topic·S3·DLQ는 [메시지 계약 초안](../reference/message-contract.md)이 담당한다.
 전체 이전 여부는 overview에서, 단계별로 가져올 코드와 사용할 위치는 각 실행 계획에서 관리한다.
 이벤트 명세는 중복 작성하지 않고 메시지 계약을 참조한다.
 
 - [갱신안 입력·결과 계약](proposal-contract.md): 변경 문서 한도, 다중 문서·관계 제안, S3 저장과 Kafka 완료 전달의 확정된 MVP 책임.
+
+- [rules 이식 결과](rules-implementation.md): 기존 AI 부품의 실제 활용 위치, 정책과 실패 처리, 남은 운영 연결.

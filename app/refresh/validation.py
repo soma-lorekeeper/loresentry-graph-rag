@@ -24,7 +24,11 @@ def validate_evidence(snapshot, evidence):
         reject("INVALID_EVIDENCE", "Nonempty evidence tuple required")
     documents = {d.document_id: d for d in snapshot.documents}
     for item in evidence:
-        if not isinstance(item, Evidence):
+        if (
+            not isinstance(item, Evidence)
+            or not isinstance(item.document_id, str)
+            or not isinstance(item.quote, str)
+        ):
             reject("INVALID_EVIDENCE", "Evidence value required")
         document = documents.get(item.document_id)
         if (
@@ -57,7 +61,11 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
     allowed = set(snapshot.target_ids if allowed_targets is None else allowed_targets)
     merged = {}
     for proposal in proposals:
-        if not isinstance(proposal, DocumentProposal):
+        if (
+            not isinstance(proposal, DocumentProposal)
+            or not isinstance(proposal.target_document_id, str)
+            or not isinstance(proposal.field, str)
+        ):
             reject("INVALID_DOCUMENT_PROPOSAL", "DocumentProposal required")
         document = documents.get(proposal.target_document_id)
         if (
@@ -109,7 +117,11 @@ def validate_relation_proposals(snapshot, proposals):
     }
     merged = {}
     for proposal in proposals:
-        if not isinstance(proposal, RelationProposal):
+        if (
+            not isinstance(proposal, RelationProposal)
+            or not isinstance(proposal.document_id, str)
+            or not isinstance(proposal.target_document_id, str)
+        ):
             reject("INVALID_RELATION_PROPOSAL", "RelationProposal required")
         a, b = (
             documents.get(proposal.document_id),

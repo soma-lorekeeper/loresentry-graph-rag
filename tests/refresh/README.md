@@ -1,41 +1,39 @@
-# Refresh 골격 테스트
+# Refresh 테스트
 
-외부 서버·DB·AWS 자격증명·LLM 키 없이 내부 골격과 fake를 실행한다.
-실제 갱신안의 품질이나 운영 저장소의 내구성을 검증하는 테스트는 아니다.
-
-저장소 루트에서 프로젝트 Python 환경으로 실행한다.
+외부 서버·DB·AWS 자격증명·LLM 키 없이 실제 순수 rules와 fake IO를 실행한다.
+실제 LLM의 제안 품질이나 운영 저장소의 내구성 검증과는 구분한다.
 
 ```bash
 .venv/bin/python -m pytest tests/refresh -q
-.venv/bin/python -m pytest tests/refresh/test_service.py tests/refresh/test_recovery.py -q
+.venv/bin/python -m pytest tests/refresh/test_real_service.py -q
 ```
 
-전체 회귀 검증은 `.venv/bin/python -m pytest -q`로 실행한다.
-다른 기존 테스트가 HTTP 루프백 소켓을 사용할 수 있지만, 이 디렉터리의
-[conftest.py](conftest.py)는 socket 생성과 연결을 차단한다.
-새 의존성 설치는 필요하지 않다.
+전체 회귀는 `.venv/bin/python -m pytest -q`다. 기존 진단 HTTP 통합 테스트에는
+루프백 소켓이 필요하지만, 이 디렉터리의 [conftest.py](conftest.py)는 소켓 생성·연결을 차단한다.
 
 | 파일 | 검증 |
 |---|---|
-| `test_contracts.py` | 내부 스냅샷·revision_no·근거 위치와 요청 식별 |
-| `test_rules_skeleton.py` | 모든 미구현 판단의 명시적 오류, 테스트 stub의 독립성 |
-| `test_data_fakes.py` | 자료 저장·조회·불변성·오류 주입·범위별 fixture |
-| `test_model_fake.py` | 고정 후보·변경 없음·잘못된 후보·timeout |
-| `test_job_fakes.py` | 접수·입력 충돌·실행권·checkpoint·발행 응답 유실 |
-| `test_service.py` | 정상 흐름·조회 생략·변경 없음·기본 미구현 중단 |
-| `test_recovery.py` | 오류별 후속 호출 중단, 자료 고정, 저장 결과 재사용과 재발행 |
+| `test_policy.py`, `test_fixed_fixtures.py`, `test_contracts.py` | 불변 값, 독립 예산, 고정 출처·revision |
+| `test_selection.py` | 20/21개·5000/5001자, 요청 manifest, 프로젝트·상태·중복·순환·누락 |
+| `test_chunking.py`, `test_context.py` | 전체 원문 보존, Unicode 구간, 반복 문장, 출처 중복 제거, 문맥 예산·버전 |
+| `test_document_validation.py` | 허용 대상·필드·revision·근거, 동일 본문 제외, 충돌 실패 |
+| `test_relation_validation.py` | 두 방향 분류 키, 기존 연결·역방향 중복, 부분 오류의 전체 실패 |
+| `test_real_service.py` | 실제 rules와 여섯 fake, 다중 호출, 관계 전용·변경 없음, 입력 경계·복구 |
+| `test_serialization.py` | JSON 왕복·고정 예시, 출처·근거 참조, 완료 상태 매핑·저장 불가 실패 |
+| `test_data_fakes.py`, `test_model_fake.py`, `test_job_fakes.py` | fake 자체의 불변성·오류 주입·실행권 계약 |
+| `test_service.py`, `test_recovery.py` | 기존 골격의 IO 순서·실패 전파·재개. 대부분 ScriptedRules 사용 |
 
-간단한 실행 예시는 테스트 전용 scenario를 사용한다.
+실제 규칙을 읽거나 실행할 때 다음 예시에서 시작한다.
 
 ```python
-from tests.fakes.scenario import scenario
+from tests.refresh.test_real_service import real_scenario
 
-case = scenario()
-completion = case.service().run(case.request, "example-execution")
+case = real_scenario()
+completion = case.service.run(case.request, "example-execution")
 assert completion == case.publisher.delivered[0]
 ```
 
-오류 주입은 각 호출의 이름을 지정한다.
+실패 주입 예시:
 
 ```python
 from app.refresh.errors import RefreshFailure
@@ -46,7 +44,5 @@ case.calls.failures["publisher.ack"].append(
 )
 ```
 
-새 사례는 기존 fixture를 수정하지 말고 `scenario()`로 독립 상태를 만든다.
-내부 stub이 후보를 수락한다고 해서 실제 업무 규칙이 통과한 것은 아니다.
-실제 구현·미구현 목록, 포트 교체 위치와 후속 검증은
-[마이그레이션 현황](../../docs/migration/fake-baseline.md)을 참고한다.
+테스트 통과는 원문 인용이 실제로 제안을 뒷받침하는지, 실제 모델이 기대 제안을 만드는지
+증명하지 않는다. [현재 이식 결과와 남은 검증](../../docs/migration/rules-implementation.md)을 참고한다.

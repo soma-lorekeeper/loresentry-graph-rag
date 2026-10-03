@@ -28,6 +28,14 @@ provided and outgoing APIs, code navigation, and verification scope.
 The [Content domain glossary](docs/domain-glossary.md) defines document, body text,
 relation keys, revisions, and proposals across the internal contracts.
 
+## Refresh implementation
+
+The internal refresh service validates changed documents, builds source-preserving
+context, coordinates multiple target calls, and validates document and relation
+proposals. Results serialize to JSON; completion values carry the result location.
+It is tested with real rules and fake IO, without production refresh adapters or
+an HTTP/Kafka entry point. See [migration results](docs/migration/rules-implementation.md).
+
 ## Stack
 
 | | Version | Notes |
@@ -114,5 +122,4 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 
 - Graph queries and writes against Amazon Neptune, and the graph model itself. Neptune status checks are implemented.
 - RAG/GraphRAG retrieval.
-- The Kafka consumer for `loresentry-content` change events. No broker is running
-  in the cluster yet.
+- The Kafka consumer for `loresentry-content` change events. Broker availability is outside this implementation’s verification scope.

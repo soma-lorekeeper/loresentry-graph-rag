@@ -138,3 +138,155 @@ def test_aggregate_conflicting_relation_descriptions_fails():
     done = s.service.run(s.request, "run1")
     assert done.failure.code == "CONFLICTING_PROPOSALS"
     assert s.artifacts.read_result(s.request).document_proposals == ()
+
+
+@pytest.mark.parametrize(
+    "count,chars,expected",
+    [
+        (20, 5000, None),
+        (21, 5000, "TOO_MANY_CHANGED_DOCUMENTS"),
+        (20, 5001, "BODY_TOO_LARGE"),
+    ],
+)
+def test_full_service_input_boundaries(count, chars, expected):
+    from tests.fakes.real_rules import changed_documents
+
+    s = real_scenario()
+    request, source = changed_documents(count, chars)
+    s.artifacts.inputs[request.input_ref] = source
+    s.model.responses.clear()
+    before = repr(source)
+    done = s.service.run(request, "run1")
+    if expected is None:
+        assert done.outcome == Outcome.NO_CHANGE
+        assert s.calls.names().count("model.generate") == 2
+    else:
+        assert done.failure.code == expected
+        assert "model.generate" not in s.calls.names()
+    assert repr(source) == before
+
+
+@pytest.mark.parametrize(
+    "kind,code",
+    [
+        ("missing", "DOCUMENT_MISSING"),
+        ("trashed", "DOCUMENT_INACTIVE"),
+        ("deleted", "DOCUMENT_INACTIVE"),
+        ("project", "PROJECT_MISMATCH"),
+        ("manifest", "MANIFEST_MISMATCH"),
+    ],
+)
+def test_full_service_rejects_unavailable_or_wrong_scope_data(kind, code):
+    from app.refresh.models import DocumentState
+
+    s = real_scenario()
+    if kind == "missing":
+        s.documents.documents.pop(("project", "c1"))
+    elif kind in {"trashed", "deleted"}:
+        key = ("project", "c1")
+        s.documents.documents[key] = replace(
+            s.documents.documents[key], state=DocumentState(kind.upper())
+        )
+    elif kind == "project":
+        response = s.relations.response
+        s.relations.response = replace(
+            response, relations=(replace(response.relations[0], project_id="other"),)
+        )
+    else:
+        source = s.source
+        s.artifacts.inputs[s.request.input_ref] = replace(
+            source,
+            documents=(
+                replace(source.documents[0], revision_no=99),
+                source.documents[1],
+            ),
+        )
+    done = s.service.run(s.request, "run1")
+    assert done.failure.code == code
+    assert "model.generate" not in s.calls.names()
+
+
+def test_relation_only_without_setting_targets():
+    from app.refresh.models import RelatedDocuments, RelationProposal
+
+    s = real_scenario()
+    s.relations.response = RelatedDocuments()
+    s.model.responses.clear()
+    evidence = s.candidate.document_proposals[0].evidence
+    s.model.candidate = ModelCandidate(
+        (),
+        relation_proposals=(
+            RelationProposal(
+                "m1",
+                "m2",
+                3,
+                5,
+                "related_manuscript",
+                "related_manuscript",
+                "이어지는 사건",
+                evidence,
+            ),
+        ),
+    )
+    done = s.service.run(s.request, "run1")
+    assert done.outcome == Outcome.PROPOSED
+    result = s.artifacts.read_result(s.request)
+    assert result.document_proposals == ()
+    assert len(result.relation_proposals) == 1
+    assert result.usage.calls == 1
+    assert "documents.fetch_documents" not in s.calls.names()
+
+
+def test_all_inactive_changes_do_not_call_model():
+    from app.refresh.models import DocumentState
+
+    s = real_scenario()
+    request = replace(
+        s.request,
+        changed_documents=tuple(
+            replace(d, state=DocumentState.DELETED) for d in s.request.changed_documents
+        ),
+    )
+    s.artifacts.inputs[request.input_ref] = replace(
+        s.source,
+        documents=tuple(
+            replace(d, state=DocumentState.DELETED, body_text=None)
+            for d in s.source.documents
+        ),
+    )
+    done = s.service.run(request, "run1")
+    assert done.outcome == Outcome.NO_CHANGE
+    assert "model.generate" not in s.calls.names()
+
+
+def test_wrong_target_in_first_call_fails_whole_request_and_stops():
+    s = real_scenario()
+    s.model.responses[0] = s.model.responses[1]
+    done = s.service.run(s.request, "run1")
+    assert done.failure.code == "INVALID_TARGET"
+    assert s.calls.names().count("model.generate") == 1
+    result = s.artifacts.read_result(s.request)
+    assert result.document_proposals == result.relation_proposals == ()
+
+
+def test_saved_result_storage_failure_has_no_premature_completion():
+    s = real_scenario()
+    s.calls.failures["artifacts.save_result"].append(
+        RefreshFailure(Failure("STORAGE_TIMEOUT", "timeout", True))
+    )
+    with pytest.raises(RefreshFailure):
+        s.service.run(s.request, "run1")
+    assert s.publisher.delivered == []
+    assert s.artifacts.json_results == {}
+    assert s.artifacts.read_context(s.request) is not None
+
+
+def test_corrupted_stored_json_does_not_regenerate():
+    s = real_scenario()
+    s.service.run(s.request, "run1")
+    s.artifacts.json_results[("project", "request")] = "{broken"
+    with pytest.raises(RefreshFailure) as caught:
+        s.service.run(s.request, "run2")
+    assert caught.value.failure.code == "RESULT_CORRUPTED"
+    assert s.calls.names().count("model.generate") == 2
+    assert len(s.publisher.delivered) == 1

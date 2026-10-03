@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from app.refresh.models import (
     ArtifactRef,
+    ChangedDocumentRef,
     DocumentProposal,
     DocumentSnapshot,
     Evidence,
@@ -27,6 +28,12 @@ def real_example():
         ),
         DocumentSnapshot(
             "project", "m2", 5, "유나는 은색 검을 들었다. 같은 말. 같은 말."
+        ),
+    )
+    request = replace(
+        request,
+        changed_documents=tuple(
+            ChangedDocumentRef(d.document_id, d.revision_no, d.state) for d in documents
         ),
     )
     targets = (
@@ -71,6 +78,10 @@ def changed_documents(count=20, chars=5000):
         replace(source.documents[0], document_id=f"m{i}", body_text="가" * chars)
         for i in range(count)
     )
-    return replace(request, seed_ids=tuple(d.document_id for d in documents)), replace(
-        source, documents=documents
-    )
+    return replace(
+        request,
+        seed_ids=tuple(d.document_id for d in documents),
+        changed_documents=tuple(
+            ChangedDocumentRef(d.document_id, d.revision_no, d.state) for d in documents
+        ),
+    ), replace(source, documents=documents)

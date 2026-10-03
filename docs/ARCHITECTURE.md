@@ -7,8 +7,8 @@
 > **관련 기준:** 실제 함수 위치는 [코드 안내](code-guide.md), HTTP 응답은 [제공 API](API.md)를 본다.
 
 현재 서버는 일반 함수·불변 dataclass·Protocol·생성자 주입으로 판단과 IO를 분리한다.
-대표 적용은 `GET /health/db`다. 아직 업무 기능이 없어 운영 진단 정책을 대상으로 했으며,
-문서 갱신·인가 같은 업무 규칙을 구현한 사례는 아니다.
+운영 진단 `GET /health/db`에는 실제 HTTP 어댑터가 연결돼 있다.
+내부 갱신안 생성에는 순수 rules와 서비스가 구현돼 있으며 외부 IO는 fake로 검증한다.
 
 ## 판단·조율·실행의 경계
 
@@ -30,10 +30,10 @@ HTTP 클라이언트는 진단 요청마다 만들고 성공·실패 모두 종�
 
 ## 이 프로젝트에서 선택한 추상화
 
-현재 필요한 IO가 상태 조회 하나이므로 Protocol도 `fetch_status()`와 대상 주소만 제공한다.
+진단 유스케이스의 IO는 상태 조회 하나이므로 Protocol도 `fetch_status()`와 대상 주소만 제공한다.
 Free Monad·범용 Effect Handler·명령 레지스트리는 사용하지 않는다. 동작 하나를 감싸기 위해
 실행 계획 dataclass를 추가하지 않고, 판단 결과인 `GraphStatus`와 응답용 `GraphHealth`를 불변 데이터로 표현한다.
-작은 프로젝트에 맞춰 파일 네 개로 경계를 나누며 디렉터리 계층을 미리 늘리지 않는다.
+진단은 파일 네 개로 경계를 나누고, 갱신안 생성은 `app/refresh/`에 별도 유스케이스로 둔다.
 
 새 유스케이스의 순수 함수, 시간·ID 전달, 작업 데이터 도입 기준은
 [판단·IO 분리 원칙](implementation/DECISION_AND_IO.md)에서 관리한다.
@@ -58,6 +58,17 @@ Free Monad·범용 Effect Handler·명령 레지스트리는 사용하지 않는
 [판단·IO 분리 원칙](implementation/DECISION_AND_IO.md#6-트랜잭션실패재시도)을 따른다.
 이전할 기능과 미결정 사항은 [마이그레이션 문서](migration/overview.md)에 둔다.
 
+## 갱신안 생성 내부 모듈
+
+[Refresh 코드 안내](../app/refresh/README.md)의 rules는 입력·자료 선택·원문 분할·후보 검증을
+수행한다. 서비스는 부족한 자료 조회와 스냅샷 저장, 대상별 모델 호출, 결과 저장 후 발행을
+조율한다. 불변 dataclass와 여섯 Protocol로 주입하며 원본 문서·그래프에 쓰는 경로는 없다.
+
+결과 저장 후 실패는 저장 결과로 재개하고, 저장 전 실패는 모델 재호출이 가능하다.
+분산 트랜잭션이나 정확히 한 번 호출을 보장하지 않는다. 현재는 실제 rules와 fake IO,
+JSON 결과 변환까지 검증하며 실제 모델·S3·Content·Neptune·Kafka 연동은 남아 있다.
+정책과 이식 근거는 [rules 이식 결과](migration/rules-implementation.md)를 따른다.
+
 ## 실행과 배포 구성
 
 [Dockerfile](../Dockerfile)은 Python 3.12 slim 이미지에 런타임 의존성과 `app/`을 복사하고,
@@ -81,7 +92,7 @@ Kubernetes probe 설정은 이 저장소의 코드만으로 확인할 수 없다
 | 그래프 저장 | 노드·관계 모델, 그래프 쿼리·쓰기, 스키마·데이터 초기화 |
 | 검색 | RAG/GraphRAG 검색 API, 임베딩·벡터 검색, 컨텍스트 구성 |
 | 이벤트 동기화 | Content 변경 이벤트 소비, 재처리·순서·중복 처리 |
-| 데이터 접근 경계 | 프로젝트 격리, 사용자 접근 권한, 휴지통 제외 조건 |
+| 데이터 접근 경계 | 실제 조회에서의 프로젝트 격리·사용자 인가. 내부 갱신안 rules의 프로젝트·상태 검사는 구현 |
 | 서비스 연동 | AI Chat에 검색 결과를 제공하는 업무 API와 Content 호출 |
 
 Neptune `/status` 조회가 구현됐다는 사실은 위 업무 기능이나 그래프 읽기·쓰기 권한이 검증됐다는 뜻이 아니다.

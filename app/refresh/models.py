@@ -89,6 +89,15 @@ class ModelSettings:
 
 
 @dataclass(frozen=True)
+class ChangedDocumentRef:
+    """요청 manifest의 문서 ID·revision·상태. S3 입력과 대조할 값."""
+
+    document_id: str
+    revision_no: int
+    state: DocumentState
+
+
+@dataclass(frozen=True)
 class RefreshRequest:
     """입력 위치와 갱신안 생성 범위를 전달하는 요청.
 
@@ -109,6 +118,7 @@ class RefreshRequest:
     required_graph_version: str | None = None
     settings: SelectionSettings = SelectionSettings()
     model_settings: ModelSettings = ModelSettings()
+    changed_documents: tuple[ChangedDocumentRef, ...] = ()
 
 
 @dataclass(frozen=True)
