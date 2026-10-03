@@ -61,7 +61,7 @@ def test_no_change_is_explicit_in_result_and_completion():
 
 def test_default_unimplemented_rules_never_publish_or_report_success():
     s = scenario()
-    with pytest.raises(RulesNotImplemented, match="chunk"):
+    with pytest.raises(RulesNotImplemented, match="build_context"):
         s.service(use_stub=False).run(s.request, "execution-1")
     assert s.publisher.delivered == []
     assert "model.generate" not in s.calls.names()

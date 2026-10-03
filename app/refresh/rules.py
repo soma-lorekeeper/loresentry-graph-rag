@@ -6,6 +6,7 @@
 
 from app.refresh import selection as selection_rules
 from app.refresh.errors import RulesNotImplemented
+from app.refresh.evidence import make_chunks
 from app.refresh.models import (
     Chunk,
     DocumentBatch,
@@ -74,7 +75,7 @@ class RefreshRules:
         Raises:
             RulesNotImplemented: 분할 규칙이 아직 구현되지 않아 항상 발생한다.
         """
-        raise RulesNotImplemented("chunk")
+        return make_chunks(snapshot)
 
     def build_context(
         self, snapshot: ExecutionSnapshot, chunks: tuple[Chunk, ...]
