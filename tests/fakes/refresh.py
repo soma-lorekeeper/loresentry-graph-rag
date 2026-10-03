@@ -132,13 +132,17 @@ class FakeDocuments:
 
 
 class FakeModel:
-    def __init__(self, candidate, calls=None):
+    def __init__(self, candidate, calls=None, responses=()):
+        self.responses = deque(deepcopy(responses))
         self.candidate = deepcopy(candidate)
         self.calls = calls if calls is not None else Calls()
 
     def generate(self, model_input):
         self.calls.record("model.generate", model_input)
-        return deepcopy(self.candidate)
+        response = self.responses.popleft() if self.responses else self.candidate
+        if isinstance(response, Exception):
+            raise response
+        return deepcopy(response)
 
 
 class FakeJobs:

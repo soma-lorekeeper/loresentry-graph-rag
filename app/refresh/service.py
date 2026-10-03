@@ -1,6 +1,6 @@
-"""조회·판단·실행을 조율하는 갱신안 생성 골격.
+"""조회·판단·실행을 조율하는 갱신안 생성 서비스.
 
-외부 IO는 주입하며 업무 규칙은 미구현 상태다. HTTP·Kafka에 연결하지 않았다.
+외부 IO와 순수 업무 규칙을 주입한다. 실제 HTTP·Kafka 어댑터에는 연결하지 않았다.
 실행 ID, 재시도 횟수, 임대 복구는 전달 계층이 담당하고 여기서는 자동 재시도하지 않는다.
 """
 
@@ -12,11 +12,13 @@ from app.refresh.models import (
     DocumentBatch,
     Failure,
     JobState,
+    ModelCandidate,
     Outcome,
     Readiness,
     RefreshRequest,
     RefreshResult,
     RelatedDocuments,
+    Usage,
 )
 from app.refresh.ports import (
     DocumentSource,
@@ -56,7 +58,7 @@ class RefreshService:
             model: 모델 후보 생성 구현.
             jobs: 실행 소유권과 복구 지점 저장소.
             publisher: 완료 메시지 발행 구현.
-            rules: 순수 판단 구현. 생략하면 미구현 예외를 발생시키는 기본 골격을 쓴다.
+            rules: 순수 판단 구현. 생략하면 기본 순수 업무 규칙을 쓴다.
         """
         self.artifacts = artifacts
         self.relations = relations
@@ -186,10 +188,50 @@ class RefreshService:
         context_ref = self.artifacts.save_context(snapshot)
         self.jobs.checkpoint(replace(record, context_ref=context_ref))
         chunks = self.rules.chunk(snapshot)
-        context = self.rules.build_context(snapshot, chunks)
-        model_input = self.rules.build_prompt(context)
-        candidate = self.model.generate(model_input)
-        return self.rules.validate_candidate(snapshot, candidate, model_input)
+        inputs = self.rules.model_inputs(snapshot, chunks)
+        if len(inputs) > request.settings.max_model_calls:
+            raise RefreshFailure(
+                Failure("CALL_BUDGET_EXCEEDED", "Model call budget exceeded")
+            )
+        if not inputs:
+            return RefreshResult(
+                request.job,
+                Outcome.NO_CHANGE,
+                prompt_version=request.model_settings.prompt_version,
+            )
+        usage = Usage()
+        documents, relations = [], []
+        for model_input in inputs:
+            try:
+                candidate = self.model.generate(model_input)
+            except RefreshFailure as error:
+                if error.failure.retryable:
+                    raise
+                return RefreshResult(
+                    request.job,
+                    Outcome.FAILED,
+                    usage=replace(usage, calls=usage.calls + 1),
+                    failure=error.failure,
+                    prompt_version=model_input.prompt_version,
+                )
+            checked = self.rules.validate_candidate(snapshot, candidate, model_input)
+            usage = Usage(
+                usage.calls + 1,
+                usage.input_tokens + checked.usage.input_tokens,
+                usage.output_tokens + checked.usage.output_tokens,
+            )
+            if checked.outcome == Outcome.FAILED:
+                return replace(checked, usage=usage)
+            if len(inputs) == 1:
+                return replace(checked, usage=usage)
+            # Keep raw proposals until aggregate validation so conflicts with no-ops
+            # or candidates from another call cannot disappear during normalization.
+            documents.extend(candidate.document_proposals)
+            relations.extend(candidate.relation_proposals)
+        aggregate = ModelCandidate(tuple(documents), usage, tuple(relations))
+        return self.rules.validate_candidate(
+            snapshot, aggregate, replace(inputs[0], target_ids=snapshot.target_ids)
+        )
 
     @staticmethod
     def _completion(request, result_ref, result):

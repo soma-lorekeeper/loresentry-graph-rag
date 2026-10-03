@@ -42,6 +42,9 @@ class ScriptedRules(RefreshRules):
         self.calls.record("rules.build_prompt", context)
         return self.model_input
 
+    def model_inputs(self, snapshot, chunks):
+        return (self.build_prompt(self.build_context(snapshot, chunks)),)
+
     def validate_candidate(self, snapshot, candidate, model_input):
         self.calls.record("rules.validate_candidate", snapshot, candidate, model_input)
         return self.result

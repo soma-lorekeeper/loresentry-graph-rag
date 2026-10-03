@@ -3,7 +3,9 @@
 from app.refresh import selection as selection_rules
 from app.refresh.context import build_context
 from app.refresh.evidence import make_chunks
+from app.refresh.models import DocumentState
 from app.refresh.prompts import build_prompt
+from app.refresh.selection import reject
 from app.refresh.validation import validate_candidate
 
 
@@ -33,6 +35,23 @@ class RefreshRules:
     def build_prompt(self, context):
         """외부에서 주어진 버전과 문맥 예산으로 제안 프롬프트를 만든다."""
         return build_prompt(context)
+
+    def model_inputs(self, snapshot, chunks):
+        """대상별로 모든 변경 자료를 함께 제공하고 전체 호출 예산을 사전 검증한다."""
+        active = {
+            d.document_id for d in snapshot.documents if d.state == DocumentState.ACTIVE
+        }
+        if not active.intersection(snapshot.changed_ids):
+            return ()
+        groups = tuple((target,) for target in snapshot.target_ids)
+        if not groups and len(active) >= 2:
+            groups = ((),)  # 문서 대상이 없어도 새 관계만 제안할 수 있다.
+        if len(groups) > snapshot.request.settings.max_model_calls:
+            reject("CALL_BUDGET_EXCEEDED", "Model call budget exceeded")
+        return tuple(
+            self.build_prompt(build_context(snapshot, chunks, group))
+            for group in groups
+        )
 
     def validate_candidate(self, snapshot, candidate, model_input):
         """대상·revision·근거를 검증하고 전체 요청의 처리 결과를 반환한다."""
