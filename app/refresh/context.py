@@ -8,7 +8,7 @@ from app.refresh.models import DocumentState
 from app.refresh.selection import reject
 
 
-def build_context(snapshot, chunks, target_ids=None):
+def build_context(snapshot, chunks, target_ids=None, *, allow_new_documents=True):
     """여러 변경 문서를 함께 제공한다. 출처를 생략해 문맥 예산을 맞추지 않는다."""
     targets = snapshot.target_ids if target_ids is None else target_ids
     active = {
@@ -18,6 +18,7 @@ def build_context(snapshot, chunks, target_ids=None):
     value = {
         "project_id": snapshot.request.job.project_id,
         "target_ids": list(targets),
+        "allow_new_documents": allow_new_documents,
         "changed_ids": list(snapshot.changed_ids),
         "model_settings": asdict(snapshot.request.model_settings),
         "documents": [

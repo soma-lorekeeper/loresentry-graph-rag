@@ -37,9 +37,46 @@ def test_offline_cli_all_cases_without_network(tmp_path):
     report = json.loads((target / "both.json").read_text())
     assert not report["live"]
     assert report["assessment"]["rules_accepted"]
+    assert report["assessment"]["manuscript_content_preserved"]
     assert report["result"]["execution"]["usage"]["calls"] == 2
     with pytest.raises(SystemExit):
         main(arguments(target))
+
+
+@pytest.mark.parametrize("change", [" ", "\n", "다른 문장"])
+def test_assessment_detects_manuscript_changes(change):
+    from dataclasses import replace
+
+    case = cases("gpt-5.6-luna", "test")[0]
+    scenario = assemble(case, None, CallBudget(2))
+    _, assessment = run_case(case, scenario)
+    assert assessment["manuscript_content_preserved"]
+    for key, snapshot in scenario.artifacts.contexts.items():
+        scenario.artifacts.contexts[key] = replace(
+            snapshot,
+            documents=tuple(
+                replace(d, body_text=d.body_text + change)
+                if d.folder_code == "MANUSCRIPT"
+                else d
+                for d in snapshot.documents
+            ),
+        )
+    _, assessment = run_case(case, scenario, repeat_saved=True)
+    assert not assessment["manuscript_content_preserved"]
+
+
+def test_cli_fails_when_manuscript_preservation_check_fails(tmp_path, monkeypatch):
+    import scripts.evaluate_refresh as cli
+
+    original_run = cli.run_case
+
+    def changed_manuscript(*args, **kwargs):
+        result, assessment = original_run(*args, **kwargs)
+        assessment["manuscript_content_preserved"] = False
+        return result, assessment
+
+    monkeypatch.setattr(cli, "run_case", changed_manuscript)
+    assert main(arguments(tmp_path / "run") + ["--case", "document"]) == 1
 
 
 def test_budget_exhaustion_does_not_call_delegate():

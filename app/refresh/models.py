@@ -84,8 +84,8 @@ class ModelSettings:
     """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
 
     model: str = "unconfigured"
-    prompt_version: str = "refresh-prompt-v2"
-    schema_version: str = "refresh-candidate-v1"
+    prompt_version: str = "refresh-prompt-v3"
+    schema_version: str = "refresh-candidate-v2"
 
 
 @dataclass(frozen=True)
@@ -230,13 +230,24 @@ class DocumentProposal:
 
 
 @dataclass(frozen=True)
+class NewDocumentProposal:
+    """새 설정 생성 후보. candidate_id는 요청 내 참조이며 실제 문서 ID가 아니다."""
+
+    candidate_id: str
+    folder_code: str
+    name: str
+    body_text: str
+    evidence: tuple[Evidence, ...]
+
+
+@dataclass(frozen=True)
 class RelationProposal:
     """새 연결 ADD 제안. 두 방향 키는 반대 문서의 folder_code를 가리킨다."""
 
     document_id: str
     target_document_id: str
-    base_revision_no: int
-    target_base_revision_no: int
+    base_revision_no: int | None
+    target_base_revision_no: int | None
     relation_key: str
     reverse_relation_key: str
     description: str
@@ -263,6 +274,7 @@ class ModelInput:
     model: str
     target_ids: tuple[str, ...] = ()
     instructions: str = ""
+    allow_new_documents: bool = True
 
 
 @dataclass(frozen=True)
@@ -272,6 +284,7 @@ class ModelCandidate:
     document_proposals: tuple[DocumentProposal, ...]
     usage: Usage = Usage()
     relation_proposals: tuple[RelationProposal, ...] = ()
+    new_document_proposals: tuple[NewDocumentProposal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -297,6 +310,7 @@ class RefreshResult:
     failure: Failure | None = None
     prompt_version: str | None = None
     relation_proposals: tuple[RelationProposal, ...] = ()
+    new_document_proposals: tuple[NewDocumentProposal, ...] = ()
 
 
 @dataclass(frozen=True)

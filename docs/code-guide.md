@@ -53,4 +53,11 @@
 모델 연결은 [llm.py](../app/adapters/llm.py), 후보 계약은
 [llm_schema.py](../app/adapters/llm_schema.py)를 읽는다.
 [evaluate_refresh.py](../scripts/evaluate_refresh.py)가 키·클라이언트와 다섯 fake를 조립한다.
-[대체 응답 평가](migration/model-response-evaluation.md)의 명령으로 실제 rules 흐름을 실행할 수 있다.
+[대체 응답 평가](migration/model-response-evaluation.md)의 명령은 과거 응답 재생 경로다.
+현재 생성 후보의 구조는 `NewDocumentProposal`, 후보·관계 검증은
+[validation.py](../app/refresh/validation.py), 결과 JSON은
+[serialization.py](../app/refresh/serialization.py)를 읽는다.
+[새 설정 테스트](../tests/refresh/test_new_settings.py)는 원고 한 편의 생성·연결,
+새 후보끼리 연결, 생성 호출 범위, 잘못된 참조·중복·충돌·근거 거절과 결과 복구를 검증한다.
+원고 보존 평가는 [runner.py](../evaluation/runner.py), 새 설정 평가 자료는
+[cases.py](../evaluation/cases.py)의 `new_setting_cases()`에 있다.

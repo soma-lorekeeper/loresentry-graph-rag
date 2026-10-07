@@ -4,7 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Failure
+from app.refresh.models import DocumentState, Failure
 from app.refresh.service import RefreshService
 from evaluation.cases import EvaluationCase, assess
 from evaluation.fakes import (
@@ -83,4 +83,20 @@ def run_case(case, scenario, *, repeat_saved=False):
     if repeat_saved:
         assert scenario.service.run(case.request, "evaluation-2") == completion
     result = scenario.artifacts.read_result(case.request)
-    return result, assess(case, result)
+    assessment = assess(case, result)
+    snapshot = scenario.artifacts.read_context(case.request)
+    original = {
+        d.document_id: d
+        for d in case.source.documents + case.targets
+        if d.folder_code == "MANUSCRIPT" and d.state == DocumentState.ACTIVE
+    }
+    saved = {d.document_id: d for d in snapshot.documents} if snapshot else {}
+    source = scenario.artifacts.read_input(case.request)
+    current_input = {d.document_id: d for d in source.documents}
+    source_ids = {d.document_id for d in case.source.documents}
+    assessment["manuscript_content_preserved"] = all(
+        saved.get(key) == document
+        and (key not in source_ids or current_input.get(key) == document)
+        for key, document in original.items()
+    ) and not any(p.target_document_id in original for p in result.document_proposals)
+    return result, assessment

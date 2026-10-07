@@ -26,6 +26,21 @@ def test_valid_multi_document_proposals_and_dedup():
     )
 
 
+@pytest.mark.parametrize("body", ["변경된 원고", None])
+def test_manuscript_is_rejected_even_when_in_allowed_targets(body):
+    snapshot = snapshot_fixture()
+    manuscript = next(d for d in snapshot.documents if d.document_id == "m1")
+    proposal = replace(
+        real_example()[-1].document_proposals[0],
+        target_document_id="m1",
+        base_revision_no=manuscript.revision_no,
+        value=manuscript.body_text if body is None else body,
+    )
+    with pytest.raises(RefreshFailure) as caught:
+        validate_document_proposals(snapshot, (proposal,), ("m1",))
+    assert caught.value.failure.code == "INVALID_TARGET"
+
+
 @pytest.mark.parametrize(
     "changes,code",
     [

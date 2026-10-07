@@ -70,7 +70,11 @@ def novel_case(
             for d in source.documents
         ),
     )
-    expected = parse_candidate((directory / "expected.json").read_text(), Usage(1))
+    expected = parse_candidate(
+        (directory / "expected.json").read_text(),
+        Usage(1),
+        schema_version="refresh-candidate-v1",
+    )
     return EvaluationCase(
         "novel-refresh",
         request,

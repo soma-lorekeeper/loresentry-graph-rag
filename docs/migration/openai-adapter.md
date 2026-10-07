@@ -32,7 +32,7 @@ LangGraph·LangChain·Neo4j LLM 클래스·KSS·Kiwi도 추가하지 않았다.
 사용한다. [공식 구조화 출력 계약](https://developers.openai.com/api/docs/guides/structured-outputs)을 따른다.
 
 `generate`는 지원 설정·토큰 예산을 확인하고 한 번 호출한 뒤 완료 상태·거절·본문·스키마를
-검증한다. DTO는 알 수 없는 필드·숫자 문자열·누락을 거절한다. 유효한 빈 배열 두 개만
+검증한다. DTO는 알 수 없는 필드·숫자 문자열·누락을 거절한다. 유효한 빈 배열 세 개만
 NO_CHANGE 후보다. 실제 revision·허용 대상·인용 구간·중복·충돌 판단은 기존 rules가 맡는다.
 S3 결과용 `result_from_payload`를 모델 파서로 재사용하지 않는다.
 
@@ -47,8 +47,8 @@ S3 결과용 `result_from_payload`를 모델 파서로 재사용하지 않는다
 |---|---|
 | SDK·DTO | `openai==3.24.0`, `pydantic==2.13.5` |
 | 선택 모델 | `gpt-5.6-luna`. 현재 지원 한도 registry에 명시된 모델만 허용 |
-| 프롬프트·후보 버전 | `refresh-prompt-v2`, `refresh-candidate-v1` |
-| S3 결과 외곽 버전 | 기존 `refresh-result-v1` 유지 |
+| 프롬프트·후보 버전 | `refresh-prompt-v3`, `refresh-candidate-v2` |
+| S3 결과 외곽 버전 | `refresh-result-v2`; 저장된 v1 읽기 호환 |
 | 예시 timeout·출력 한도 | 120초, 8,192토큰. SDK 요청 timeout이며 전체 평가 시간 제한은 아님 |
 | 예시 입력·문맥 예산 | 입력 120,000토큰, 입력+출력 128,192토큰 |
 | 전체 평가 호출 상한 | 8회. 현재 정상 6사례는 대상별 7회 필요 |
@@ -61,8 +61,9 @@ S3 결과용 `result_from_payload`를 모델 파서로 재사용하지 않는다
 
 이전 `refresh-v1` / `refresh-result-v1` 모델 설정의 실행 스냅샷은 새 계약으로
 묵시적으로 바꾸지 않고 실제 어댑터에서 거절한다. 이미 저장된 결과는 그대로 복구한다.
-새 계약으로 평가하려면 새 요청 ID·모델 설정을 사용한다. 재생 응답도 입력 fingerprint·
-대상·버전이 일치해야 한다.
+새 계약으로 평가하려면 새 요청 ID·모델 설정을 사용한다. 재생 응답은 입력 fingerprint·
+대상을 대조하고 알려진 v1 후보/v2 프롬프트 또는 현재 v2 후보/v3 프롬프트 조합만 허용한다.
+과거 응답 재생은 신규 생성 기능의 모델 품질을 검증하지 않는다.
 
 ## 실행 모드와 산출물
 
@@ -121,5 +122,8 @@ SDK `max_retries=0`과 자체 재시도 없음으로 `generate`당 원격 요청
 실제 모델의 생성·품질·사용량, S3·Content·Neptune 관계 조회·영속 상태·Kafka와 FastAPI
 갱신안 진입점은 이번 완료 범위 밖이다. [후속 계획](follow-up.md)을 따른다.
 
-2026-10-03 최종 검증: 전체 pytest 267개 통과, Ruff lint·format 통과,
+2026-10-03 당시 검증: 전체 pytest 267개 통과, Ruff lint·format 통과,
 변경 문서의 로컬 링크 170개 확인(누락 없음). 기본 HTTP 제공 경로는 그대로 유지했다.
+
+새 설정 생성·임시 ID 관계 제안은 [제안 계약](proposal-contract.md)의 생성 규칙을 따른다.
+과거 v1 평가 응답은 명시적으로 v1 파서로 읽어 재생할 수 있으나, v2 생성 품질의 검증 근거가 아니다. 실제 OpenAI 생성 요청은 v2 후보·v3 프롬프트만 사용한다.

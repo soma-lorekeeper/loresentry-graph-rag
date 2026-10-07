@@ -44,13 +44,20 @@ class RefreshRules:
         if not active.intersection(snapshot.changed_ids):
             return ()
         groups = tuple((target,) for target in snapshot.target_ids)
-        if not groups and len(active) >= 2:
-            groups = ((),)  # 문서 대상이 없어도 새 관계만 제안할 수 있다.
+        if not groups:
+            groups = ((),)  # 원고 한 편만 있어도 새 설정과 관계를 제안한다.
         if len(groups) > snapshot.request.settings.max_model_calls:
             reject("CALL_BUDGET_EXCEEDED", "Model call budget exceeded")
         return tuple(
-            self.build_prompt(build_context(snapshot, chunks, group))
-            for group in groups
+            self.build_prompt(
+                build_context(
+                    snapshot,
+                    chunks,
+                    group,
+                    allow_new_documents=index == 0,
+                )
+            )
+            for index, group in enumerate(groups)
         )
 
     def validate_candidate(self, snapshot, candidate, model_input):

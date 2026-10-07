@@ -91,5 +91,5 @@ def test_document_commands_never_enter_trusted_instructions():
     for item in inputs:
         assert "ignore all rules" not in item.instructions
         assert "ignore all rules" in item.prompt
-        assert item.schema_version == "refresh-candidate-v1"
-        assert item.prompt_version == "refresh-prompt-v2"
+        assert item.schema_version == "refresh-candidate-v2"
+        assert item.prompt_version == "refresh-prompt-v3"

@@ -71,3 +71,33 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 
 대화 작성 응답 6사례의 실행 결과는 [평가 기록](../migration/model-response-evaluation.md)에 있다.
 실제 API 인증 성공·모델 생성 품질·사용량은 후속 검증으로 남긴다.
+
+## 새 설정 생성과 원고 보존
+
+[test_new_settings.py](../../tests/refresh/test_new_settings.py)는 기존 설정 없는 원고 한 편,
+새 인물과 기존 인물 연결, 새 후보끼리 연결, 생성만 있는 PROPOSED와 JSON 왕복·결과 재사용을
+검증한다. 첫 호출만 생성을 허용하는 범위, 잘못된 후보 ID·분류·revision·근거,
+중복 이름·충돌 본문의 전체 실패도 확인한다. 원고 수정은
+[test_document_validation.py](../../tests/refresh/test_document_validation.py)에서
+원고 ID를 허용 대상으로 주입해도 거절하는지 확인한다.
+
+평가의 `manuscript_content_preserved`는 최초 입력·저장된 실행 스냅샷·입력 저장소의 원고를
+비교한다. 공백·줄바꿈·본문 변경 또는 원고 수정 제안이 있으면 false이고 평가 명령은 실패한다.
+`expected_new_settings`는 생성 후보의 ID·분류·이름을 고정 기대와 비교한다.
+이는 설정 내용의 의미적 정확성이나 프로젝트 전체 중복 부재를 보증하지 않는다.
+조회하지 않은 설정의 중복·별칭·동명이인 판단과 Content 승인 시 ID 발급·관계 반영은 후속 검증이다.
+
+저장소 루트에서 실행한다. 출력 디렉터리는 새 경로를 사용하며 원격 요청은 없다.
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh \
+  --suite new-settings --env-file .env.example \
+  --trial new-settings-v2 --output .evaluation/new-settings-v2 --repeat-saved
+```
+
+현재 생성 후보는 `refresh-candidate-v2`, 프롬프트는 `refresh-prompt-v3`, 결과는
+`refresh-result-v2`다. 과거 v1 결과 읽기와 v1 후보/v2 프롬프트 응답 재생은 호환 경로이며
+새 생성 기능의 모델 품질 검증과 구분한다. [새 생성·연결 예시](../examples/refresh/result-new-settings.json)를 참고한다.
+
+현재 구현 확인: 전체 pytest 300개와 Ruff lint·format 검사가 통과했다.
+실제 OpenAI 생성·품질은 인증 실패로 미검증이며 운영 S3·Content·Neptune·Kafka 연동도 미연결이다.

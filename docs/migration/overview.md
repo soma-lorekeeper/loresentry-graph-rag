@@ -17,7 +17,7 @@ GraphRAG에는 문서 청킹·검색·근거 구성과 설정 문서 갱신안 �
 | 원본 | `soma-lorekeeper/lorekeeper-ai`, 로컬 커밋 `553bd3e1e7c3a4e391be842a3cec09463a98d79b` |
 | 대상 | `soma-lorekeeper/loresentry-graph-rag`, 로컬 커밋 `60d27a1aa0a3a6b0aa6c7497f2786d53cc841b89` |
 | 조사일 | 2026-10-02 |
-| 현재 구현 | [서버 구조](../ARCHITECTURE.md). 서비스 식별·프로세스 상태·Neptune 상태 조회까지 구현 |
+| 현재 구현 | [서버 구조](../ARCHITECTURE.md). 진단 API와 내부 설정 수정·새 설정 생성·관계 ADD 제안은 구현. 실제 그래프 저장·검색·이벤트 소비는 미연결 |
 | 목표 기능 | [핵심 기능 요구사항](../../../docs/CORE_FEATURE_REQUIREMENTS.md)의 AI 챗·그래프·설정 문서 갱신안 |
 | 서비스 경계 | [공통 프로젝트 문서](../../../docs/LORE_SENTRY_PROJECT_CONTEXT.md)의 AI Chat·GraphRAG·Content 책임 |
 | 이벤트 연동 | [메시지 계약 초안](../reference/message-contract.md). 미결정 내용을 포함하며 운영 반영 여부와 구분 |

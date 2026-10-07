@@ -46,7 +46,9 @@ Kafka 연결과 쓰기 트랜잭션 검증은 남아 있다. 아래 지침은 �
 - 어떤 변경을 수행할지 서버 없이 비교·검증하는 것이 유용하다.
 - 예상 revision, 작업 ID, 변경 내용을 실행 계층에 함께 전달해야 한다.
 
-현재 `DocumentProposal`·`RelationProposal`은 대상 ID·기준 revision·제안 값·근거를 표현한다.
+현재 `DocumentProposal`·`NewDocumentProposal`·`RelationProposal`은 기존 문서 수정,
+새 설정 생성과 연결 제안의 값을 표현한다. 기존 문서는 실제 ID·기준 revision을 사용하고
+새 후보는 임시 ID와 미확정 revision(null)으로 연결한다. 원고 본문은 읽기 전용이다.
 GraphRAG는 이 제안을 결과에 저장하며 원본에 적용하지 않는다. 사용자 확정 시 Content가
 기준 revision과 관계의 현재 상태를 다시 검사해야 한다.
 dataclass가 불변이어도 내부의 list·dict까지 자동으로 불변이 되지는 않으므로 입력 복사나 불변 컬렉션이 필요한지 판단한다.

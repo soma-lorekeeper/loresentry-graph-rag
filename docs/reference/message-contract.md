@@ -71,7 +71,8 @@
 - **GraphRefreshRequested**
   - 마지막 최신화 이후 revision_no가 오른 파일을 보냄. 관계로 이어진 추가 파일은 graph-rag가 content HTTP API로 가져감.
   - Content가 변경 문서 전체의 본문·revision·현재 관계를 S3에 올리고, 이벤트에는 변경 목록과 S3 위치만 담음. 첫 MVP는 최대 20개·ACTIVE 본문당 5,000자를 지원하며 초과 시 명시적 입력 실패로 처리함. 일부 문서나 본문을 조용히 잘라내지 않음.
-  - 문서 내용 변경·새로운 관계 제안과 결과 S3의 의미는 [갱신안 입력·결과 계약](../migration/proposal-contract.md)을 따름. 추가 조회 자료는 변경 입력 한도와 별도로 관리함.
+  - 기존 설정 수정·새 설정 생성·관계 ADD 제안과 결과 S3의 의미는 [갱신안 입력·결과 계약](../migration/proposal-contract.md)을 따름. 추가 조회 자료는 변경 입력 한도와 별도로 관리함.
+  - 생성 후보의 candidate_id와 기존 문서 ID를 구분하며, 승인 시 실제 ID 매핑은 Content 책임이다. 이는 결과 객체 내부 규칙으로 완료 이벤트에 제안 본문을 추가하지 않는다.
   - 프로젝트당 진행 중인 요청은 하나.
   ```json
   {

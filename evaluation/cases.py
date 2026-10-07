@@ -13,6 +13,7 @@ from app.refresh.models import (
     JobKey,
     ModelCandidate,
     ModelSettings,
+    NewDocumentProposal,
     RefreshRequest,
     RelatedDocuments,
     Relation,
@@ -154,6 +155,13 @@ def assess(case: EvaluationCase, result) -> dict:
     """고정 기대와 비교한다. 의미상 발명 여부는 별도 사람 검토가 필요하다."""
     actual = {p.target_document_id: p.value for p in result.document_proposals}
     expected = {p.target_document_id for p in case.expected.document_proposals}
+    new_actual = {
+        p.candidate_id: (p.folder_code, p.name) for p in result.new_document_proposals
+    }
+    new_expected = {
+        p.candidate_id: (p.folder_code, p.name)
+        for p in case.expected.new_document_proposals
+    }
 
     def pairs(rs):
         return {frozenset((r.document_id, r.target_document_id)) for r in rs}
@@ -162,6 +170,7 @@ def assess(case: EvaluationCase, result) -> dict:
         "rules_accepted": result.failure is None,
         "missing_targets": sorted(expected - actual.keys()),
         "unexpected_targets": sorted(actual.keys() - expected),
+        "expected_new_settings": new_actual == new_expected,
         "required_content_preserved": all(
             all(w in actual.get(k, "") for w in words)
             for k, words in case.required_words
@@ -174,3 +183,54 @@ def assess(case: EvaluationCase, result) -> dict:
         == pairs(case.expected.relation_proposals),
         "semantic_invention_review": "manual_review_required",
     }
+
+
+def new_setting_cases(model: str, trial: str) -> tuple[EvaluationCase, ...]:
+    """새 인물만 있는 원고와 기존 인물에 연결되는 새 인물 사례를 제공한다."""
+    result = []
+    for existing in (False, True):
+        base = cases(model, trial)[0]
+        text = "민수는 유나의 동생이다." if existing else "민수는 항구의 경비병이다."
+        manuscript = replace(base.source.documents[0], body_text=text)
+        evidence = (Evidence("m1", 3, 0, len(text), text),)
+        creation = NewDocumentProposal(
+            "new:CHARACTER:민수", "CHARACTER", "민수", text, evidence
+        )
+        targets = (
+            (replace(base.targets[0], properties=(("name", "유나"),)),)
+            if existing
+            else ()
+        )
+        target = "c1" if existing else "m1"
+        relation = RelationProposal(
+            creation.candidate_id,
+            target,
+            None,
+            7 if existing else 3,
+            "related_character" if existing else "related_manuscript",
+            "related_character",
+            text,
+            evidence,
+        )
+        name = "new-character-linked" if existing else "new-character-only"
+        job = replace(
+            base.request.job,
+            request_id=f"{trial}-{name}",
+            input_fingerprint=sha256(repr((manuscript, targets)).encode()).hexdigest(),
+        )
+        request = replace(
+            base.request,
+            job=job,
+            input_ref=ArtifactRef("evaluation", f"{name}/input.json"),
+        )
+        result.append(
+            EvaluationCase(
+                name,
+                request,
+                InputSnapshot(job, (manuscript,)),
+                base.related if existing else RelatedDocuments(),
+                targets,
+                ModelCandidate((), Usage(1), (relation,), (creation,)),
+            )
+        )
+    return tuple(result)

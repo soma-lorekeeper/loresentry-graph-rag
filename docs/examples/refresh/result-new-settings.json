@@ -1,0 +1,87 @@
+{
+  "schema_version": "refresh-result-v2",
+  "request_id": "example-new-character-linked",
+  "project_id": "evaluation",
+  "outcome": "PROPOSED",
+  "document_proposals": [],
+  "relation_proposals": [
+    {
+      "document_id": "c1",
+      "target_document_id": "new:CHARACTER:민수",
+      "base_revision_no": 7,
+      "target_base_revision_no": null,
+      "relation_key": "related_character",
+      "reverse_relation_key": "related_character",
+      "description": "민수는 유나의 동생이다.",
+      "operation": "ADD",
+      "evidence_refs": [
+        "E0001"
+      ]
+    }
+  ],
+  "new_document_proposals": [
+    {
+      "candidate_id": "new:CHARACTER:민수",
+      "folder_code": "CHARACTER",
+      "name": "민수",
+      "body_text": "민수는 유나의 동생이다.",
+      "evidence_refs": [
+        "E0001"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "document_id": "c1",
+      "revision_no": 7,
+      "origin": "CONTENT",
+      "state": "ACTIVE"
+    },
+    {
+      "document_id": "m1",
+      "revision_no": 3,
+      "origin": "INPUT",
+      "state": "ACTIVE"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "E0001",
+      "document_id": "m1",
+      "revision_no": 3,
+      "start": 0,
+      "end": 13,
+      "quote": "민수는 유나의 동생이다."
+    }
+  ],
+  "error": null,
+  "execution": {
+    "input_fingerprint": "3aafb3d649c4155add528fc46c75a06c8e0cdc8ac24a22ccec0d6ed2a79927a8",
+    "model": "gpt-5.6-luna",
+    "prompt_version": "refresh-prompt-v3",
+    "schema_version": "refresh-candidate-v2",
+    "settings": {
+      "relation_keys": [],
+      "max_depth": 1,
+      "max_documents": 20,
+      "max_input_chars": 5000,
+      "policy_version": "refresh-v1",
+      "max_changed_documents": 20,
+      "max_context_chars": 240000,
+      "max_model_calls": 20,
+      "chunk_chars": 1000
+    },
+    "usage": {
+      "calls": 1,
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    "changed_ids": [
+      "m1"
+    ],
+    "target_ids": [
+      "c1"
+    ],
+    "observed_graph_version": null
+  }
+}

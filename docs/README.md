@@ -7,7 +7,9 @@
 현재 GraphRAG는 서비스 식별·프로세스 상태·Neptune 연결 확인 API를 제공한다.
 그래프 저장, RAG/GraphRAG 검색, Content 변경 이벤트 소비는 아직 구현하지 않았다.
 진단 유스케이스에는 순수 판단·애플리케이션 조율·HTTP 어댑터 분리를 적용했다.
-내부 갱신안 생성에는 다중 문서·관계 제안 rules와 결과 JSON 변환을 구현하고 fake IO로 검증했다.
+내부 갱신안 생성은 기존 설정 본문 수정, 원고에서 발견한 새 설정 문서 생성, 관계 ADD를 제안한다.
+원고 본문은 읽기 전용이며 최초 입력 보존을 평가한다. 생성 후보와 관계는 임시 ID로 연결하고
+실제 문서·그래프 반영은 Content의 사용자 승인 이후 작업이다. 순수 rules·결과 JSON 변환은 fake IO로 검증했다.
 OpenAI 어댑터와 로컬 HTTP 검증도 구현했다. [모델 응답 대체 평가](migration/model-response-evaluation.md)는
 대화 작성 응답으로 확인한 기능 흐름을 설명한다. 실제 원격 생성·품질과 운영 IO는 미검증이다.
 문서는 로컬 코드·테스트·배포 설정을 설명하며, 운영 서버의 실시간 상태나 배포 성공을 뜻하지 않는다.
@@ -25,7 +27,17 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 | 현재 코드의 어디부터 읽어야 하는가? | [코드 안내](code-guide.md) | 요청 흐름·시작 구성·테스트와 배포 파일 위치 |
 | 변경 후 무엇을 검증해야 하는가? | [검증 계획](implementation/TEST_PLAN.md) | 기존 테스트 범위·추가 테스트·운영 확인 항목 |
 | 기존 AI 기능을 어떤 순서로 이전하는가? | [마이그레이션 안내](migration/README.md) | 전체 이전 범위, 갱신안 생성 우선 계획, 후속 마이그레이션 |
-| 문서·관계 제안은 어디에 저장하고 어떻게 전달하는가? | [갱신안 입력·결과 계약](migration/proposal-contract.md) | 변경 입력 한도, 다중 대상 제안, S3 결과와 Kafka 완료의 의미 |
+| 문서·관계 제안은 어디에 저장하고 어떻게 전달하는가? | [갱신안 입력·결과 계약](migration/proposal-contract.md) | 변경 입력 한도, 수정·생성·연결 제안, 임시 ID와 결과 버전, S3/Kafka 전달 경계 |
+
+## 현재 제안 계약과 검증
+
+후보는 `refresh-candidate-v2`, 프롬프트는 `refresh-prompt-v3`, 결과는
+`refresh-result-v2`다. 저장된 v1 결과와 과거 대화 응답은 읽기 호환하며, 과거 응답
+재생을 새 설정 생성 품질 평가로 해석하지 않는다. 상세 규칙은 [제안 계약](migration/proposal-contract.md)을 따른다.
+
+[새 인물 생성·연결 예시](examples/refresh/result-new-settings.json)와
+`--suite new-settings` 오프라인 평가로 원고 한 편에서 생성하는 경우와 기존 인물에
+연결하는 경우를 확인할 수 있다. 실행 방법과 검증 한계는 [검증 계획](implementation/TEST_PLAN.md)을 본다.
 
 ## 학습·설계 참고 자료
 

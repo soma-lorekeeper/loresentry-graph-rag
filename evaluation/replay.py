@@ -30,6 +30,17 @@ class ResponseReplay:
             "schema_version": model_input.schema_version,
             "response_source": "conversation-assistant",
         }
+        legacy = isinstance(envelope, dict) and (
+            envelope.get("schema_version"),
+            envelope.get("prompt_version"),
+        ) == ("refresh-candidate-v1", "refresh-prompt-v2")
+        if legacy:
+            # Explicit read compatibility for historical evaluation artifacts;
+            # these responses do not validate v2 generation quality.
+            expected.update(
+                schema_version="refresh-candidate-v1",
+                prompt_version="refresh-prompt-v2",
+            )
         if not isinstance(envelope, dict) or any(
             envelope.get(k) != v for k, v in expected.items()
         ):
@@ -51,4 +62,8 @@ class ResponseReplay:
         self.recorder.flush()
         # Synthetic zeros satisfy the internal Usage type, not billing evidence.
         # Recorder usage remains null/unknown and no provider model is asserted.
-        return parse_candidate(text, Usage(1))
+        self.recorder.current["replayed_schema_version"] = envelope["schema_version"]
+        self.recorder.flush()
+        return parse_candidate(
+            text, Usage(1), schema_version=envelope["schema_version"]
+        )

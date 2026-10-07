@@ -50,7 +50,8 @@ def test_invalid_json_retains_raw_response_usage_and_failure(tmp_path):
 
 def test_storage_failure_keeps_parsed_candidate_and_trace(tmp_path):
     case, scenario, recorder = setup(
-        tmp_path, '{"document_proposals":[],"relation_proposals":[]}'
+        tmp_path,
+        '{"document_proposals":[],"relation_proposals":[],"new_document_proposals":[]}',
     )
     scenario.calls.failures["artifacts.save_result"].append(
         RefreshFailure(Failure("STORAGE_TIMEOUT", "timeout", True))

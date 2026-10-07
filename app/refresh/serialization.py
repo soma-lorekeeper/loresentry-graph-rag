@@ -9,13 +9,14 @@ from app.refresh.models import (
     Evidence,
     Failure,
     JobKey,
+    NewDocumentProposal,
     Outcome,
     RefreshResult,
     RelationProposal,
     Usage,
 )
 
-RESULT_SCHEMA_VERSION = "refresh-result-v1"
+RESULT_SCHEMA_VERSION = "refresh-result-v2"
 
 
 def result_to_payload(request, result, snapshot=None):
@@ -29,7 +30,9 @@ def result_to_payload(request, result, snapshot=None):
     _check_outcome(result)
     evidence = unique_evidence(
         e
-        for p in result.document_proposals + result.relation_proposals
+        for p in result.document_proposals
+        + result.relation_proposals
+        + result.new_document_proposals
         for e in p.evidence
     )
     refs = {e: f"E{i:04d}" for i, e in enumerate(evidence, 1)}
@@ -48,6 +51,9 @@ def result_to_payload(request, result, snapshot=None):
         "outcome": result.outcome.value,
         "document_proposals": [proposal_payload(p) for p in result.document_proposals],
         "relation_proposals": [proposal_payload(p) for p in result.relation_proposals],
+        "new_document_proposals": [
+            proposal_payload(p) for p in result.new_document_proposals
+        ],
         "sources": [
             {
                 "document_id": d.document_id,
@@ -84,7 +90,10 @@ def result_from_payload(payload):
     수행한다. 알려진 필드와 결과 상태·근거 참조가 깨졌으면 ValueError를 발생시킨다.
     """
     try:
-        if payload["schema_version"] != RESULT_SCHEMA_VERSION:
+        if payload["schema_version"] not in {
+            RESULT_SCHEMA_VERSION,
+            "refresh-result-v1",
+        }:
             raise ValueError("Unsupported result schema")
         evidence = {}
         for raw in payload["evidence"]:
@@ -117,6 +126,12 @@ def result_from_payload(payload):
             Failure(**payload["error"]) if payload["error"] is not None else None,
             execution["prompt_version"],
             proposals(payload["relation_proposals"], RelationProposal),
+            proposals(
+                payload["new_document_proposals"]
+                if payload["schema_version"] == RESULT_SCHEMA_VERSION
+                else [],
+                NewDocumentProposal,
+            ),
         )
         _check_outcome(result)
         return result
@@ -125,7 +140,11 @@ def result_from_payload(payload):
 
 
 def _check_outcome(result):
-    has_proposals = bool(result.document_proposals or result.relation_proposals)
+    has_proposals = bool(
+        result.document_proposals
+        or result.relation_proposals
+        or result.new_document_proposals
+    )
     if result.outcome == Outcome.FAILED:
         if has_proposals or result.failure is None:
             raise ValueError("Failed result must have error and no proposals")

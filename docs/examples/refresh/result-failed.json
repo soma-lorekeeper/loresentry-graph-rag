@@ -1,5 +1,5 @@
 {
-  "schema_version": "refresh-result-v1",
+  "schema_version": "refresh-result-v2",
   "request_id": "request",
   "project_id": "project",
   "outcome": "FAILED",
@@ -15,8 +15,8 @@
   "execution": {
     "input_fingerprint": "fixed-input-v1",
     "model": "unconfigured",
-    "prompt_version": null,
-    "schema_version": "refresh-candidate-v1",
+    "prompt_version": "refresh-prompt-v3",
+    "schema_version": "refresh-candidate-v2",
     "settings": {
       "relation_keys": [],
       "max_depth": 1,
@@ -36,5 +36,6 @@
     "changed_ids": [],
     "target_ids": [],
     "observed_graph_version": null
-  }
+  },
+  "new_document_proposals": []
 }

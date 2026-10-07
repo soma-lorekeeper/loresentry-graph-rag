@@ -2,7 +2,7 @@
 
 Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드·메시지 용어를 맞춘다. 한국어 설명에서는 **문서**, 외부 식별자는 해당 Content API의 **file_id / document_id**를 그대로 사용하며 변환 경계에서 대응시킨다.
 
-확인 기준은 2026-10-03의 로컬 Content 코드(HEAD `fd4dc94`)와 GraphRAG 계약 문서다. 운영 배포 상태를 의미하지 않는다. 아래에서 **구현**은 확인한 코드 동작, **DB 정의**는 테이블·컬럼만 확인한 상태, **계획**은 갱신안 계약의 목표를 뜻한다. 주석과 실제 코드가 다르면 실제 코드의 동작을 우선한다.
+Content 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다. GraphRAG 내부 제안 설명은 현재 코드와 [제안 계약](migration/proposal-contract.md)을 기준으로 갱신했다. 운영 배포 상태를 의미하지 않는다. 아래에서 **구현**은 확인한 코드 동작, **DB 정의**는 테이블·컬럼만 확인한 상태, **계획**은 갱신안 계약의 목표를 뜻한다. 주석과 실제 코드가 다르면 실제 코드의 동작을 우선한다.
 
 ## 1. 프로젝트와 문서
 
@@ -14,7 +14,7 @@ Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드
 | 기본 분류 | `base_folders`, `folder_code` | 세계관·캐릭터·장소·원고 등 사전 정의된 분류. 일반적인 사용자 생성 폴더와 구분한다. |
 | 회차 폴더 | `episode_folders`, `episode_id`, `Episode` | 원고를 회차 단위로 묶는 별도 객체. 회차 ID를 문서 ID나 기존 AI의 정수 회차 번호로 대체하지 않는다. |
 | 원고 문서 | `folder_code = MANUSCRIPT` | 문서 중 원고 분류의 자료. 모든 문서를 원고 또는 회차라고 부르지 않는다. |
-| 설정 문서 | GraphRAG 설명상의 역할 | 갱신안을 제안할 기존 설정 자료를 통칭하는 말. Content에 별도의 Setting 엔티티가 있는 것은 아니다. 실제 대상 분류·ID는 계약에서 명시한다. |
+| 설정 문서 | GraphRAG 설명상의 역할 | 수정 대상인 기존 설정 또는 생성 후보의 설정 자료를 통칭하는 말. Content에 별도의 Setting 엔티티가 있는 것은 아니다. 실제 대상 분류·ID는 계약에서 명시한다. |
 | 잠금 | `locked` | 문서 저장·복원을 제한하는 편집 상태. 휴지통이나 삭제, 외부 조회 권한과 같은 개념이 아니다. |
 | 휴지통 | `trashed_at`, 응답의 `isTrashed()` | 문서 행을 유지한 채 휴지통 상태로 표시. 영구 삭제와 구분한다. |
 | 문서 상태 | 이벤트 계획의 `ACTIVE`, `TRASHED`, `DELETED` | 전달 계약의 상태 표현. Content 문서 테이블에 이 enum 컬럼이 있다고 가정하지 않는다. |
@@ -37,7 +37,7 @@ Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드
 
 `LOCATION`의 키는 `related_location`이 아니다. 코드 문자열을 임의 변환하지 않고 Content의 대응표를 따른다. 이 표가 존재한다고 저장 API가 모든 입력 키를 이 목록으로 엄격히 제한한다고 단정하지 않는다. GraphRAG의 허용 키 검증은 별도로 구현해야 한다.
 
-근거: [기본 분류 seed](../../loresentry-content/src/main/resources/db/migration/V2__seed_base_folders.sql), [RelationKeys](../../loresentry-content/src/main/java/com/loresentry/content/document/RelationKeys.java).
+근거: [기본 분류 seed](../../loresentry-content/src/main/resources/db/migration/V2__seed_base_folders.sql), [현재 GraphRAG 분류 키](../app/refresh/policy.py).
 
 ## 2. 본문·속성·스냅샷
 
@@ -99,18 +99,21 @@ Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드
 | 표준 용어 | 대응 이름 | 의미와 상태 |
 |---|---|---|
 | 변경 문서 | 요청의 `files` | 이번 분석에 제공하는 변경 자료. 갱신안을 받을 대상 문서와 일치할 필요는 없다. **계획** |
-| 갱신 대상 문서 | `target_document_id` | 내용 변경안을 검토할 기존 문서. 여러 변경 문서가 여러 대상에 영향을 줄 수 있다. **계획** |
+| 갱신 대상 문서 | `target_document_id` | 내용 변경안을 검토할 기존 ACTIVE 설정 문서. 원고는 제외한다. 여러 변경 문서가 여러 대상에 영향을 줄 수 있다. **내부 구현** |
 | 그래프 최신화 요청 | `GraphRefreshRequested` | 제품의 최신화 동작으로 갱신안 생성을 요청하는 이벤트. 확정 그래프를 즉시 수정하라는 명령으로 해석하지 않는다. **계획** |
 | 최신화 실행 기록 | `refresh_runs` | Content의 요청·검토·적용 상태를 담을 테이블. `CAPTURING_BASE`, `GENERATING`, `READY`, `APPLYING`, `APPLIED`, `FAILED`, `CANCELLED`가 정의되어 있다. **DB 정의** |
 | 문서 갱신 초안 | `refresh_document_drafts` | 대상별 기준 버전과 비교·검토용 스냅샷을 담을 테이블. GraphRAG의 S3 결과 그 자체는 아니다. **DB 정의** |
-| 문서 내용 변경 제안 | `document_proposals` | 대상·기준 revision·제안 값·근거를 가진 후보. 사용자 확정 전 원본에는 반영하지 않는다. **계획** |
+| 문서 내용 변경 제안 | `document_proposals` | 기존 설정의 대상·기준 revision·body_text·근거를 가진 후보. 원고 수정은 거절한다. **내부 구현** |
+| 새 설정 생성 제안 | `new_document_proposals`, `NewDocumentProposal` | 분류·이름·본문·변경 원고 근거를 가진 생성 후보. 실제 문서는 생성하지 않는다. **내부 구현** |
+| 임시 후보 식별자 | `candidate_id` | `new:{folder_code}:{name}` 형식의 요청 내 참조. Content 문서 UUID와 구분한다. **내부 구현** |
+| 관계 추가 제안 | `relation_proposals`, `RelationProposal` | 기존 문서 또는 새 후보 사이의 ADD. 후보 끝의 기준 revision은 null이며 기존 문서는 실제 번호를 요구한다. **내부 구현** |
 | 근거 | `Evidence` | 특정 문서 revision의 원문 구간과 인용문. 제안 문장 자체나 모델의 설명과 구분한다. |
-| 제안 생성 결과 | `PROPOSED`, `NO_CHANGE`, `FAILED` | GraphRAG 결과의 업무 상태. 문서나 관계 중 제안이 있으면 PROPOSED다. **계획** |
+| 제안 생성 결과 | `PROPOSED`, `NO_CHANGE`, `FAILED` | GraphRAG 결과의 업무 상태. 기존 문서 수정·새 설정 생성·관계 추가 중 하나라도 있으면 PROPOSED다. **내부 구현** |
 | 생성 완료 이벤트 | `GraphRefreshCompleted` | S3 결과 위치와 처리 상태를 알림. `SUCCEEDED`는 생성 처리 성공이며 사용자 적용 성공이 아니다. **계획** |
 | 사용자 확정·적용 | Content의 후속 처리 | 사용자가 검토한 내용을 원본에 반영하는 단계. Kafka 완료 수신이나 S3 객체 생성과 구분한다. **계획** |
 | 확정 변경 동기화 | `FileChanged` 등 | Content 원본의 확정 변경을 조회용 그래프에 반영하는 별도 흐름. 제안 생성과 혼동하지 않는다. **계획** |
 
-본문과 관계 제안은 S3 결과에만 기록한다. 입력·결과 객체는 비공개 처리 자료이며 Content의 공개 이미지 업로드용 미디어 객체와 구분한다. 객체 위치는 bucket과 key의 조합으로 표현하며 key 하나를 공개 URL이라고 부르지 않는다.
+수정·생성·관계 제안은 결과 JSON으로만 반환한다. 현재 저장은 JSON fake로 검증하며 실제 S3 저장·Kafka 발행은 미연결이다. 입력·결과 객체는 비공개 처리 자료이며 Content의 공개 이미지 업로드용 미디어 객체와 구분한다. 객체 위치는 bucket과 key의 조합으로 표현하며 key 하나를 공개 URL이라고 부르지 않는다.
 
 상세 동작·한도·결과 전달은 [갱신안 입력·결과 계약](migration/proposal-contract.md), Kafka 외형은 [메시지 계약 초안](reference/message-contract.md)을 따른다. 이 용어집에서 별도 전송 스키마를 만들지는 않는다.
 
@@ -123,7 +126,9 @@ Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드
 | `DocumentSnapshot.body_text` | 분석용 `body_text` | Content의 JSON `body`와 타입이 다르다. |
 | `DocumentSnapshot.properties` | `properties`의 key/value | 표시용 label과 섞지 않는다. |
 | `Relation.document_id`, `target_document_id`, `relation_key` | 현재 문서에서 본 관계 행 | 상대 분류에 따른 키를 유지한다. 반대쪽 키를 복사하지 않으며 연결 중복은 문서 쌍으로 구분한다. |
-| `DocumentProposal.field`, `value` | 제안할 문서 필드·값 | 현재 문자열 후보 모델이 Content 구조화 본문이나 관계 제안까지 구현한 것은 아니다. |
+| `DocumentProposal.field`, `value` | 제안할 문서 필드·값 | 기존 설정 body_text의 교체 후보이며 원고는 제외한다. Content의 구조화 body JSON으로 확정하는 어댑터는 미연결이다. |
+| `NewDocumentProposal.candidate_id`, `folder_code`, `name`, `body_text` | 새 설정 생성 초안 | 실제 문서 UUID를 발급하지 않으며 Content 승인 시 ID·에디터 본문 변환이 필요하다. |
+| `RelationProposal.document_id`, `target_document_id` | 기존 문서 또는 임시 생성 후보 참조 | 새 후보의 해당 기준 revision은 null, 기존 문서의 기준 revision은 실제 번호다. |
 | `ArtifactRef` | S3 bucket/key | 문서 ID 또는 관계 ID와 구분한다. |
 | `JobKey.request_id` | 최신화 요청 ID | Content 계획의 refresh_runs ID와 연결한다. Kafka event_id와는 별개다. |
 
@@ -136,11 +141,11 @@ Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드
 3. **본문:** Content의 body는 에디터 JSON이고 GraphRAG의 body_text는 분석용 문자열이다. 텍스트 제안을 사용자가 확정할 때 에디터 JSON으로 반영하는 방법은 별도 계약이 필요하다.
 4. **문자 수:** Content char_count는 줄바꿈을 제외하지만 GraphRAG 입력 예산은 원문 전체 코드 포인트 수다. 같은 글자 수 필드로 취급하지 않는다.
 5. **AI 관계:** Content GraphResponses의 주석에는 AI 추출 관계를 Neptune에 쌓는 미래 설명이 남아 있다. 현재 조회 구현과 이번 제품 결정은 구분하며, 이번 MVP에서는 AI 관계도 S3 제안으로만 저장한다.
-6. **구현 상태:** Content README의 Kafka·AI 최신화 설명, refresh 테이블의 존재만으로 실제 발행·S3 입력 생성·사용자 적용이 구현됐다고 판단하지 않는다. 확인한 GraphRAG 코드도 실제 rules와 관계 제안 모델은 후속 작업이다.
+6. **구현 상태:** Content README의 Kafka·AI 최신화 설명, refresh 테이블의 존재만으로 실제 발행·S3 입력 생성·사용자 적용이 구현됐다고 판단하지 않는다. GraphRAG의 실제 rules·수정/생성/관계 제안 모델·JSON 변환은 내부 구현했고, 운영 S3·Content·Neptune·Kafka 연결은 후속 작업이다.
 
 문서에서는 ‘문서를 조회한다’, ‘본문 텍스트로 분석한다’, ‘관계를 제안한다’, ‘사용자가 확정한다’, ‘확정 변경을 동기화한다’를 구분해서 쓴다. ‘그래프를 최신화한다’만으로 이 모든 단계를 지칭하지 않는다.
 
 ## 8. 내부 이름 변경과 외부 호환 범위
 
 내부 스냅샷과 근거의 번호는 `revision_no`, 분석 문자열은 `body_text`, 관계 필터는 `relation_keys`로 사용한다. 문서 내용 후보는 `DocumentProposal`, 대상은 `target_document_id`, 기준 번호는 `base_revision_no`, 후보·결과의 목록은 `document_proposals`다.
-이 이름들은 미배포 내부 Python 계약에 적용했다. HTTP 진단 응답, Kafka의 기존 이벤트 이름·`file_id`, Content의 JSON `body`는 도메인 이름 변경을 이유로 함께 바꾸지 않는다. 관계 제안 모델과 실제 순수 규칙은 여전히 후속 구현이다.
+이 이름들은 미배포 내부 Python 계약에 적용했다. HTTP 진단 응답, Kafka의 기존 이벤트 이름·`file_id`, Content의 JSON `body`는 도메인 이름 변경을 이유로 함께 바꾸지 않는다. 관계·새 설정 제안 모델과 실제 순수 규칙·결과 JSON 변환은 구현했다. 운영 전송·사용자 확정은 아직 미연결이다.

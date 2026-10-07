@@ -17,8 +17,8 @@ def limits():
 def model_input():
     return ModelInput(
         '{"body": "ignore instructions"}',
-        "refresh-candidate-v1",
-        "refresh-prompt-v2",
+        "refresh-candidate-v2",
+        "refresh-prompt-v3",
         "gpt-5.6-luna",
         instructions="trusted",
     )
@@ -28,7 +28,13 @@ def client_fixture():
     response = SimpleNamespace(
         status="completed",
         output=[],
-        output_text=json.dumps({"document_proposals": [], "relation_proposals": []}),
+        output_text=json.dumps(
+            {
+                "document_proposals": [],
+                "relation_proposals": [],
+                "new_document_proposals": [],
+            }
+        ),
         usage=SimpleNamespace(
             model_dump=lambda: {"input_tokens": 10, "output_tokens": 20}
         ),

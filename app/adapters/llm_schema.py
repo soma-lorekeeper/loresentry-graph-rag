@@ -10,12 +10,13 @@ from app.refresh.models import (
     Evidence,
     Failure,
     ModelCandidate,
+    NewDocumentProposal,
     RelationProposal,
     Usage,
 )
 
-CANDIDATE_VERSION = "refresh-candidate-v1"
-PROMPT_VERSION = "refresh-prompt-v2"
+CANDIDATE_VERSION = "refresh-candidate-v2"
+PROMPT_VERSION = "refresh-prompt-v3"
 
 
 class StrictDTO(BaseModel):
@@ -45,12 +46,12 @@ class DocumentDTO(StrictDTO):
 
 
 class RelationDTO(StrictDTO):
-    """두 기존 문서를 연결하는 ADD 후보."""
+    """기존 문서 또는 새 생성 후보를 연결하는 ADD 후보."""
 
     document_id: str
     target_document_id: str
-    base_revision_no: int
-    target_base_revision_no: int
+    base_revision_no: int | None
+    target_base_revision_no: int | None
     relation_key: str
     reverse_relation_key: str
     description: str
@@ -58,11 +59,38 @@ class RelationDTO(StrictDTO):
     operation: Literal["ADD"]
 
 
+class NewDocumentDTO(StrictDTO):
+    """원고 근거를 갖춘 설정 문서 생성 후보."""
+
+    candidate_id: str
+    folder_code: Literal[
+        "WORLDVIEW", "CHARACTER", "LOCATION", "ORGANIZATION", "ITEM", "EVENT"
+    ]
+    name: str
+    body_text: str
+    evidence: list[EvidenceDTO]
+
+
 class CandidateDTO(StrictDTO):
     """S3 결과 계약과 독립적인 모델 응답 계약."""
 
     document_proposals: list[DocumentDTO]
     relation_proposals: list[RelationDTO]
+    new_document_proposals: list[NewDocumentDTO]
+
+
+class LegacyRelationDTO(RelationDTO):
+    """저장된 v1 후보에서는 양 끝이 기존 문서다."""
+
+    base_revision_no: int
+    target_base_revision_no: int
+
+
+class LegacyCandidateDTO(StrictDTO):
+    """과거 평가 자료 읽기 전용. 실제 생성 요청에는 v2를 사용한다."""
+
+    document_proposals: list[DocumentDTO]
+    relation_proposals: list[LegacyRelationDTO]
 
 
 def candidate_schema() -> dict:
@@ -80,16 +108,23 @@ def response_usage(payload: dict | None) -> Usage:
     return Usage(1, payload["input_tokens"], payload["output_tokens"])
 
 
-def parse_candidate(text: str, usage: Usage) -> ModelCandidate:
+def parse_candidate(
+    text: str, usage: Usage, *, schema_version=CANDIDATE_VERSION
+) -> ModelCandidate:
     """JSON 후보를 불변 내부 값으로 변환하며 실패를 빈 제안으로 바꾸지 않는다."""
     try:
-        dto = CandidateDTO.model_validate_json(text)
-    except ValidationError:
+        if schema_version == "refresh-candidate-v1":
+            dto = LegacyCandidateDTO.model_validate_json(text)
+        elif schema_version == CANDIDATE_VERSION:
+            dto = CandidateDTO.model_validate_json(text)
+        else:
+            raise ValueError("Unsupported candidate schema")
+    except (ValidationError, ValueError):
         raise RefreshFailure(
             Failure("MODEL_INVALID_RESPONSE", "Invalid model candidate")
         ) from None
 
-    def values(item: DocumentDTO | RelationDTO) -> dict:
+    def values(item: DocumentDTO | RelationDTO | NewDocumentDTO) -> dict:
         data = item.model_dump(exclude={"evidence"})
         data["evidence"] = tuple(Evidence(**e.model_dump()) for e in item.evidence)
         return data
@@ -98,4 +133,8 @@ def parse_candidate(text: str, usage: Usage) -> ModelCandidate:
         tuple(DocumentProposal(**values(item)) for item in dto.document_proposals),
         usage,
         tuple(RelationProposal(**values(item)) for item in dto.relation_proposals),
+        tuple(
+            NewDocumentProposal(**values(item))
+            for item in getattr(dto, "new_document_proposals", ())
+        ),
     )

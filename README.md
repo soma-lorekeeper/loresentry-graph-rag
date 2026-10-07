@@ -31,8 +31,9 @@ relation keys, revisions, and proposals across the internal contracts.
 ## Refresh implementation
 
 The internal refresh service validates changed documents, builds source-preserving
-context, coordinates multiple target calls, and validates document and relation
-proposals. Results serialize to JSON; completion values carry the result location.
+context, coordinates multiple target calls, and validates existing-document updates, new setting-document candidates, and relation
+proposals. Manuscript bodies remain read-only. New setting candidates use temporary
+IDs so relations can reference them before Content approval. Results serialize to JSON; completion values carry the result location.
 The OpenAI Responses adapter and local HTTP integration are implemented. Conversation-authored
 responses verify the refresh flow; live generation remains unverified after an authentication
 failure. Other refresh IO uses fakes, with no HTTP/Kafka entry point. See

@@ -42,7 +42,11 @@ def response_payload():
                         "type": "output_text",
                         "annotations": [],
                         "text": json.dumps(
-                            {"document_proposals": [], "relation_proposals": []}
+                            {
+                                "document_proposals": [],
+                                "relation_proposals": [],
+                                "new_document_proposals": [],
+                            }
                         ),
                     }
                 ],
@@ -107,8 +111,8 @@ def invoke(url, timeout=2):
             ).generate(
                 ModelInput(
                     '{"text":"한글 🐈"}',
-                    "refresh-candidate-v1",
-                    "refresh-prompt-v2",
+                    "refresh-candidate-v2",
+                    "refresh-prompt-v3",
                     "gpt-5.6-luna",
                     instructions="Trusted instructions",
                 )

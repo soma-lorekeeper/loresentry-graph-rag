@@ -200,7 +200,7 @@ class RefreshService:
                 prompt_version=request.model_settings.prompt_version,
             )
         usage = Usage()
-        documents, relations = [], []
+        documents, relations, new_documents = [], [], []
         for model_input in inputs:
             try:
                 candidate = self.model.generate(model_input)
@@ -228,7 +228,10 @@ class RefreshService:
             # or candidates from another call cannot disappear during normalization.
             documents.extend(candidate.document_proposals)
             relations.extend(candidate.relation_proposals)
-        aggregate = ModelCandidate(tuple(documents), usage, tuple(relations))
+            new_documents.extend(candidate.new_document_proposals)
+        aggregate = ModelCandidate(
+            tuple(documents), usage, tuple(relations), tuple(new_documents)
+        )
         return self.rules.validate_candidate(
             snapshot, aggregate, replace(inputs[0], target_ids=snapshot.target_ids)
         )
