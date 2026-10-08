@@ -1,5 +1,9 @@
 # OpenAI 호출 어댑터 이식 결과
 
+현재 [S3 저장소 어댑터](../implementation/S3_ARTIFACTS.md)는 구현했고 실제 boto3의 로컬 HTTP로
+검증했다. 기본 평가는 fake 저장소를 유지하며 운영 버킷·IAM·Content 입력 매핑과
+Kafka 연결은 후속 작업이다.
+
 동기 OpenAI 어댑터, 엄격한 후보 파서, 오류 분류, SDK 로컬 HTTP 통합과 평가 도구를
 구현했다. 실제 생성 호출은 HTTP 401로 실패했고, 사용자 요청에 따라 이번 기능 평가는
 대화 작성 응답으로 대체했다. [평가 기록](model-response-evaluation.md)에 확인 범위와

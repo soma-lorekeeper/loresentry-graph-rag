@@ -144,7 +144,7 @@ class DocumentSnapshot:
     project_id: str
     document_id: str
     revision_no: int
-    body_text: str
+    body_text: str | None
     properties: tuple[tuple[str, str], ...] = ()
     relations: tuple[Relation, ...] = ()
     state: DocumentState = DocumentState.ACTIVE

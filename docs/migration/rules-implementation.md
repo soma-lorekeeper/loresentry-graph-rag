@@ -1,5 +1,9 @@
 # 갱신안 rules 이식 결과
 
+현재 [S3 저장소 어댑터](../implementation/S3_ARTIFACTS.md)는 구현했고 실제 boto3의 로컬 HTTP로
+검증했다. 기본 평가는 fake 저장소를 유지하며 운영 버킷·IAM·Content 입력 매핑과
+Kafka 연결은 후속 작업이다.
+
 [LOREKEEPER-637](https://lorekeepers.atlassian.net/browse/LOREKEEPER-637)에서 순수 rules,
 다중 대상 모델 호출 조율, 결과 JSON 변환을 구현했다. 실제 rules와 여섯 fake IO를
 연결해 검증한다. 이식 경위와 과거 검증 기록을 보존하며 아래 동작 설명은 현재 구현 기준이다. 이후 [OpenAI 어댑터와 응답 대체 평가](openai-adapter.md)를

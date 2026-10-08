@@ -44,7 +44,9 @@ HTTP·네트워크·JSON 해석 실패는 어댑터가 `GraphStatusUnavailable`�
 운영 Neptune의 TLS·IAM·VPC 연결은 별도 확인 대상이다.
 
 갱신안 서비스는 S3·관계·Content·모델·작업 상태·완료 발행을 Protocol로 요청한다.
-OpenAI 모델 포트는 실제 어댑터를 선택할 수 있고 나머지 다섯 포트는 fake다.
+OpenAI 모델·S3 저장소 포트는 실제 어댑터를 선택할 수 있다. 기본 평가의 저장소와
+관계·Content·작업 상태·완료 발행은 fake다. S3는 `GetObject`·`PutObject`를 사용한다.
+설정·타임아웃·오류·복구 규칙은 [S3 저장소](implementation/S3_ARTIFACTS.md)를 따른다.
 [포트 계약](../app/refresh/ports.py)과 [이식 결과](migration/rules-implementation.md)를 참고한다.
 
 ## 갱신안 모델 호출

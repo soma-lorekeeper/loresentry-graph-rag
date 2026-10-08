@@ -36,7 +36,9 @@ proposals. Manuscript bodies remain read-only. New setting candidates use tempor
 IDs so relations can reference them before Content approval. Results serialize to JSON; completion values carry the result location.
 The OpenAI Responses adapter and local HTTP integration are implemented. Conversation-authored
 responses verify the refresh flow; live generation remains unverified after an authentication
-failure. Other refresh IO uses fakes, with no HTTP/Kafka entry point. See
+failure. A real [S3 artifact adapter](docs/implementation/S3_ARTIFACTS.md) is available through
+service injection; the evaluation CLI still uses fake stores. HTTP/Kafka refresh entry points
+are not implemented. See
 [OpenAI migration results](docs/migration/openai-adapter.md).
 
 ## Stack

@@ -99,5 +99,14 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 `refresh-result-v2`다. 과거 v1 결과 읽기와 v1 후보/v2 프롬프트 응답 재생은 호환 경로이며
 새 생성 기능의 모델 품질 검증과 구분한다. [새 생성·연결 예시](../examples/refresh/result-new-settings.json)를 참고한다.
 
-현재 구현 확인: 전체 pytest 300개와 Ruff lint·format 검사가 통과했다.
+## S3 어댑터
+
+[test_s3_artifacts.py](../../tests/refresh/test_s3_artifacts.py)는 엄격 JSON·타입,
+객체 크기·스트림 종료·SDK 설정을 검증한다.
+[test_s3_http.py](../../tests/integration/test_s3_http.py)는 실제 boto3와 로컬 HTTP 서버로
+입력·context·result 왕복, 불변 쓰기·요청 충돌, 해시 손상·권한·버킷·503/409 실패,
+저장 뒤 응답 유실·새 어댑터 복구와 원고 보존을 검증한다. 실제 AWS는 호출하지 않는다.
+설정·보존 조건은 [S3 저장소](S3_ARTIFACTS.md)를 따른다.
+
+현재 구현 확인: 전체 pytest 323개와 Ruff lint·format 검사가 통과했다.
 실제 OpenAI 생성·품질은 인증 실패로 미검증이며 운영 S3·Content·Neptune·Kafka 연동도 미연결이다.

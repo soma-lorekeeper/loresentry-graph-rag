@@ -61,3 +61,10 @@
 새 후보끼리 연결, 생성 호출 범위, 잘못된 참조·중복·충돌·근거 거절과 결과 복구를 검증한다.
 원고 보존 평가는 [runner.py](../evaluation/runner.py), 새 설정 평가 자료는
 [cases.py](../evaluation/cases.py)의 `new_setting_cases()`에 있다.
+
+## S3 저장소 어댑터
+
+`app/adapters/refresh_artifacts.py`는 실제 boto3 IO와 클라이언트 생명주기를,
+`refresh_schema.py`는 엄격 입력·request/context 형식과 입력 바이트 해시를 담당한다.
+`RefreshService`에 주입할 수 있으며 기본 평가 CLI의 fake 조립은 유지한다.
+설정·저장·복구는 [S3 저장소](implementation/S3_ARTIFACTS.md)를 따른다.

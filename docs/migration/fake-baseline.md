@@ -1,5 +1,9 @@
 # 갱신안 fake 기반 검증
 
+현재 [S3 저장소 어댑터](../implementation/S3_ARTIFACTS.md)는 구현했고 실제 boto3의 로컬 HTTP로
+검증했다. 기본 평가는 fake 저장소를 유지하며 운영 버킷·IAM·Content 입력 매핑과
+Kafka 연결은 후속 작업이다.
+
 [LOREKEEPER-625](https://lorekeepers.atlassian.net/browse/LOREKEEPER-625)에서 내부 골격과
 여섯 외부 IO fake를 만들었다. 이후 [rules 이식 결과](rules-implementation.md)에서
 기본 판단을 구현하고 실제 rules와 fake IO를 연결했다. HTTP·Kafka 전달 계층에는 연결하지 않았다.

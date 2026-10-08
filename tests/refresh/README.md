@@ -51,3 +51,7 @@ OpenAI 후보 계약·오류·예산은 `test_llm_schema.py`, `test_llm.py`에�
 평가 기록과 대화 응답 재생은 `test_evaluation_*.py`, `test_response_replay.py`를 본다.
 실제 SDK의 로컬 HTTP 검증은 소켓 차단 경계 밖의 `tests/integration/test_openai_http.py`에 둔다.
 키 없이 실행할 전체 흐름은 [대체 응답 평가](../../docs/migration/model-response-evaluation.md)를 따른다.
+
+S3 저장소의 엄격 입력·크기·스트림 종료·설정은 `test_s3_artifacts.py`에서 확인한다.
+실제 boto3 전송·불변 저장·결과 복구는 `tests/integration/test_s3_http.py`에 둔다.
+설정과 검증 경계는 [S3 저장소](../../docs/implementation/S3_ARTIFACTS.md)를 따른다.
