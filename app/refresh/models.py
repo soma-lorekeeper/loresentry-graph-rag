@@ -77,6 +77,7 @@ class SelectionSettings:
     max_context_chars: int = 240000
     max_model_calls: int = 20
     chunk_chars: int = 1000
+    separate_discovery: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,8 +85,8 @@ class ModelSettings:
     """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
 
     model: str = "unconfigured"
-    prompt_version: str = "refresh-prompt-v3"
-    schema_version: str = "refresh-candidate-v2"
+    prompt_version: str = "refresh-prompt-v7"
+    schema_version: str = "refresh-candidate-v3"
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,9 @@ class Relation:
 class DocumentSnapshot:
     """조회 시점의 본문 텍스트·속성·관계·상태와 문서 revision_no.
 
-    body_text는 분석용 문자열이며 Content의 구조화 본문 body JSON과 다르다."""
+    body_text는 분석용 문자열이며 Content의 구조화 본문 body JSON과 다르다.
+    title은 Content의 독립 필드다. 과거 스냅샷에는 없을 수 있으며 별칭은 properties에 보존한다.
+    """
 
     project_id: str
     document_id: str
@@ -149,6 +152,7 @@ class DocumentSnapshot:
     relations: tuple[Relation, ...] = ()
     state: DocumentState = DocumentState.ACTIVE
     folder_code: str = "MANUSCRIPT"
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -265,6 +269,14 @@ class Usage:
 
 
 @dataclass(frozen=True)
+class RelationGenerationScope:
+    """관계 쌍을 담당하는 대상 호출. fallback은 신규 후보·비대상 쌍을 담당한다."""
+
+    owner_target_ids: tuple[str, ...]
+    owns_fallback: bool
+
+
+@dataclass(frozen=True)
 class ModelInput:
     """외부 모델 호출에 사용할 프롬프트, 스키마·프롬프트 버전과 모델 식별자."""
 
@@ -275,6 +287,8 @@ class ModelInput:
     target_ids: tuple[str, ...] = ()
     instructions: str = ""
     allow_new_documents: bool = True
+    relation_scope: RelationGenerationScope | None = None
+    allow_document_updates: bool = True
 
 
 @dataclass(frozen=True)

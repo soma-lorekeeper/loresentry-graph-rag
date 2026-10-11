@@ -72,7 +72,11 @@ def result_to_payload(request, result, snapshot=None):
             "model": request.model_settings.model,
             "prompt_version": result.prompt_version,
             "schema_version": request.model_settings.schema_version,
-            "settings": asdict(request.settings),
+            "settings": {
+                key: value
+                for key, value in asdict(request.settings).items()
+                if key != "separate_discovery" or value is not False
+            },
             "usage": asdict(result.usage),
             "changed_ids": list(changed_ids),
             "target_ids": list(snapshot.target_ids) if snapshot else [],

@@ -13,10 +13,11 @@ from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.refresh.errors import RefreshFailure
 from app.refresh.serialization import result_to_payload
 from evaluation.artifacts import AttemptRecorder, RecordingClient, write_json
-from evaluation.cases import cases, new_setting_cases
-from evaluation.novel import novel_case
+from evaluation.cases import cases, evaluation_outcome, new_setting_cases
+from evaluation.markdown import write_report
+from evaluation.novel import novel_case, novel_settings_case
 from evaluation.replay import ResponseReplay
-from evaluation.runner import CallBudget, assemble, run_case
+from evaluation.runner import CallBudget, assemble, planned_calls, run_case
 
 
 def environment(path: Path | None) -> dict:
@@ -41,7 +42,9 @@ def main(argv=None) -> int:
     mode.add_argument("--live", action="store_true")
     mode.add_argument("--responses-dir", type=Path)
     parser.add_argument(
-        "--suite", choices=("basic", "novel", "new-settings"), default="basic"
+        "--suite",
+        choices=("basic", "novel", "novel-settings", "new-settings"),
+        default="basic",
     )
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--model")
@@ -58,10 +61,12 @@ def main(argv=None) -> int:
     try:
         env = environment(args.env_file)
 
-        def option(name, key, cast):
+        def option(name, key, cast, default=None):
             value = getattr(args, name)
             if value is None:
                 value = env.get(key)
+            if value is None:
+                value = default
             if value is None:
                 raise ValueError(f"Required setting: {key}")
             return cast(value)
@@ -74,10 +79,12 @@ def main(argv=None) -> int:
             option("context_window", "OPENAI_CONTEXT_WINDOW", int),
         )
         limits.validate()
-        budget = CallBudget(option("max_calls", "OPENAI_MAX_CALLS", int))
+        budget = CallBudget(option("max_calls", "OPENAI_MAX_CALLS", int, 9))
         fixtures = (
             (novel_case(limits.model, args.trial),)
             if args.suite == "novel"
+            else (novel_settings_case(limits.model, args.trial),)
+            if args.suite == "novel-settings"
             else new_setting_cases(limits.model, args.trial)
             if args.suite == "new-settings"
             else cases(limits.model, args.trial)
@@ -86,7 +93,7 @@ def main(argv=None) -> int:
             if not set(args.selected) <= {c.name for c in fixtures}:
                 raise ValueError("Unknown evaluation case")
             fixtures = tuple(c for c in fixtures if c.name in args.selected)
-        required_calls = sum(max(1, len(c.targets)) for c in fixtures)
+        required_calls = sum(planned_calls(case) for case in fixtures)
         if required_calls > budget.maximum:
             raise ValueError("Call budget smaller than selected evaluation suite")
         if args.live and not env.get("OPENAI_API_KEY"):
@@ -157,6 +164,7 @@ def main(argv=None) -> int:
                     else None
                 )
                 write_json(args.output / f"{case.name}.json", report)
+                write_report(args.output)
             reports.append(report)
             # Shared credentials/quota cannot be repaired by another fixture.
             failure = report.get("failure") or report.get("result", {}).get("error")
@@ -165,13 +173,12 @@ def main(argv=None) -> int:
                 "MODEL_QUOTA_EXHAUSTED",
             }:
                 break
+        outcomes = [evaluation_outcome(report) for report in reports]
         failed = any(
-            r.get("failure")
-            or not r["assessment"]["rules_accepted"]
-            or not r["assessment"]["manuscript_content_preserved"]
-            or not r["assessment"]["expected_new_settings"]
-            for r in reports
+            outcome in {"execution_failed", "failed", "unassessed"}
+            for outcome in outcomes
         )
+        review_required = "review_required" in outcomes
     print(
         json.dumps(
             {
@@ -179,11 +186,12 @@ def main(argv=None) -> int:
                 "cases": len(reports),
                 "calls": budget.used,
                 "failed": failed,
+                "review_required": review_required,
                 "output": str(args.output),
             }
         )
     )
-    return 1 if failed else 0
+    return 1 if failed else 2 if review_required else 0
 
 
 if __name__ == "__main__":

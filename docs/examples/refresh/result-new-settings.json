@@ -58,8 +58,8 @@
   "execution": {
     "input_fingerprint": "3aafb3d649c4155add528fc46c75a06c8e0cdc8ac24a22ccec0d6ed2a79927a8",
     "model": "gpt-5.6-luna",
-    "prompt_version": "refresh-prompt-v3",
-    "schema_version": "refresh-candidate-v2",
+    "prompt_version": "refresh-prompt-v7",
+    "schema_version": "refresh-candidate-v3",
     "settings": {
       "relation_keys": [],
       "max_depth": 1,

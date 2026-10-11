@@ -3,14 +3,16 @@
 import json
 import threading
 import time
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from openai import OpenAI
 
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
+from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import ModelInput, Usage
+from app.refresh.models import Evidence, ModelInput, Usage
 
 pytestmark = pytest.mark.integration
 
@@ -102,7 +104,7 @@ def server():
         thread.join()
 
 
-def invoke(url, timeout=2):
+def invoke(url, timeout=2, context=None):
     client = OpenAI(api_key="local-test-only", base_url=url, max_retries=0)
     try:
         with client:
@@ -110,9 +112,12 @@ def invoke(url, timeout=2):
                 client, ModelLimits("gpt-5.6-luna", timeout, 20000, 2000, 22000)
             ).generate(
                 ModelInput(
-                    '{"text":"한글 🐈"}',
-                    "refresh-candidate-v2",
-                    "refresh-prompt-v3",
+                    json.dumps(
+                        context or {"text": "한글 🐈", "evidence": []},
+                        ensure_ascii=False,
+                    ),
+                    CANDIDATE_VERSION,
+                    PROMPT_VERSION,
                     "gpt-5.6-luna",
                     instructions="Trusted instructions",
                 )
@@ -133,6 +138,42 @@ def test_sdk_wire_format_usage_and_lifecycle(server):
     assert payload["text"]["format"]["strict"] is True
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
     assert payload["store"] is False
+
+
+@pytest.mark.parametrize("marker", ["C0001", "C9999"])
+def test_sdk_marker_response_resolves_exact_unicode_source_or_fails(server, marker):
+    state, url = server
+    quote = "한글 🐈 같은 말."
+    source = Evidence("chapter", 4, 7, 7 + len(quote), quote)
+    context = {"evidence": [{"marker": "C0001", **asdict(source)}]}
+    state["payload"]["output"][0]["content"][0]["text"] = json.dumps(
+        {
+            "document_proposals": [],
+            "relation_proposals": [],
+            "new_document_proposals": [
+                {
+                    "candidate_id": "new:CHARACTER:서하",
+                    "folder_code": "CHARACTER",
+                    "name": "서하",
+                    "body_text": "서하는 고양이와 함께 왔다.",
+                    "evidence": [{"marker": marker}],
+                }
+            ],
+        }
+    )
+    if marker == "C0001":
+        candidate = invoke(url, context=context)
+        assert candidate.new_document_proposals[0].evidence == (source,)
+        assert candidate.usage == Usage(1, 10, 20)
+    else:
+        with pytest.raises(RefreshFailure) as caught:
+            invoke(url, context=context)
+        assert caught.value.failure.code == "MODEL_INVALID_RESPONSE"
+    assert len(state["requests"]) == 1
+    wire_context = json.loads(state["requests"][0][1]["input"][0]["content"])
+    assert wire_context == context
+    schema = state["requests"][0][1]["text"]["format"]["schema"]
+    assert set(schema["$defs"]["EvidenceMarkerDTO"]["properties"]) == {"marker"}
 
 
 @pytest.mark.parametrize(

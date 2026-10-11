@@ -233,7 +233,14 @@ class RefreshService:
             tuple(documents), usage, tuple(relations), tuple(new_documents)
         )
         return self.rules.validate_candidate(
-            snapshot, aggregate, replace(inputs[0], target_ids=snapshot.target_ids)
+            snapshot,
+            aggregate,
+            replace(
+                inputs[0],
+                target_ids=snapshot.target_ids,
+                relation_scope=None,
+                allow_document_updates=True,
+            ),
         )
 
     @staticmethod

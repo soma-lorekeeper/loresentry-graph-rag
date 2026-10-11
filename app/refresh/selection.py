@@ -69,6 +69,7 @@ def validate_input(request, source):
         or settings.max_documents < 0
         or type(settings.max_depth) is not int
         or not 0 <= settings.max_depth <= 3
+        or type(settings.separate_discovery) is not bool
     ):
         reject("INVALID_POLICY", "Invalid execution budget")
     if (

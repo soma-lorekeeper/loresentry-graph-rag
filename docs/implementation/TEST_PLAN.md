@@ -83,7 +83,9 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 
 평가의 `manuscript_content_preserved`는 최초 입력·저장된 실행 스냅샷·입력 저장소의 원고를
 비교한다. 공백·줄바꿈·본문 변경 또는 원고 수정 제안이 있으면 false이고 평가 명령은 실패한다.
-`expected_new_settings`는 생성 후보의 ID·분류·이름을 고정 기대와 비교한다.
+`expected_new_settings`는 필수 생성 후보의 분류·정규화 이름과 금지 후보 부재를 검사한다.
+허용 후보를 별도로 지정하고 미등록 추가 후보는 검토 필요로 표시한다. 필수 수정·내용·보존·관계
+검사도 CLI 실패에 반영하며 Markdown과 같은 판정을 사용한다.
 이는 설정 내용의 의미적 정확성이나 프로젝트 전체 중복 부재를 보증하지 않는다.
 조회하지 않은 설정의 중복·별칭·동명이인 판단과 Content 승인 시 ID 발급·관계 반영은 후속 검증이다.
 
@@ -95,9 +97,11 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
   --trial new-settings-v2 --output .evaluation/new-settings-v2 --repeat-saved
 ```
 
-현재 생성 후보는 `refresh-candidate-v2`, 프롬프트는 `refresh-prompt-v3`, 결과는
+현재 생성 후보는 `refresh-candidate-v3`, 프롬프트는 `refresh-prompt-v7`, 결과는
 `refresh-result-v2`다. 과거 v1 결과 읽기와 v1 후보/v2 프롬프트 응답 재생은 호환 경로이며
-새 생성 기능의 모델 품질 검증과 구분한다. [새 생성·연결 예시](../examples/refresh/result-new-settings.json)를 참고한다.
+현재 모델 품질 검증과 구분한다. 모델의 출처 마커를 정확한 원문 구간으로 복원하고,
+관계쌍별 소유 호출을 검사한다. 같은 호출 내 설명 충돌과 비소유 관계는 계속 실패한다.
+[새 생성·연결 예시](../examples/refresh/result-new-settings.json)를 참고한다.
 
 ## S3 어댑터
 
@@ -108,5 +112,5 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 저장 뒤 응답 유실·새 어댑터 복구와 원고 보존을 검증한다. 실제 AWS는 호출하지 않는다.
 설정·보존 조건은 [S3 저장소](S3_ARTIFACTS.md)를 따른다.
 
-현재 구현 확인: 전체 pytest 323개와 Ruff lint·format 검사가 통과했다.
-실제 OpenAI 생성·품질은 인증 실패로 미검증이며 운영 S3·Content·Neptune·Kafka 연동도 미연결이다.
+최신 검사와 실제 OpenAI 평가 결과는 [품질 개선·검증 기록](../migration/refresh-quality.md)을 따른다.
+운영 S3·Content·Neptune·Kafka 연동은 미연결이다.

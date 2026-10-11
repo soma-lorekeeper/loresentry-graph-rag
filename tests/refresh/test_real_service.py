@@ -23,10 +23,14 @@ from tests.fakes.refresh import (
 def real_scenario():
     request, source, related, targets, candidate = real_example()
     calls = Calls()
-    # Target calls sorted c1, i1. The same relation from both calls is deduplicated.
+    # Target calls sorted c1, i1. The c1 call owns the c1-i1 pair.
     responses = tuple(
-        replace(candidate, document_proposals=(p,))
-        for p in candidate.document_proposals
+        replace(
+            candidate,
+            document_proposals=(p,),
+            relation_proposals=candidate.relation_proposals if index == 0 else (),
+        )
+        for index, p in enumerate(candidate.document_proposals)
     )
     s = SimpleNamespace(
         request=request,
@@ -128,12 +132,11 @@ def test_saved_result_retry_does_not_recall_model(operation):
 
 def test_aggregate_conflicting_relation_descriptions_fails():
     s = real_scenario()
-    second = s.model.responses[1]
-    s.model.responses[1] = replace(
-        second,
-        relation_proposals=(
-            replace(second.relation_proposals[0], description="충돌한 설명"),
-        ),
+    first = s.model.responses[0]
+    s.model.responses[0] = replace(
+        first,
+        relation_proposals=first.relation_proposals
+        + (replace(first.relation_proposals[0], description="충돌한 설명"),),
     )
     done = s.service.run(s.request, "run1")
     assert done.failure.code == "CONFLICTING_PROPOSALS"

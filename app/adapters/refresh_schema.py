@@ -69,7 +69,32 @@ def input_bytes(source: InputSnapshot) -> bytes:
         request_id=source.job.request_id,
         documents=source.documents,
     )
-    return json_bytes(obj.model_dump(mode="json"))
+    value = obj.model_dump(mode="json")
+    omit_absent_titles(value["documents"])
+    return json_bytes(value)
+
+
+def context_bytes(snapshot: ExecutionSnapshot) -> bytes:
+    """과거에 없던 선택 제목은 생략하여 기존 불변 실행 스냅샷의 바이트를 보존한다."""
+    obj = ContextObject(schema_version="refresh-context-v1", snapshot=snapshot)
+    value = obj.model_dump(mode="json")
+    omit_absent_titles(value["snapshot"]["documents"])
+    omit_default_discovery(value["snapshot"]["request"])
+    return json_bytes(value)
+
+
+def omit_default_discovery(request: dict) -> None:
+    """과거 단일 단계 정책의 기본값은 저장 바이트에 새 필드를 추가하지 않는다."""
+    settings = request["settings"]
+    if settings.get("separate_discovery") is False:
+        settings.pop("separate_discovery", None)
+
+
+def omit_absent_titles(documents: list[dict]) -> None:
+    """미제공 제목만 생략한다. 비활성 body_text 등 기존 null 필드는 그대로 둔다."""
+    for document in documents:
+        if document.get("title") is None:
+            document.pop("title", None)
 
 
 def fingerprint(body: bytes) -> str:

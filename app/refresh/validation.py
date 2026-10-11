@@ -13,6 +13,7 @@ from app.refresh.models import (
     NewDocumentProposal,
     Outcome,
     RefreshResult,
+    RelationGenerationScope,
     RelationProposal,
     Usage,
 )
@@ -112,17 +113,40 @@ def setting_name(value):
     return " ".join(normalize("NFKC", value).split()).casefold()
 
 
+def existing_setting_names(snapshot):
+    """같은 프로젝트의 활성 설정 제목·이름·단일 별칭을 분류별로 수집한다.
+
+    Content의 alias는 문자열 속성이다. 구분자나 별칭 배열을 추정하지 않으며
+    다른 설정의 본문에 등장한 이름도 독립 문서의 이름으로 취급하지 않는다.
+    """
+    names = set()
+    for document in snapshot.documents:
+        if (
+            document.project_id != snapshot.request.job.project_id
+            or document.state != DocumentState.ACTIVE
+            or document.folder_code == "MANUSCRIPT"
+        ):
+            continue
+        values = [document.title]
+        values.extend(
+            value
+            for key, value in document.properties
+            if key in {"name", "title", "alias"}
+        )
+        names.update(
+            (document.folder_code, setting_name(value))
+            for value in values
+            if isinstance(value, str) and value.strip()
+        )
+    return names
+
+
 def validate_new_document_proposals(snapshot, proposals):
     """원고에 근거한 새 설정, 임시 참조, 중복·충돌과 생성 개수 한도를 검사한다."""
     if not isinstance(proposals, tuple):
         reject("INVALID_NEW_DOCUMENT", "New setting proposal tuple required")
     documents = {d.document_id: d for d in snapshot.documents}
-    existing_names = {
-        (d.folder_code, setting_name(value))
-        for d in snapshot.documents
-        for key, value in d.properties
-        if key in {"name", "title"} and isinstance(value, str)
-    }
+    existing_names = existing_setting_names(snapshot)
     merged, names = {}, {}
     for proposal in proposals:
         if (
@@ -189,7 +213,26 @@ class RelationEndpoint:
     state: DocumentState = DocumentState.ACTIVE
 
 
-def validate_relation_proposals(snapshot, proposals, new_documents=()):
+def relation_in_scope(snapshot, proposal, scope):
+    """방향에 무관하게 기존 대상 중 첫 endpoint, 없거나 신규면 fallback 호출을 고른다.
+
+    scope가 None이면 과거 단일 호출 또는 전체 후보 집계의 제약 없는 검증이다.
+    이 함수는 소유권만 판단하며 endpoint의 실제 존재와 활성 상태는 별도 검증한다.
+    """
+    if scope is None:
+        return True
+    endpoints = {proposal.document_id, proposal.target_document_id}
+    if not endpoints <= {document.document_id for document in snapshot.documents}:
+        return scope.owns_fallback
+    owner = next(
+        (target for target in snapshot.target_ids if target in endpoints), None
+    )
+    return scope.owns_fallback if owner is None else owner in scope.owner_target_ids
+
+
+def validate_relation_proposals(
+    snapshot, proposals, new_documents=(), relation_scope=None
+):
     """방향별 분류 키를 검증한 뒤 역방향 중복·기존 연결을 제거한다."""
     if not isinstance(proposals, tuple):
         reject("INVALID_RELATION_PROPOSAL", "Relation proposal tuple required")
@@ -241,6 +284,11 @@ def validate_relation_proposals(snapshot, proposals, new_documents=()):
             reject(
                 "INVALID_RELATION_KEY",
                 "ADD with correctly directed category keys required",
+            )
+        if not relation_in_scope(snapshot, proposal, relation_scope):
+            reject(
+                "INVALID_RELATION_SCOPE",
+                "Connection is owned by another model call",
             )
         if (
             (a.revision_no is not None and type(proposal.base_revision_no) is not int)
@@ -307,9 +355,42 @@ def validate_candidate(snapshot, candidate, model_input):
         usage = candidate.usage
         if candidate.new_document_proposals and not model_input.allow_new_documents:
             reject("INVALID_NEW_DOCUMENT", "New settings are outside this call's scope")
-        allowed = model_input.target_ids or snapshot.target_ids
+        if type(model_input.allow_document_updates) is not bool:
+            reject("INVALID_TARGET", "Document update scope must be a boolean")
+        allowed = (
+            (model_input.target_ids or snapshot.target_ids)
+            if model_input.allow_document_updates
+            else ()
+        )
         if not set(allowed) <= set(snapshot.target_ids):
             reject("INVALID_TARGET", "Model scope differs from execution scope")
+        scope = model_input.relation_scope
+        if scope is not None and (
+            not isinstance(scope, RelationGenerationScope)
+            or not isinstance(scope.owner_target_ids, tuple)
+            or not all(isinstance(target, str) for target in scope.owner_target_ids)
+            or scope.owner_target_ids != model_input.target_ids
+            or len(scope.owner_target_ids) != len(set(scope.owner_target_ids))
+            or type(scope.owns_fallback) is not bool
+        ):
+            reject("INVALID_RELATION_SCOPE", "Invalid model connection ownership")
+        if scope is not None:
+            if snapshot.request.settings.separate_discovery:
+                discovery = not model_input.allow_document_updates
+                if (
+                    scope.owns_fallback != discovery
+                    or (not scope.owner_target_ids) != discovery
+                    or model_input.allow_new_documents != discovery
+                ):
+                    reject(
+                        "INVALID_RELATION_SCOPE",
+                        "Discovery and update calls have different connection owners",
+                    )
+            elif scope.owns_fallback != (
+                not snapshot.target_ids
+                or snapshot.target_ids[0] in scope.owner_target_ids
+            ):
+                reject("INVALID_RELATION_SCOPE", "Invalid fallback connection owner")
         documents = validate_document_proposals(
             snapshot, candidate.document_proposals, allowed
         )
@@ -317,7 +398,7 @@ def validate_candidate(snapshot, candidate, model_input):
             snapshot, candidate.new_document_proposals
         )
         relations = validate_relation_proposals(
-            snapshot, candidate.relation_proposals, new_documents
+            snapshot, candidate.relation_proposals, new_documents, scope
         )
         return RefreshResult(
             snapshot.request.job,

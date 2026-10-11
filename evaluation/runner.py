@@ -4,8 +4,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import DocumentState, Failure
+from app.refresh.models import DocumentBatch, DocumentState, Failure, RelatedDocuments
+from app.refresh.rules import RefreshRules
 from app.refresh.service import RefreshService
+from app.refresh.validation import relation_in_scope
 from evaluation.cases import EvaluationCase, assess
 from evaluation.fakes import (
     Calls,
@@ -34,12 +36,37 @@ class CallBudget:
         self.used += 1
 
 
+def evaluation_snapshot(case: EvaluationCase):
+    """case의 조회 자료로 순수 규칙 스냅샷을 구성한다. artifact 구현에 의존하지 않는다."""
+    rules = RefreshRules()
+    related = case.related if case.request.discover_related else RelatedDocuments()
+    selection = rules.select(case.request, case.source, related)
+    available = {
+        document.document_id: document
+        for document in case.targets
+        if document.project_id == case.request.job.project_id
+    }
+    fetched = DocumentBatch(
+        tuple(available[key] for key in selection.missing_ids if key in available),
+        tuple(key for key in selection.missing_ids if key not in available),
+    )
+    return rules.assemble(case.request, case.source, related, selection, fetched)
+
+
+def planned_calls(case: EvaluationCase) -> int:
+    """신규 발견·대상 갱신 분리와 활성 입력을 실제 호출 계획으로 계산한다."""
+    rules = RefreshRules()
+    snapshot = evaluation_snapshot(case)
+    return len(rules.model_inputs(snapshot, rules.chunk(snapshot)))
+
+
 class EvaluationModel:
     """명시적으로 선택한 실제 모델 또는 고정 오프라인 후보를 호출한다."""
 
     def __init__(self, case, delegate, budget, recorder=None):
         self.case, self.delegate, self.budget = case, delegate, budget
         self.recorder = recorder
+        self.snapshot = None
 
     def generate(self, model_input):
         if self.recorder is not None:
@@ -52,12 +79,26 @@ class EvaluationModel:
         self.budget.consume()
         if self.delegate is not None:
             return self.delegate.generate(model_input)
+        if self.snapshot is None:
+            self.snapshot = evaluation_snapshot(self.case)
+        snapshot = self.snapshot
         return replace(
             self.case.expected,
             document_proposals=tuple(
                 p
                 for p in self.case.expected.document_proposals
-                if p.target_document_id in model_input.target_ids
+                if model_input.allow_document_updates
+                and p.target_document_id in model_input.target_ids
+            ),
+            new_document_proposals=(
+                self.case.expected.new_document_proposals
+                if model_input.allow_new_documents
+                else ()
+            ),
+            relation_proposals=tuple(
+                p
+                for p in self.case.expected.relation_proposals
+                if relation_in_scope(snapshot, p, model_input.relation_scope)
             ),
         )
 

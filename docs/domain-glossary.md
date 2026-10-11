@@ -2,7 +2,11 @@
 
 Content가 관리하는 원본 개념을 기준으로 GraphRAG의 문서·코드·메시지 용어를 맞춘다. 한국어 설명에서는 **문서**, 외부 식별자는 해당 Content API의 **file_id / document_id**를 그대로 사용하며 변환 경계에서 대응시킨다.
 
-Content 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다. GraphRAG 내부 제안 설명은 현재 코드와 [제안 계약](migration/proposal-contract.md)을 기준으로 갱신했다. 운영 배포 상태를 의미하지 않는다. 아래에서 **구현**은 확인한 코드 동작, **DB 정의**는 테이블·컬럼만 확인한 상태, **계획**은 갱신안 계약의 목표를 뜻한다. 주석과 실제 코드가 다르면 실제 코드의 동작을 우선한다.
+Content 일반 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다.
+제목·분류·관계 저장은 2026-10-11 로컬 코드로 다시 확인했다. GraphRAG 내부 제안 설명은
+현재 코드와 [제안 계약](migration/proposal-contract.md)을 따른다. 운영 배포 상태를 의미하지 않는다.
+아래에서 **구현**은 확인한 코드 동작, **DB 정의**는 테이블·컬럼만 확인한 상태,
+**계획**은 갱신안 계약의 목표를 뜻한다. 주석과 실제 코드가 다르면 코드 동작을 우선한다.
 
 ## 1. 프로젝트와 문서
 
@@ -64,7 +68,7 @@ Content 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다. 
 | 관계 대상 | `target_document_id` | 해당 문서에서 바라본 상대 문서 ID. |
 | 관계 키 | `relation_key` | 상대 문서 분류에 맞는 참조 키. 방향을 바꾸면 키도 달라질 수 있다. |
 | 관계 설명 | 관계의 `description` | 두 문서의 연결이 무엇을 의미하는지 설명하는 문자열. 대상 문서의 설명이 아니다. |
-| 관계 행 ID | `document_relations.id` | 저장된 방향별 행의 UUID. 양방향 관계 전체가 반드시 하나의 ID를 공유한다고 가정하지 않는다. |
+| 관계 행 ID | `document_relations.id` | 문서쌍당 하나인 저장 관계의 UUID. 조회 방향마다 새 저장 행을 만드는 것은 아니다. |
 | 관계도 | Content `GraphResponses.Graph` | 현재 RDB 문서·속성·명시적 관계에서 읽는 `nodes`, `edges`, `episodes` 투영 응답. Neptune 조회와 같은 API가 아니다. |
 | 노드 | `GraphResponses.Node` | 관계도에서 문서 ID·제목·분류·문서 설명을 표현한 값. |
 | 연결선 | `GraphResponses.Edge` | 관계도에서 문서 쌍의 연결을 한 번만 표시하는 값. `source`와 `target`이 있어도 업무적으로 방향 있는 관계라고 해석하지 않는다. |
@@ -72,9 +76,12 @@ Content 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다. 
 | 그래프 투영 | GraphRAG 계획 | Content의 확정 변경을 조회용 그래프에 반영한 데이터. 원본의 소유권은 Content에 있다. |
 | 관계 제안 | GraphRAG 계획의 `relation_proposals` | 아직 확정되지 않은 새 연결 후보와 근거. S3에 저장하며 확정 그래프에는 직접 쓰지 않는다. |
 
-현재 Content는 관계를 반대쪽 문서에도 기록한다. 예를 들어 캐릭터 A와 장소 B의 연결은 A에서 `related_place → B`, B에서 `related_character → A`로 표현된다. 의미상 같은 연결이지만 행과 키는 다르다. 관계도 조회는 문서 쌍으로 중복을 제거해 하나의 연결선으로 보여준다.
+현재 Content는 V10 이후 무방향 문서쌍당 관계 한 행을 저장한다. 캐릭터 A와 장소 B의 연결은
+A의 조회에서 `related_place → B`, B의 조회에서 `related_character → A`로 표현되지만
+같은 저장 관계다. 키는 상대 문서 분류에서 계산하며 저장 입력의 키를 그대로 신뢰하지 않는다.
+GraphRAG도 문서쌍으로 중복을 검사하고 제안의 두 방향 분류 키를 검증한다.
 
-근거: [DocumentService.mirrorRelations](../../loresentry-content/src/main/java/com/loresentry/content/document/DocumentService.java), [GraphRepository](../../loresentry-content/src/main/java/com/loresentry/content/graph/GraphRepository.java), [GraphResponses](../../loresentry-content/src/main/java/com/loresentry/content/graph/GraphResponses.java).
+근거: [단일 관계 저장 마이그레이션](../../loresentry-content/src/main/resources/db/migration/V10__one_record_per_relation.sql), [DocumentService](../../loresentry-content/src/main/java/com/loresentry/content/document/DocumentService.java), [DocumentRepository](../../loresentry-content/src/main/java/com/loresentry/content/document/DocumentRepository.java), [GraphRepository](../../loresentry-content/src/main/java/com/loresentry/content/graph/GraphRepository.java).
 
 ## 4. Revision과 버전
 
@@ -124,6 +131,7 @@ Content 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다. 
 | `DocumentSnapshot.document_id` | 문서 ID (`file_id` / `document.id`) | ID의 문자열 표현과 UUID 검증은 어댑터에서 맞춘다. |
 | `DocumentSnapshot.revision_no` | `revision_no` | 본문 변경 횟수나 모든 이벤트의 순서 번호로 해석하지 않는다. |
 | `DocumentSnapshot.body_text` | 분석용 `body_text` | Content의 JSON `body`와 타입이 다르다. |
+| `DocumentSnapshot.title` | 독립 필드 `title` | 속성 `name`·`title`과 구분해 보존한다. 과거 제목 없는 입력은 None으로 읽고 저장 시 생략한다. |
 | `DocumentSnapshot.properties` | `properties`의 key/value | 표시용 label과 섞지 않는다. |
 | `Relation.document_id`, `target_document_id`, `relation_key` | 현재 문서에서 본 관계 행 | 상대 분류에 따른 키를 유지한다. 반대쪽 키를 복사하지 않으며 연결 중복은 문서 쌍으로 구분한다. |
 | `DocumentProposal.field`, `value` | 제안할 문서 필드·값 | 기존 설정 body_text의 교체 후보이며 원고는 제외한다. Content의 구조화 body JSON으로 확정하는 어댑터는 미연결이다. |
@@ -136,7 +144,9 @@ Content 설명의 확인 기준은 2026-10-03 로컬 코드(HEAD `fd4dc94`)다. 
 
 내부 코드·테스트와 메시지·갱신안 문서의 이름을 아래 기준으로 맞췄다. 실제 외부 스키마·어댑터 연동은 별도 구현이며, Content 코드와 이미 배포된 이벤트 이름을 변경한 것은 아니다.
 
-1. **관계 저장:** 방향별 문서·대상 ID와 relation_key를 사용한다. 메시지 초안도 양방향 행·대상 분류별 키로 정리했다. 신규 연결 제안은 문서 쌍으로 중복을 판별하고 방향별 키는 분류에 맞춰 검증한다. 실제 S3·이벤트 직렬화는 Content와 통합 검증해야 한다.
+1. **관계 저장:** Content는 무방향 문서쌍당 한 행을 저장하며 문서 조회에 상대 분류 키를 계산한다.
+GraphRAG 신규 제안도 문서쌍으로 중복을 판별하고 양쪽 분류 키를 검증한다. 과거 메시지 초안의
+양방향 행 표현은 현행 저장 계약으로 사용하지 않으며 실제 S3·이벤트 직렬화는 통합 검증해야 한다.
 2. **Revision:** 내부 필드는 revision_no, 제안 기준은 base_revision_no로 통일했다. 문서 저장 경로의 revision_no와 별도 메타데이터·역관계 변경을 구분하며 이벤트 순서 값은 별도 합의한다.
 3. **본문:** Content의 body는 에디터 JSON이고 GraphRAG의 body_text는 분석용 문자열이다. 텍스트 제안을 사용자가 확정할 때 에디터 JSON으로 반영하는 방법은 별도 계약이 필요하다.
 4. **문자 수:** Content char_count는 줄바꿈을 제외하지만 GraphRAG 입력 예산은 원문 전체 코드 포인트 수다. 같은 글자 수 필드로 취급하지 않는다.

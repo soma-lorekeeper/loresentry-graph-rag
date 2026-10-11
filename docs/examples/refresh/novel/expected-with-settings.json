@@ -1,0 +1,155 @@
+{
+  "document_proposals": [
+    {
+      "target_document_id": "character-doyun",
+      "base_revision_no": 4,
+      "field": "body_text",
+      "value": "백도윤은 해무시 배달부 조합 소속 배달부다. 대홍수 때 윤준에게 구조되어 빚을 갚으려 편지를 전달했다. 오른손 검지 끝은 윤서하가 만든 검게 산화시킨 강철 덮개와 강철 나사축의 의지다. 민해주가 맡은 기억 반환소의 방문 전달 담당으로 물통 운반과 수령 확인을 맡는다. 한 달 동안 임시 파견되어 오전 배달 노선은 다른 조합원에게 넘겼고 오후에는 조합 우편물을 계속 나른다.",
+      "evidence": [
+        {
+          "document_id": "chapter-05",
+          "revision_no": 2,
+          "start": 3909,
+          "end": 3986,
+          "quote": "도윤의 새 검지 끝은 은이 아니라 검게 산화시킨 강철로 만들었다. 안쪽 나사축은 더 긴 강철로 바꿨고, 바깥 덮개는 쉽게 교체하도록 했다."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 697,
+          "end": 771,
+          "quote": "해주는 도윤에게 방문 전달 담당을 맡겼다. 반환 승인과 봉인 해제는 자신이 책임지고, 도윤은 물통의 운반과 수령 확인만 맡기로 했다."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 0,
+          "end": 165,
+          "quote": "열세 번째 종이 울린 다음 날, 백도윤은 배달부 조합에서 자기 이름표를 떼었다. 일을 그만둔 것은 아니었다. 오전 배달 노선을 다른 조합원에게 넘기고 오후에만 우편물을 나르기로 했다. 비어 있는 오전에 할 일을 설명하자 조합장은 이름표 뒤에 작은 종이를 붙였다. 임시 파견. 기한은 한 달이었다."
+        }
+      ]
+    },
+    {
+      "target_document_id": "character-haeju",
+      "base_revision_no": 3,
+      "field": "body_text",
+      "value": "민해주는 전직 남쪽 수문 관리인이며 현재 기억 반환소를 맡는다. 회색 머리를 짧게 잘랐고 목덜미에 화상 자국이 있다. 반환 원장의 번호와 당사자의 확인을 대조해 남아 있는 기억을 돌려준다. 백도윤에게 방문 전달을 맡기고 자신은 반환 승인과 봉인 해제를 책임진다.",
+      "evidence": [
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 697,
+          "end": 771,
+          "quote": "해주는 도윤에게 방문 전달 담당을 맡겼다. 반환 승인과 봉인 해제는 자신이 책임지고, 도윤은 물통의 운반과 수령 확인만 맡기로 했다."
+        }
+      ]
+    },
+    {
+      "target_document_id": "item-finger",
+      "base_revision_no": 2,
+      "field": "body_text",
+      "value": "백도윤의 오른손 검지 의지. 윤서하가 검게 산화시킨 강철 덮개와 더 긴 강철 나사축으로 새로 만들었다. 덮개는 쉽게 교체할 수 있다. 수리비는 중앙 기록청에 청구했다.",
+      "evidence": [
+        {
+          "document_id": "chapter-05",
+          "revision_no": 2,
+          "start": 3909,
+          "end": 3986,
+          "quote": "도윤의 새 검지 끝은 은이 아니라 검게 산화시킨 강철로 만들었다. 안쪽 나사축은 더 긴 강철로 바꿨고, 바깥 덮개는 쉽게 교체하도록 했다."
+        }
+      ]
+    }
+  ],
+  "relation_proposals": [
+    {
+      "document_id": "character-doyun",
+      "target_document_id": "character-haeju",
+      "base_revision_no": 4,
+      "target_base_revision_no": 3,
+      "relation_key": "related_character",
+      "reverse_relation_key": "related_character",
+      "description": "민해주가 백도윤에게 기억 반환소의 방문 전달을 맡겼다.",
+      "evidence": [
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 697,
+          "end": 771,
+          "quote": "해주는 도윤에게 방문 전달 담당을 맡겼다. 반환 승인과 봉인 해제는 자신이 책임지고, 도윤은 물통의 운반과 수령 확인만 맡기로 했다."
+        }
+      ],
+      "operation": "ADD"
+    },
+    {
+      "document_id": "chapter-06",
+      "target_document_id": "new:CHARACTER:강연오",
+      "base_revision_no": 1,
+      "target_base_revision_no": null,
+      "relation_key": "related_character",
+      "reverse_relation_key": "related_manuscript",
+      "description": "6화에서 백도윤의 첫 방문 전달 수령인으로 등장한다.",
+      "evidence": [
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 875,
+          "end": 926,
+          "quote": "첫 목적지는 북쪽 언덕의 열아홉 번째 집이었다. 수령인은 강연오, 직업은 전직 등대 수리공."
+        }
+      ],
+      "operation": "ADD"
+    }
+  ],
+  "new_document_proposals": [
+    {
+      "candidate_id": "new:CHARACTER:강연오",
+      "folder_code": "CHARACTER",
+      "name": "강연오",
+      "body_text": "강연오는 전직 등대 수리공이다. 번지가 없는 창고에 임시로 거주한다. 백도윤의 첫 방문 전달 수령인이다. 한 달 전 반환 신청을 했으나 신청한 사실까지 잊었다. 딸은 사망했고 살아 있을 때의 목소리를 떠올리지 못했다. 반환소에서 신청서를 확인하고 자신의 손으로 날짜를 쓴 뒤 기억 반환을 받았다. 되찾은 것은 딸이 가사를 틀리게 부르던 노래 한 소절이며, 정확한 가사는 여전히 기억나지 않는다.",
+      "evidence": [
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 875,
+          "end": 926,
+          "quote": "첫 목적지는 북쪽 언덕의 열아홉 번째 집이었다. 수령인은 강연오, 직업은 전직 등대 수리공."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 2490,
+          "end": 2657,
+          "quote": "반환소에서 해주는 신청서를 펼쳤다. 서명은 강연오 자신의 것이었다. 그는 한 달 전 기억세 검수관을 만나고 나온 뒤 반환 신청을 했지만, 신청했던 사실까지 잊어버렸다고 적어 두었다. 해주는 종이를 그에게 건네며 서명만으로 지금의 동의를 대신할 수는 없다고 말했다. 원한다면 신청을 취소할 수 있었다."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 3033,
+          "end": 3208,
+          "quote": "강연오는 종이의 접힌 모서리를 펴고 한참 읽었다. 신청 이유는 짧았다. 딸이 죽었다는 사실은 아는데 살아 있을 때의 목소리가 떠오르지 않는다는 내용이었다. 남자는 종이를 내려놓고 창밖을 보았다. 서하는 그가 울기를 기다리지 않았다. 사람의 슬픔이 다른 사람이 이해할 수 있는 표정으로 나타나야 하는 것은 아니었다."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 3600,
+          "end": 3770,
+          "quote": "한 시간이 지나 강연오가 나왔다. 그는 어깨를 조금 펴고 있었다. 무엇을 되찾았느냐는 질문에는 노래 한 소절이라고만 답했다. 어릴 때 딸이 가사를 틀리게 부르던 부분이었다. 정확한 가사는 여전히 기억나지 않는다고 했다. 해주는 잘못된 가사를 바로잡지 않았다. 그에게 돌아온 것은 노래책의 문장이 아니었다."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 1538,
+          "end": 1709,
+          "quote": "계단 옆에서 채소를 다듬던 여자가 강연오를 안다고 했다. 그는 아래쪽 창고로 옮겨 살고 있었지만 그 창고에는 번지가 없었다. 서하가 위치를 물어 지도에 점을 찍자 여자는 손을 흔들었다. 거기로 곧장 가면 담장에 막힌다고 했다. 먼저 우물까지 내려가고, 물 긷는 사람들이 밟아 만든 길을 따라 올라가야 했다."
+        },
+        {
+          "document_id": "chapter-06",
+          "revision_no": 1,
+          "start": 3263,
+          "end": 3414,
+          "quote": "그는 다시 봉인을 확인하고 이번에는 자신의 손으로 신청서 아래에 날짜를 썼다. 해주가 작은 물통을 준비했다. 도윤은 운반 상자를 옆방으로 가져갔다. 이제부터는 그의 일이 아니었다. 그는 닫힌 문 바깥에 의자를 놓고 기다렸다. 기다림에도 책임의 끝을 지키는 방법이 있었다."
+        }
+      ]
+    }
+  ]
+}

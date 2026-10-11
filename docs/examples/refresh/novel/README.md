@@ -28,6 +28,11 @@ Content와 합의된 운영 S3 JSON Schema는 아니다.
 
 ## 실행
 
+[기존 설정 Markdown 8개](../../novel/the-thirteenth-bell/settings/README.md)를 직접 읽는
+`--suite novel-settings` 평가도 제공한다. 수정 전 5화까지의 기준으로 기존 설정을
+보존하며, 현재 v2 후보 계약으로 강연오 생성과 연결도 비교한다. 이 문서의 `novel`
+재생 결과와 분리한 suite이며 실제 모델 품질은 별도 live 실행과 사람 검토가 필요하다.
+
 저장소 루트에서 실행한다. 새 출력 디렉터리를 지정해야 하며 키는 필요 없다.
 기존 작은 회귀 자료는 `--suite basic`으로 유지하고, 소설 평가는 `--suite novel`을 선택한다.
 

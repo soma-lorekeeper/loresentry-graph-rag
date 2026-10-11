@@ -53,7 +53,9 @@ def test_new_only_candidate_is_proposed_and_strict_parser_accepts_it():
     candidate = replace(case.expected, relation_proposals=())
     raw = asdict(candidate)
     raw.pop("usage")
-    parsed = parse_candidate(json.dumps(raw), Usage(1))
+    parsed = parse_candidate(
+        json.dumps(raw), Usage(1), schema_version="refresh-candidate-v2"
+    )
     result = rules.validate_candidate(snapshot, parsed, model_input)
     assert result.outcome == Outcome.PROPOSED
     assert result.new_document_proposals == candidate.new_document_proposals

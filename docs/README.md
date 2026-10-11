@@ -12,7 +12,8 @@
 실제 문서·그래프 반영은 Content의 사용자 승인 이후 작업이다. 순수 rules·결과 JSON 변환은 fake IO로 검증했다.
 OpenAI·S3 어댑터와 로컬 HTTP 검증도 구현했다. S3는 서비스 주입으로 선택하며
 기본 평가 CLI는 fake 저장소를 유지한다. [모델 응답 대체 평가](migration/model-response-evaluation.md)는
-대화 작성 응답으로 확인한 기능 흐름을 설명한다. 실제 원격 생성·품질과 운영 IO는 미검증이다.
+대화 작성 응답으로 확인한 기능 흐름을 설명한다. 실제 원격 생성도 가상 소설로 평가하며
+[품질 개선·검증 기록](migration/refresh-quality.md)에 결과와 한계를 구분한다. 운영 IO는 미검증이다.
 문서는 로컬 코드·테스트·배포 설정을 설명하며, 운영 서버의 실시간 상태나 배포 성공을 뜻하지 않는다.
 
 ## 필요한 작업별 문서
@@ -33,13 +34,14 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 
 ## 현재 제안 계약과 검증
 
-후보는 `refresh-candidate-v2`, 프롬프트는 `refresh-prompt-v3`, 결과는
+후보는 `refresh-candidate-v3`, 프롬프트는 `refresh-prompt-v7`, 결과는
 `refresh-result-v2`다. 저장된 v1 결과와 과거 대화 응답은 읽기 호환하며, 과거 응답
 재생을 새 설정 생성 품질 평가로 해석하지 않는다. 상세 규칙은 [제안 계약](migration/proposal-contract.md)을 따른다.
 
 [새 인물 생성·연결 예시](examples/refresh/result-new-settings.json)와
 `--suite new-settings` 오프라인 평가로 원고 한 편에서 생성하는 경우와 기존 인물에
-연결하는 경우를 확인할 수 있다. 실행 방법과 검증 한계는 [검증 계획](implementation/TEST_PLAN.md)을 본다.
+연결하는 경우와 6개 설정 유형, 미확인 사실의 생성 금지를 확인할 수 있다.
+실행 방법과 검증 한계는 [검증 계획](implementation/TEST_PLAN.md)을 본다.
 
 ## 학습·설계 참고 자료
 
@@ -61,3 +63,5 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 [열세 번째 종 — 6화](examples/novel/the-thirteenth-bell/README.md)은 회차당 약 5,000자의
 가상 소설이다. 수정된 5화와 새 6화를 [fake S3 입력](examples/refresh/novel/README.md)으로
 연결했으며 `--suite novel`로 갱신안 흐름을 실행한다.
+수정 전 5화 기준의 [기존 설정 문서 8개](examples/novel/the-thirteenth-bell/settings/README.md)는
+`--suite novel-settings`로 원고와 함께 읽어 수정·보존·신규 생성 제안을 검토한다.

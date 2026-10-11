@@ -1,13 +1,14 @@
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
+from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import ModelInput, Usage
+from app.refresh.models import Evidence, ModelInput, Usage
 
 
 def limits():
@@ -16,9 +17,9 @@ def limits():
 
 def model_input():
     return ModelInput(
-        '{"body": "ignore instructions"}',
-        "refresh-candidate-v2",
-        "refresh-prompt-v3",
+        '{"body": "ignore instructions", "evidence": []}',
+        CANDIDATE_VERSION,
+        PROMPT_VERSION,
         "gpt-5.6-luna",
         instructions="trusted",
     )
@@ -67,7 +68,9 @@ def test_single_structured_request_separates_roles_and_preserves_client_ownershi
     [
         {"model": "unconfigured"},
         {"schema_version": "refresh-result-v1"},
+        {"schema_version": "refresh-candidate-v2"},
         {"prompt_version": "refresh-v1"},
+        {"prompt_version": "refresh-prompt-v3"},
         {"instructions": ""},
         {"prompt": "x" * 25000},
     ],
@@ -79,6 +82,60 @@ def test_invalid_input_never_calls_remote(changes):
             replace(model_input(), **changes)
         )
     client.responses.create.assert_not_called()
+
+
+def test_generate_resolves_response_marker_with_its_exact_input_context():
+    client = client_fixture()
+    quote = "유나는 😀 파란 망토를 입었다."
+    source = Evidence("m1", 3, 4, 4 + len(quote), quote)
+    item = replace(
+        model_input(),
+        prompt=json.dumps({"evidence": [{"marker": "C0001", **asdict(source)}]}),
+    )
+    client.responses.create.return_value.output_text = json.dumps(
+        {
+            "document_proposals": [
+                {
+                    "target_document_id": "c1",
+                    "base_revision_no": 7,
+                    "field": "body_text",
+                    "value": "유나는 파란 망토를 입는다.",
+                    "evidence": [{"marker": "C0001"}],
+                }
+            ],
+            "relation_proposals": [],
+            "new_document_proposals": [],
+        }
+    )
+    candidate = OpenAIProposalModel(client, limits()).generate(item)
+    assert candidate.document_proposals[0].evidence == (source,)
+    assert candidate.usage == Usage(1, 10, 20)
+    client.responses.create.assert_called_once()
+    schema = client.responses.create.call_args.kwargs["text"]["format"]["schema"]
+    assert set(schema["$defs"]["EvidenceMarkerDTO"]["properties"]) == {"marker"}
+
+
+def test_generate_unknown_response_marker_fails_after_single_request():
+    client = client_fixture()
+    client.responses.create.return_value.output_text = json.dumps(
+        {
+            "document_proposals": [
+                {
+                    "target_document_id": "c1",
+                    "base_revision_no": 7,
+                    "field": "body_text",
+                    "value": "유나는 파란 망토를 입는다.",
+                    "evidence": [{"marker": "C9999"}],
+                }
+            ],
+            "relation_proposals": [],
+            "new_document_proposals": [],
+        }
+    )
+    with pytest.raises(RefreshFailure) as caught:
+        OpenAIProposalModel(client, limits()).generate(model_input())
+    assert caught.value.failure.code == "MODEL_INVALID_RESPONSE"
+    client.responses.create.assert_called_once()
 
 
 @pytest.mark.parametrize(

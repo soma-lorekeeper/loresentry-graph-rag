@@ -148,4 +148,121 @@ def test_live_auth_failure_stops_suite_and_records_unknown_cost(tmp_path, monkey
     assert record["sdk_version"] == "3.24.0"
     assert record["usage"] is None
     assert record["failure"]["code"] == "MODEL_AUTH_FAILED"
+    markdown = (target / "report.md").read_text()
+    assert "실행 실패" in markdown
+    assert "미확인 | 미확인" in markdown
+    assert "invalid_api_key" not in markdown
     assert not (target / "relation.json").exists()
+
+
+@pytest.mark.parametrize("name", ["document", "relation", "both"])
+def test_empty_model_fails_required_changes_and_matches_markdown(
+    name, tmp_path, monkeypatch
+):
+    import scripts.evaluate_refresh as cli
+    from app.refresh.models import ModelCandidate
+    from evaluation.cases import evaluation_outcome
+    from evaluation.markdown import status
+
+    class EmptyModel:
+        def generate(self, model_input):
+            return ModelCandidate(())
+
+    original_assemble = cli.assemble
+
+    def assemble_empty(case, model, budget, recorder):
+        return original_assemble(case, EmptyModel(), budget, recorder)
+
+    monkeypatch.setattr(cli, "assemble", assemble_empty)
+    output = tmp_path / name
+    assert main(arguments(output) + ["--case", name]) == 1
+    report = json.loads((output / f"{name}.json").read_text())
+    assert report["result"]["outcome"] == "NO_CHANGE"
+    assert evaluation_outcome(report) == "failed"
+    assert status(report) == "검사 불일치"
+    assert "검사 불일치" in (output / "report.md").read_text()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("required_content_preserved", False),
+        ("outdated_content_removed", False),
+        ("preserved_content", False),
+        ("expected_relations", False),
+        ("unexpected_targets", ["unexpected"]),
+        ("new_setting_content_valid", False),
+    ],
+)
+def test_cli_fails_every_required_content_check(field, value, tmp_path, monkeypatch):
+    import scripts.evaluate_refresh as cli
+
+    original_run = cli.run_case
+
+    def failed_assessment(*args, **kwargs):
+        result, assessment = original_run(*args, **kwargs)
+        assessment[field] = value
+        return result, assessment
+
+    monkeypatch.setattr(cli, "run_case", failed_assessment)
+    output = tmp_path / field
+    assert main(arguments(output) + ["--case", "document"]) == 1
+    assert "검사 불일치" in (output / "report.md").read_text()
+
+
+@pytest.mark.parametrize(
+    "classification,code", [("allowed", 0), ("forbidden", 1), ("unreviewed", 2)]
+)
+def test_cli_and_markdown_distinguish_extra_creation_review(
+    classification, code, tmp_path, monkeypatch, capsys
+):
+    from dataclasses import replace
+
+    import scripts.evaluate_refresh as cli
+    from evaluation.cases import new_setting_cases
+    from evaluation.markdown import status
+
+    case = new_setting_cases("gpt-5.6-luna", "test")[0]
+    if classification != "unreviewed":
+        case = replace(
+            case, **{f"{classification}_new_settings": (("LOCATION", "항구"),)}
+        )
+    extra = replace(
+        case.expected.new_document_proposals[0],
+        candidate_id="new:LOCATION:항구",
+        folder_code="LOCATION",
+        name="항구",
+        body_text="민수가 경비병으로 일하는 항구다.",
+    )
+
+    class ExtraCreationModel:
+        def generate(self, model_input):
+            return replace(
+                case.expected,
+                new_document_proposals=case.expected.new_document_proposals + (extra,),
+            )
+
+    original_assemble = cli.assemble
+
+    def assemble_extra(case, model, budget, recorder):
+        return original_assemble(case, ExtraCreationModel(), budget, recorder)
+
+    monkeypatch.setattr(cli, "assemble", assemble_extra)
+    monkeypatch.setattr(cli, "new_setting_cases", lambda model, trial: (case,))
+    output = tmp_path / classification
+    assert main(arguments(output) + ["--suite", "new-settings"]) == code
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["failed"] == (classification == "forbidden")
+    assert summary["review_required"] == (classification == "unreviewed")
+    report = json.loads((output / f"{case.name}.json").read_text())
+    expected_status = {
+        "allowed": "자동 검사 통과",
+        "forbidden": "검사 불일치",
+        "unreviewed": "검토 필요",
+    }[classification]
+    assert status(report) == expected_status
+    text = (output / "report.md").read_text()
+    assert expected_status in text
+    if classification == "unreviewed":
+        assert "기준에 등록되지 않은 신규 설정 | 검토 필요: LOCATION:항구" in text
+    assert "근거 E" not in text and "E0001" not in text

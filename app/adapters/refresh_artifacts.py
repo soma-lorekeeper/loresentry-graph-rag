@@ -27,8 +27,10 @@ from app.adapters.refresh_schema import (
     InputObject,
     RequestObject,
     TypedResult,
+    context_bytes,
     fingerprint,
     json_bytes,
+    omit_default_discovery,
 )
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import ArtifactRef, Failure, InputSnapshot
@@ -203,7 +205,9 @@ class S3RefreshArtifacts:
         expected = RequestObject(schema_version="refresh-request-v1", request=request)
         ref = self._ref(request, "request")
         if create:
-            self._put(ref, json_bytes(expected.model_dump(mode="json")))
+            value = expected.model_dump(mode="json")
+            omit_default_discovery(value["request"])
+            self._put(ref, json_bytes(value))
             return True
         body = self._read(ref, optional=True)
         if body is None:
@@ -290,8 +294,7 @@ class S3RefreshArtifacts:
     def save_context(self, snapshot):
         request = snapshot.request
         self._validate_context(request, snapshot)
-        value = ContextObject(schema_version="refresh-context-v1", snapshot=snapshot)
-        body = json_bytes(value.model_dump(mode="json"))
+        body = context_bytes(snapshot)
         saved = self._read(self._ref(request, "context"), optional=True)
         if saved is not None:
             if saved != body:

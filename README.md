@@ -35,11 +35,18 @@ context, coordinates multiple target calls, and validates existing-document upda
 proposals. Manuscript bodies remain read-only. New setting candidates use temporary
 IDs so relations can reference them before Content approval. Results serialize to JSON; completion values carry the result location.
 The OpenAI Responses adapter and local HTTP integration are implemented. Conversation-authored
-responses verify the refresh flow; live generation remains unverified after an authentication
-failure. A real [S3 artifact adapter](docs/implementation/S3_ARTIFACTS.md) is available through
+responses verify the refresh flow. Real OpenAI calls are also evaluated against synthetic
+novel fixtures; see [refresh quality changes and validation](docs/migration/refresh-quality.md)
+for measured results and limits. A real [S3 artifact adapter](docs/implementation/S3_ARTIFACTS.md) is available through
 service injection; the evaluation CLI still uses fake stores. HTTP/Kafka refresh entry points
 are not implemented. See
 [OpenAI migration results](docs/migration/openai-adapter.md).
+
+Each evaluation run also writes `report.md` with proposal diffs,
+check results, latency, and known token usage. To render existing evaluation JSON
+without model calls, run `.venv/bin/python -m scripts.report_refresh .evaluation/live-2`
+from this repository, replacing the directory with your evaluation output.
+See [report usage and limits](docs/migration/openai-adapter.md#markdown으로-결과-검토).
 
 ## Stack
 

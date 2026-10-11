@@ -3,7 +3,7 @@
 from app.refresh import selection as selection_rules
 from app.refresh.context import build_context
 from app.refresh.evidence import make_chunks
-from app.refresh.models import DocumentState
+from app.refresh.models import DocumentState, RelationGenerationScope
 from app.refresh.prompts import build_prompt
 from app.refresh.selection import reject
 from app.refresh.validation import validate_candidate
@@ -38,13 +38,18 @@ class RefreshRules:
 
     def model_inputs(self, snapshot, chunks):
         """대상별로 모든 변경 자료를 함께 제공하고 전체 호출 예산을 사전 검증한다."""
+        separate_discovery = snapshot.request.settings.separate_discovery
+        if type(separate_discovery) is not bool:
+            reject("INVALID_POLICY", "Separate discovery must be a boolean")
         active = {
             d.document_id for d in snapshot.documents if d.state == DocumentState.ACTIVE
         }
         if not active.intersection(snapshot.changed_ids):
             return ()
         groups = tuple((target,) for target in snapshot.target_ids)
-        if not groups:
+        if separate_discovery:
+            groups = ((),) + groups
+        elif not groups:
             groups = ((),)  # 원고 한 편만 있어도 새 설정과 관계를 제안한다.
         if len(groups) > snapshot.request.settings.max_model_calls:
             reject("CALL_BUDGET_EXCEEDED", "Model call budget exceeded")
@@ -55,6 +60,8 @@ class RefreshRules:
                     chunks,
                     group,
                     allow_new_documents=index == 0,
+                    relation_scope=RelationGenerationScope(group, index == 0),
+                    allow_document_updates=not (separate_discovery and index == 0),
                 )
             )
             for index, group in enumerate(groups)

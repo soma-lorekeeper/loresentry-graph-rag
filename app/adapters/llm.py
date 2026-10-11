@@ -123,7 +123,7 @@ class OpenAIProposalModel:
             fail("MODEL_CONNECTION_FAILED", "Model connection failed", True)
         except APIStatusError as error:
             raise RefreshFailure(status_failure(error)) from None
-        return decode_response(response)
+        return decode_response(response, model_input=model_input)
 
 
 def status_failure(error: APIStatusError) -> Failure:
@@ -146,7 +146,9 @@ def status_failure(error: APIStatusError) -> Failure:
     return Failure("MODEL_REQUEST_INVALID", "Model request rejected")
 
 
-def decode_response(response) -> ModelCandidate:
+def decode_response(
+    response, *, model_input: ModelInput | None = None
+) -> ModelCandidate:
     """완료 상태·거절·본문을 검증한 뒤 DTO로 변환한다."""
     if response.status != "completed":
         fail("MODEL_INCOMPLETE", "Model response incomplete")
@@ -160,4 +162,5 @@ def decode_response(response) -> ModelCandidate:
     return parse_candidate(
         response.output_text,
         response_usage(response.usage.model_dump() if response.usage else None),
+        model_input=model_input,
     )
