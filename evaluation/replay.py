@@ -47,6 +47,10 @@ class ResponseReplay:
             ("refresh-candidate-v3", "refresh-prompt-v4"),
             ("refresh-candidate-v3", "refresh-prompt-v5"),
             ("refresh-candidate-v3", "refresh-prompt-v6"),
+            ("refresh-candidate-v3", "refresh-prompt-v7"),
+            ("refresh-candidate-v4", "refresh-prompt-v8"),
+            ("refresh-candidate-v4", "refresh-prompt-v9"),
+            ("refresh-candidate-v4", "refresh-prompt-v10"),
         }:
             # Explicit read compatibility for historical evaluation artifacts;
             # these responses do not validate current generation quality.
@@ -117,7 +121,14 @@ class ResponseReplay:
                 fetched,
             )
             checked = rules.validate_candidate(
-                snapshot, candidate, replace(model_input, relation_scope=None)
+                snapshot,
+                candidate,
+                replace(
+                    model_input,
+                    relation_scope=None,
+                    schema_version=envelope["schema_version"],
+                    prompt_version=envelope["prompt_version"],
+                ),
             )
             if checked.outcome == Outcome.FAILED:
                 raise RefreshFailure(checked.failure)

@@ -60,7 +60,8 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 기본 RefreshRules로 입력 한도·manifest·프로젝트·상태·근거·후보 충돌과 다중 대상 호출을
 검증한다. 소켓을 차단하고 JSON fake 저장소로 출처·결과 왕복·복구를 확인한다.
 기존 ScriptedRules 테스트는 실행 순서·오류 전달 검증으로 별도 유지한다.
-실제 LLM 품질·S3 내구성·Content 인가·Neptune 반영·Kafka 전달 보장은 후속 검증이다.
+다양한 원고의 모델 추출 품질·운영 S3 내구성·Content 인가·Neptune 반영·Kafka 전달 보장은
+후속 검증이다.
 
 ## 모델 호출과 응답 대체
 
@@ -70,7 +71,64 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 버전 불일치·잘못된 원문 위치 거절을 검증한다. 기본 pytest는 원격 API를 호출하지 않는다.
 
 대화 작성 응답 6사례의 실행 결과는 [평가 기록](../migration/model-response-evaluation.md)에 있다.
-실제 API 인증 성공·모델 생성 품질·사용량은 후속 검증으로 남긴다.
+실제 OpenAI 인증 성공·초기 생성 결과·사용량은
+[품질 개선·검증 기록](../migration/refresh-quality.md)에 있다. 그 기록의 v7 실행과 당시
+469개 pytest 통과를 현재 구조화 사실 계약의 검증 결과로 취급하지 않는다.
+
+현재 live 어댑터는 `refresh-prompt-v11` / `refresh-candidate-v5`만 생성하며 엄격한
+응답 스키마와 facts 검증을 적용한다. v1/v2 전체 근거, v3 마커 후보를 읽는 파서와
+v4/p8·p9·p10의 `source:{marker,excerpt}` 후보 재생은 호환성 검사다.
+재생은 입력 fingerprint·대상·허용된 버전 조합을
+대조하며 원본 후보 버전으로 검증한다. 사실이 없는 과거 고정 후보도 이전 계약의 흐름
+확인에만 사용한다. 이 경우 최종 결과에 실제 후보 버전을 남기고 현재 v5 사실 검증을
+통과했다고 보고하지 않는다. live의 필수 facts·fact_ids 검증을 완화하는 경로는 아니다.
+
+## 구조화 사실과 의미 검사
+
+[test_semantic_relations.py](../../tests/refresh/test_semantic_relations.py)는 한 사실에
+한 출처 마커를 선택하고 서버가 전체 quote·revision·구간을 복원하는 계약,
+역할·행동 표현의 quote 포함, statement의 역할 표면 보존,
+명시 제목·이름·별칭과 행위자·수령인 문서 참조의 일치를 검사한다. 모든 제안은 알려진
+비어 있지 않은 `fact_ids`를 참조해야 한다. 관계의 설명·근거는 참조 사실로만 만들고
+다른 주장을 덧붙이지 않는다. 알 수 없는 참조, 잘못된 역할 식별·구간·분류는 거절하며
+유효한 미사용 중간 사실은 최종 결과에 남기지 않는다. 호출 간 사실 ID 정규화와
+공유 참조, 집계 결과·저장 후 복원도 회귀 범위다.
+현행 `source`는 마커만 허용하며 모델의 발췌·인용문·숫자 위치 추가는 거절한다.
+사실 근거 크기는 요청의 `chunk_chars`(기본 1,000자), statement는 500자,
+action·surface는 각각 200자 한도다. v4의 500자 원문 발췌는 명시적인 과거 읽기 경로로 보존한다.
+
+[test_semantic_evaluation.py](../../tests/refresh/test_semantic_evaluation.py)는 등록한
+행동·이름 표현, 문서 참조, 확실성·범위·시점과 사실을 참조하는 제안의 종류·대상을
+비교한다. 사실이 응답에 있다는 것만으로 제안의 의미가 맞다고 판정하지 않는다.
+알려진 역할·상태의 불일치는 실패이며 미등록 표현·추가 사실은 검토 대상으로 남긴다.
+자유 본문의 바꿔 쓴 표현을 자동 실패시키거나, 구조화 기준 일치를 본문 의미 검증
+완료로 표현하지 않는다. `source_entailment`와 자유 본문은 계속 사람 검토 대상이다.
+
+독립 `semantic` 자료는 6사례·계획 호출 16회다. 승인자·운반자·수령인 구분을 이름·
+문장 순서를 바꾸어 확인하고, 일부 반환·미반환, 과거 기록·현재 상태·미래 동의 조건,
+물건별 속성, 익명 담당자의 잘못된 인물 귀속을 점검한다. Linux 호스트의 저장소 루트에서
+새 출력 경로로 실행한다.
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh \
+  --suite semantic --env-file .env.example --max-calls 16 \
+  --trial semantic-check-1 --output .evaluation/semantic-check-1 --repeat-saved
+
+.venv/bin/python -m scripts.evaluate_refresh \
+  --suite semantic --live --env-file .env --max-calls 16 \
+  --trial semantic-live-1 --output .evaluation/semantic-live-1
+```
+
+첫 명령은 고정 후보로 검증·집계·저장·재사용 경로를 확인하며 원격 요청은 없다.
+두 번째는 실제 OpenAI를 최대 16회 호출한다. 예산은 실행 전에 검사하며 자동 재시도하지 않는다.
+두 평가 모두 S3·Content·관계 조회·작업 상태·Kafka는 fake다. 보고서에는 제안별 근거를
+표시하지 않고 결과 JSON에 보존한다. 종료 코드 `0`은 등록된 자동 검사 통과,
+`1`은 실행·규칙·필수 내용·구조화 기준 실패, `2`는 미등록 설정·관계·사실·표현의
+검토 필요다. `0`이어도 원문 의미와 자유 본문에 대한 사람 검토는 남는다.
+
+프롬프트의 판단 예시는 원본 평가 소설의 특정 이름·정답을 복사하지 않은 별도 자료다.
+독립 사례와 이름·순서 변경은 일부 오귀속을 점검하지만 일반적인 소설 추출 품질을
+보증하지 않는다. 최신 실제 호출 결과와 회귀 검사 수는 완료 기록으로 별도 확인한다.
 
 ## 새 설정 생성과 원고 보존
 
@@ -97,10 +155,13 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
   --trial new-settings-v2 --output .evaluation/new-settings-v2 --repeat-saved
 ```
 
-현재 생성 후보는 `refresh-candidate-v3`, 프롬프트는 `refresh-prompt-v7`, 결과는
-`refresh-result-v2`다. 과거 v1 결과 읽기와 v1 후보/v2 프롬프트 응답 재생은 호환 경로이며
-현재 모델 품질 검증과 구분한다. 모델의 출처 마커를 정확한 원문 구간으로 복원하고,
-관계쌍별 소유 호출을 검사한다. 같은 호출 내 설명 충돌과 비소유 관계는 계속 실패한다.
+현재 생성 후보는 `refresh-candidate-v5`, 프롬프트는 `refresh-prompt-v11`, 결과는
+`refresh-result-v3`다. 결과는 facts·fact_ids와 공통 근거 사전을 저장하고 과거 v1/v2
+결과 읽기를 유지한다. 모델의 출처 마커를 전체 원문 구간으로 복원하고,
+관계쌍별 소유 호출을 검사한다. 기본 `separate_discovery=False`는 대상별 호출을 유지하고
+`True`는 기존 수정이 금지된 탐색 1회와 대상 수정 N회로 분리한다. 같은 호출 내 설명
+충돌과 비소유 관계는 계속 실패한다. 상세 계약은
+[갱신안 입력·결과 계약](../migration/proposal-contract.md#근거와-결과-검증)을 따른다.
 [새 생성·연결 예시](../examples/refresh/result-new-settings.json)를 참고한다.
 
 ## S3 어댑터

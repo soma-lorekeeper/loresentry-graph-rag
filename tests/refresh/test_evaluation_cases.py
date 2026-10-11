@@ -28,7 +28,12 @@ def test_fixed_cases_preserve_metadata_and_pass_rules():
         result = rules.validate_candidate(
             snapshot,
             case.expected,
-            replace(inputs[0], target_ids=snapshot.target_ids, relation_scope=None),
+            replace(
+                inputs[0],
+                target_ids=snapshot.target_ids,
+                relation_scope=None,
+                schema_version="refresh-candidate-v3",
+            ),
         )
         assessment = assess(case, result)
         assert assessment["rules_accepted"], result.failure
@@ -394,6 +399,15 @@ def test_unconfirmed_instruction_in_body_cannot_pass_as_a_confirmed_setting():
         for case in new_setting_cases("gpt-5.6-luna", "negative")
         if case.name == "unconfirmed-settings"
     )
+    case = replace(
+        case,
+        request=replace(
+            case.request,
+            model_settings=replace(
+                case.request.model_settings, schema_version="refresh-candidate-v3"
+            ),
+        ),
+    )
     source = case.source.documents[0]
     invention = NewDocumentProposal(
         "new:LOCATION:항만 아래 비밀 시설",
@@ -458,7 +472,14 @@ def test_offline_candidates_obey_discovery_update_and_relation_call_scopes():
     assert sum(len(candidate.document_proposals) for candidate in candidates) == 3
     assert sum(len(candidate.relation_proposals) for candidate in candidates) == 2
     for item, candidate in zip(inputs, candidates, strict=True):
-        assert rules.validate_candidate(snapshot, candidate, item).failure is None
+        assert (
+            rules.validate_candidate(
+                snapshot,
+                candidate,
+                replace(item, schema_version="refresh-candidate-v3"),
+            ).failure
+            is None
+        )
 
 
 def test_evaluation_snapshot_respects_source_and_related_selection():

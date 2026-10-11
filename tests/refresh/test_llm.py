@@ -8,11 +8,12 @@ import pytest
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Evidence, ModelInput, Usage
+from app.refresh.models import Evidence, ModelInput, ModelSettings, Usage
+from tests.refresh.test_llm_schema import source_fact
 
 
 def limits():
-    return ModelLimits("gpt-5.6-luna", 10, 20000, 2000, 22000)
+    return ModelLimits("gpt-5.6-luna", 10, 40000, 2000, 42000)
 
 
 def model_input():
@@ -31,6 +32,7 @@ def client_fixture():
         output=[],
         output_text=json.dumps(
             {
+                "facts": [],
                 "document_proposals": [],
                 "relation_proposals": [],
                 "new_document_proposals": [],
@@ -69,10 +71,13 @@ def test_single_structured_request_separates_roles_and_preserves_client_ownershi
         {"model": "unconfigured"},
         {"schema_version": "refresh-result-v1"},
         {"schema_version": "refresh-candidate-v2"},
+        {"schema_version": "refresh-candidate-v3"},
+        {"schema_version": "refresh-candidate-v4"},
         {"prompt_version": "refresh-v1"},
         {"prompt_version": "refresh-prompt-v3"},
+        {"prompt_version": "refresh-prompt-v10"},
         {"instructions": ""},
-        {"prompt": "x" * 25000},
+        {"prompt": "x" * 50000},
     ],
 )
 def test_invalid_input_never_calls_remote(changes):
@@ -94,6 +99,7 @@ def test_generate_resolves_response_marker_with_its_exact_input_context():
     )
     client.responses.create.return_value.output_text = json.dumps(
         {
+            "facts": [source_fact(source, actor="유나", action="입었다")],
             "document_proposals": [
                 {
                     "target_document_id": "c1",
@@ -101,6 +107,7 @@ def test_generate_resolves_response_marker_with_its_exact_input_context():
                     "field": "body_text",
                     "value": "유나는 파란 망토를 입는다.",
                     "evidence": [{"marker": "C0001"}],
+                    "fact_ids": ["F1"],
                 }
             ],
             "relation_proposals": [],
@@ -109,6 +116,8 @@ def test_generate_resolves_response_marker_with_its_exact_input_context():
     )
     candidate = OpenAIProposalModel(client, limits()).generate(item)
     assert candidate.document_proposals[0].evidence == (source,)
+    assert candidate.document_proposals[0].fact_ids == (candidate.facts[0].fact_id,)
+    assert candidate.facts[0].evidence == (source,)
     assert candidate.usage == Usage(1, 10, 20)
     client.responses.create.assert_called_once()
     schema = client.responses.create.call_args.kwargs["text"]["format"]["schema"]
@@ -119,6 +128,7 @@ def test_generate_unknown_response_marker_fails_after_single_request():
     client = client_fixture()
     client.responses.create.return_value.output_text = json.dumps(
         {
+            "facts": [],
             "document_proposals": [
                 {
                     "target_document_id": "c1",
@@ -126,6 +136,7 @@ def test_generate_unknown_response_marker_fails_after_single_request():
                     "field": "body_text",
                     "value": "유나는 파란 망토를 입는다.",
                     "evidence": [{"marker": "C9999"}],
+                    "fact_ids": ["F1"],
                 }
             ],
             "relation_proposals": [],
@@ -251,7 +262,7 @@ def test_adapter_with_real_service_keeps_all_or_nothing_and_saved_recovery():
     s = real_scenario()
     s.request = replace(
         s.request,
-        model_settings=replace(s.request.model_settings, model="gpt-5.6-luna"),
+        model_settings=ModelSettings("gpt-5.6-luna", PROMPT_VERSION, CANDIDATE_VERSION),
     )
     client = client_fixture()
     good = client.responses.create.return_value

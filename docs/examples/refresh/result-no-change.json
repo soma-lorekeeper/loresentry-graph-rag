@@ -1,5 +1,5 @@
 {
-  "schema_version": "refresh-result-v2",
+  "schema_version": "refresh-result-v3",
   "request_id": "request",
   "project_id": "project",
   "outcome": "NO_CHANGE",
@@ -64,5 +64,6 @@
     ],
     "observed_graph_version": null
   },
-  "new_document_proposals": []
+  "new_document_proposals": [],
+  "facts": []
 }

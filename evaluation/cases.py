@@ -21,6 +21,11 @@ from app.refresh.models import (
     RelationProposal,
     Usage,
 )
+from evaluation.semantics import (
+    SemanticCriterion,
+    assess_semantic_claims,
+    validate_semantic_criteria,
+)
 
 
 @dataclass(frozen=True)
@@ -43,9 +48,11 @@ class EvaluationCase:
     new_forbidden_words: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     allowed_relations: tuple[RelationProposal, ...] = ()
     acceptable_new_names: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    semantic_criteria: tuple[SemanticCriterion, ...] = ()
 
     def __post_init__(self):
         new_name_aliases(self.acceptable_new_names)
+        validate_semantic_criteria(self.semantic_criteria)
 
 
 CHECKS = {
@@ -62,6 +69,7 @@ CHECKS = {
     "preserved_content": "기존 설정 내용 보존",
     "expected_relations": "필수 관계 충족",
     "missing_relations": "관계 누락 없음",
+    "semantic_claim_mismatches": "구조화 사실 기준 불일치 없음",
 }
 LIST_CHECKS = {
     "missing_targets",
@@ -69,10 +77,12 @@ LIST_CHECKS = {
     "missing_new_settings",
     "forbidden_new_settings",
     "missing_relations",
+    "semantic_claim_mismatches",
 }
 REVIEW_CHECKS = {
     "unreviewed_new_settings": "기준에 등록되지 않은 신규 설정",
     "unreviewed_relations": "기준에 등록되지 않은 관계",
+    "unreviewed_semantic_claims": "구조화 사실 의미 미확인",
 }
 
 
@@ -376,7 +386,7 @@ def assess(case: EvaluationCase, result) -> dict:
         for code, name, words in case.new_forbidden_words
     )
 
-    return {
+    assessment = {
         "rules_accepted": result.failure is None,
         "missing_targets": sorted(map(field_label, expected_fields - actual_fields)),
         "unexpected_targets": sorted(
@@ -406,6 +416,17 @@ def assess(case: EvaluationCase, result) -> dict:
         "unreviewed_relations": sorted(map(relation_label, unreviewed_relations)),
         "semantic_invention_review": "manual_review_required",
     }
+    assessment.update(
+        assess_semantic_claims(
+            case.semantic_criteria,
+            result,
+            resolve_expected_id=lambda value: relation_endpoint(
+                value, expected_endpoints
+            ),
+            resolve_actual_id=lambda value: relation_endpoint(value, actual_endpoints),
+        )
+    )
+    return assessment
 
 
 def new_setting_cases(model: str, trial: str) -> tuple[EvaluationCase, ...]:

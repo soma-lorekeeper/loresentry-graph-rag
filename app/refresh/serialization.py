@@ -3,20 +3,30 @@
 from dataclasses import asdict
 
 from app.refresh.evidence import unique_evidence
+from app.refresh.facts import fact_description
 from app.refresh.models import (
     Completion,
     DocumentProposal,
     Evidence,
+    FactEntity,
     Failure,
     JobKey,
     NewDocumentProposal,
     Outcome,
     RefreshResult,
     RelationProposal,
+    SourceFact,
     Usage,
 )
 
-RESULT_SCHEMA_VERSION = "refresh-result-v2"
+RESULT_SCHEMA_VERSION = "refresh-result-v3"
+_CANDIDATE_SCHEMAS = {
+    "refresh-candidate-v1",
+    "refresh-candidate-v2",
+    "refresh-candidate-v3",
+    "refresh-candidate-v4",
+    "refresh-candidate-v5",
+}
 
 
 def result_to_payload(request, result, snapshot=None):
@@ -30,7 +40,8 @@ def result_to_payload(request, result, snapshot=None):
     _check_outcome(result)
     evidence = unique_evidence(
         e
-        for p in result.document_proposals
+        for p in result.facts
+        + result.document_proposals
         + result.relation_proposals
         + result.new_document_proposals
         for e in p.evidence
@@ -54,6 +65,7 @@ def result_to_payload(request, result, snapshot=None):
         "new_document_proposals": [
             proposal_payload(p) for p in result.new_document_proposals
         ],
+        "facts": [proposal_payload(fact) for fact in result.facts],
         "sources": [
             {
                 "document_id": d.document_id,
@@ -72,6 +84,11 @@ def result_to_payload(request, result, snapshot=None):
             "model": request.model_settings.model,
             "prompt_version": result.prompt_version,
             "schema_version": request.model_settings.schema_version,
+            **(
+                {"candidate_schema_version": result.candidate_schema_version}
+                if result.candidate_schema_version is not None
+                else {}
+            ),
             "settings": {
                 key: value
                 for key, value in asdict(request.settings).items()
@@ -88,7 +105,7 @@ def result_to_payload(request, result, snapshot=None):
 
 
 def result_from_payload(payload):
-    """저장된 v1 결과의 계산 값을 복원한다. 소비자별 메타데이터는 원본 JSON에 보존한다.
+    """저장된 v1~v3 결과를 복원한다. 소비자별 메타데이터는 원본 JSON에 보존한다.
 
     외부 모델 응답 파서가 아니다. 저장 객체의 무결성·프로젝트 권한 검사는 어댑터가
     수행한다. 알려진 필드와 결과 상태·근거 참조가 깨졌으면 ValueError를 발생시킨다.
@@ -96,6 +113,7 @@ def result_from_payload(payload):
     try:
         if payload["schema_version"] not in {
             RESULT_SCHEMA_VERSION,
+            "refresh-result-v2",
             "refresh-result-v1",
         }:
             raise ValueError("Unsupported result schema")
@@ -111,13 +129,35 @@ def result_from_payload(payload):
             result = []
             for raw in values:
                 item = dict(raw)
+                if (
+                    payload["schema_version"] == RESULT_SCHEMA_VERSION
+                    and cls is not SourceFact
+                ):
+                    refs = item.get("fact_ids")
+                    if (
+                        not isinstance(refs, list)
+                        or not all(isinstance(key, str) for key in refs)
+                        or len(refs) != len(set(refs))
+                    ):
+                        raise ValueError("Stored proposal requires unique fact_ids")
                 item["evidence"] = tuple(
                     evidence[key] for key in item.pop("evidence_refs")
                 )
+                if "fact_ids" in item:
+                    item["fact_ids"] = tuple(item["fact_ids"])
+                if cls is SourceFact:
+                    for role in ("actor", "recipient", "object"):
+                        if item[role] is not None:
+                            item[role] = FactEntity(**item[role])
                 result.append(cls(**item))
             return tuple(result)
 
         execution = payload["execution"]
+        if "candidate_schema_version" in execution and (
+            not isinstance(execution["candidate_schema_version"], str)
+            or execution["candidate_schema_version"] not in _CANDIDATE_SCHEMAS
+        ):
+            raise ValueError("Unsupported stored candidate schema")
         result = RefreshResult(
             JobKey(
                 payload["project_id"],
@@ -132,25 +172,76 @@ def result_from_payload(payload):
             proposals(payload["relation_proposals"], RelationProposal),
             proposals(
                 payload["new_document_proposals"]
-                if payload["schema_version"] == RESULT_SCHEMA_VERSION
+                if payload["schema_version"] != "refresh-result-v1"
                 else [],
                 NewDocumentProposal,
             ),
+            proposals(payload["facts"], SourceFact)
+            if payload["schema_version"] == RESULT_SCHEMA_VERSION
+            else (),
+            execution.get("candidate_schema_version"),
         )
         _check_outcome(result)
+        if (
+            payload["schema_version"] == RESULT_SCHEMA_VERSION
+            and execution.get("candidate_schema_version", execution["schema_version"])
+            in {"refresh-candidate-v4", "refresh-candidate-v5"}
+            and any(
+                not p.fact_ids
+                for p in result.document_proposals
+                + result.relation_proposals
+                + result.new_document_proposals
+            )
+        ):
+            raise ValueError("Current stored proposals require structured facts")
         return result
     except (KeyError, TypeError) as error:
         raise ValueError("Malformed stored result") from error
 
 
 def _check_outcome(result):
+    if result.candidate_schema_version is not None and (
+        not isinstance(result.candidate_schema_version, str)
+        or result.candidate_schema_version not in _CANDIDATE_SCHEMAS
+    ):
+        raise ValueError("Unsupported stored candidate schema")
+    facts = {fact.fact_id: fact for fact in result.facts}
+    if len(facts) != len(result.facts):
+        raise ValueError("Duplicate stored fact identifier")
+    used = set()
+    for proposal in (
+        result.document_proposals
+        + result.new_document_proposals
+        + result.relation_proposals
+    ):
+        if (
+            result.candidate_schema_version
+            in {"refresh-candidate-v4", "refresh-candidate-v5"}
+            and not proposal.fact_ids
+        ):
+            raise ValueError("Current stored proposals require structured facts")
+        if any(key not in facts for key in proposal.fact_ids):
+            raise ValueError("Unknown stored fact reference")
+        used.update(proposal.fact_ids)
+    if used != set(facts):
+        raise ValueError("Unreferenced stored fact")
+    for proposal in result.relation_proposals:
+        if proposal.fact_ids and (
+            proposal.description
+            != fact_description(facts[key] for key in proposal.fact_ids)
+            or unique_evidence(proposal.evidence)
+            != unique_evidence(
+                e for key in proposal.fact_ids for e in facts[key].evidence
+            )
+        ):
+            raise ValueError("Stored relation differs from facts")
     has_proposals = bool(
         result.document_proposals
         or result.relation_proposals
         or result.new_document_proposals
     )
     if result.outcome == Outcome.FAILED:
-        if has_proposals or result.failure is None:
+        if has_proposals or result.facts or result.failure is None:
             raise ValueError("Failed result must have error and no proposals")
     elif (
         result.failure is not None

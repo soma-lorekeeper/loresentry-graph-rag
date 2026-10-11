@@ -1,5 +1,5 @@
 {
-  "schema_version": "refresh-result-v2",
+  "schema_version": "refresh-result-v3",
   "request_id": "example-new-character-linked",
   "project_id": "evaluation",
   "outcome": "PROPOSED",
@@ -16,7 +16,8 @@
       "operation": "ADD",
       "evidence_refs": [
         "E0001"
-      ]
+      ],
+      "fact_ids": []
     }
   ],
   "new_document_proposals": [
@@ -27,7 +28,8 @@
       "body_text": "민수는 유나의 동생이다.",
       "evidence_refs": [
         "E0001"
-      ]
+      ],
+      "fact_ids": []
     }
   ],
   "sources": [
@@ -83,5 +85,6 @@
       "c1"
     ],
     "observed_graph_version": null
-  }
+  },
+  "facts": []
 }

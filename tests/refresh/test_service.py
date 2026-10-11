@@ -58,6 +58,13 @@ def test_no_change_is_explicit_in_result_and_completion():
 
 def test_default_rules_validate_and_publish_a_real_proposal():
     s = scenario()
+    # Exercise the historical factless fixture under its explicit read contract.
+    s.request = replace(
+        s.request,
+        model_settings=replace(
+            s.request.model_settings, schema_version="refresh-candidate-v3"
+        ),
+    )
     done = s.service(use_stub=False).run(s.request, "execution-1")
     assert done.outcome == Outcome.PROPOSED
     assert s.jobs.load(s.request).state == JobState.COMPLETED

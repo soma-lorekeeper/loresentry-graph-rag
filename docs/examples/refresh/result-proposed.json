@@ -6,6 +6,7 @@
         "E0001",
         "E0002"
       ],
+      "fact_ids": [],
       "field": "body_text",
       "target_document_id": "c1",
       "value": "유나는 파란 망토를 입고 은색 검을 든다."
@@ -15,6 +16,7 @@
       "evidence_refs": [
         "E0002"
       ],
+      "fact_ids": [],
       "field": "body_text",
       "target_document_id": "i1",
       "value": "검은 은색이다."
@@ -40,6 +42,7 @@
     }
   ],
   "execution": {
+    "candidate_schema_version": "refresh-candidate-v3",
     "changed_ids": [
       "m1",
       "m2"
@@ -70,6 +73,7 @@
       "output_tokens": 100
     }
   },
+  "facts": [],
   "new_document_proposals": [],
   "outcome": "PROPOSED",
   "project_id": "project",
@@ -82,6 +86,7 @@
         "E0001",
         "E0002"
       ],
+      "fact_ids": [],
       "operation": "ADD",
       "relation_key": "related_item",
       "reverse_relation_key": "related_character",
@@ -90,7 +95,7 @@
     }
   ],
   "request_id": "request",
-  "schema_version": "refresh-result-v2",
+  "schema_version": "refresh-result-v3",
   "sources": [
     {
       "document_id": "c1",

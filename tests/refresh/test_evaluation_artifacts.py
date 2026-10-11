@@ -7,8 +7,9 @@ import pytest
 from openai.types.responses import Response
 
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
+from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Failure
+from app.refresh.models import Failure, ModelSettings
 from evaluation.artifacts import AttemptRecorder, RecordingClient
 from evaluation.cases import cases
 from evaluation.runner import CallBudget, assemble, run_case
@@ -16,7 +17,16 @@ from evaluation.runner import CallBudget, assemble, run_case
 
 def setup(tmp_path, text):
     case = cases("gpt-5.6-luna", "test")[0]
-    limits = ModelLimits("gpt-5.6-luna", 10, 20000, 2000, 22000)
+    case = replace(
+        case,
+        request=replace(
+            case.request,
+            model_settings=ModelSettings(
+                "gpt-5.6-luna", PROMPT_VERSION, CANDIDATE_VERSION
+            ),
+        ),
+    )
+    limits = ModelLimits("gpt-5.6-luna", 10, 40000, 2000, 42000)
     recorder = AttemptRecorder(tmp_path, case, limits, True)
     # Use SDK deserialization for the same candidate shape as a real response.
     from tests.integration.test_openai_http import response_payload
@@ -51,7 +61,7 @@ def test_invalid_json_retains_raw_response_usage_and_failure(tmp_path):
 def test_storage_failure_keeps_parsed_candidate_and_trace(tmp_path):
     case, scenario, recorder = setup(
         tmp_path,
-        '{"document_proposals":[],"relation_proposals":[],"new_document_proposals":[]}',
+        '{"facts":[],"document_proposals":[],"relation_proposals":[],"new_document_proposals":[]}',
     )
     scenario.calls.failures["artifacts.save_result"].append(
         RefreshFailure(Failure("STORAGE_TIMEOUT", "timeout", True))

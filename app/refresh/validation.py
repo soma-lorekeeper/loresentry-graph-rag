@@ -5,6 +5,7 @@ from unicodedata import normalize
 
 from app.refresh.errors import RefreshFailure
 from app.refresh.evidence import unique_evidence
+from app.refresh.facts import validate_facts
 from app.refresh.models import (
     DocumentProposal,
     DocumentState,
@@ -93,6 +94,7 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
         evidence = validate_evidence(snapshot, proposal.evidence)
         key = (proposal.target_document_id, proposal.field)
         previous = merged.get(key)
+        fact_ids = proposal.fact_ids
         if previous is not None:
             if previous.value != proposal.value:
                 reject(
@@ -100,7 +102,8 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
                     "Different values for the same target field",
                 )
             evidence = unique_evidence(previous.evidence + evidence)
-        merged[key] = replace(proposal, evidence=evidence)
+            fact_ids = tuple(dict.fromkeys(previous.fact_ids + fact_ids))
+        merged[key] = replace(proposal, evidence=evidence, fact_ids=fact_ids)
     return tuple(
         merged[key]
         for key in sorted(merged)
@@ -185,6 +188,7 @@ def validate_new_document_proposals(snapshot, proposals):
                 "INVALID_EVIDENCE", "New setting requires changed manuscript evidence"
             )
         previous = merged.get(proposal.candidate_id)
+        fact_ids = proposal.fact_ids
         if previous is not None:
             if (previous.folder_code, previous.name, previous.body_text) != (
                 proposal.folder_code,
@@ -196,7 +200,10 @@ def validate_new_document_proposals(snapshot, proposals):
                     "Different content for the same new setting",
                 )
             evidence = unique_evidence(previous.evidence + evidence)
-        merged[proposal.candidate_id] = replace(proposal, evidence=evidence)
+            fact_ids = tuple(dict.fromkeys(previous.fact_ids + fact_ids))
+        merged[proposal.candidate_id] = replace(
+            proposal, evidence=evidence, fact_ids=fact_ids
+        )
         if len(merged) > 20:
             reject("INVALID_NEW_DOCUMENT", "At most 20 new settings per request")
     return tuple(merged[key] for key in sorted(merged))
@@ -324,6 +331,7 @@ def validate_relation_proposals(
                 reverse_relation_key=proposal.relation_key,
             )
         previous = merged.get(key)
+        fact_ids = proposal.fact_ids
         if previous is not None:
             if previous.description != proposal.description:
                 reject(
@@ -331,7 +339,8 @@ def validate_relation_proposals(
                     "Different descriptions for the same new connection",
                 )
             evidence = unique_evidence(previous.evidence + evidence)
-        merged[key] = replace(proposal, evidence=evidence)
+            fact_ids = tuple(dict.fromkeys(previous.fact_ids + fact_ids))
+        merged[key] = replace(proposal, evidence=evidence, fact_ids=fact_ids)
     return tuple(merged[key] for key in sorted(merged))
 
 
@@ -397,6 +406,17 @@ def validate_candidate(snapshot, candidate, model_input):
         new_documents = validate_new_document_proposals(
             snapshot, candidate.new_document_proposals
         )
+        if not isinstance(candidate.relation_proposals, tuple):
+            reject("INVALID_RELATION_PROPOSAL", "Relation proposal tuple required")
+        facts = validate_facts(
+            snapshot,
+            candidate,
+            validate_evidence,
+            required=model_input.schema_version
+            in {"refresh-candidate-v4", "refresh-candidate-v5"},
+            schema_version=model_input.schema_version,
+            aggregate=model_input.relation_scope is None,
+        )
         relations = validate_relation_proposals(
             snapshot, candidate.relation_proposals, new_documents, scope
         )
@@ -410,6 +430,17 @@ def validate_candidate(snapshot, candidate, model_input):
             prompt_version=model_input.prompt_version,
             relation_proposals=relations,
             new_document_proposals=new_documents,
+            facts=tuple(
+                facts[key]
+                for key in sorted(
+                    {
+                        key
+                        for proposal in documents + relations + new_documents
+                        for key in proposal.fact_ids
+                    }
+                )
+            ),
+            candidate_schema_version=model_input.schema_version,
         )
     except RefreshFailure as error:
         return RefreshResult(
@@ -418,4 +449,5 @@ def validate_candidate(snapshot, candidate, model_input):
             usage=usage,
             failure=error.failure,
             prompt_version=model_input.prompt_version,
+            candidate_schema_version=model_input.schema_version,
         )

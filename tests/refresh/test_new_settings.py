@@ -16,6 +16,16 @@ from tests.refresh.test_evaluation_runner import arguments
 
 def fixture(existing=True):
     case = new_setting_cases("gpt-5.6-luna", "test")[int(existing)]
+    # These fixed candidates predate fact annotations; current v4 stays strict.
+    case = replace(
+        case,
+        request=replace(
+            case.request,
+            model_settings=replace(
+                case.request.model_settings, schema_version="refresh-candidate-v3"
+            ),
+        ),
+    )
     rules = RefreshRules()
     snapshot = rules.assemble(
         case.request,
@@ -42,7 +52,7 @@ def test_new_character_with_links_roundtrips_and_preserves_manuscript(existing):
     assert assessment["expected_new_settings"]
     assert budget.used == 1
     payload = json.loads(next(iter(scenario.artifacts.json_results.values())))
-    assert payload["schema_version"] == "refresh-result-v2"
+    assert payload["schema_version"] == "refresh-result-v3"
     assert result_from_payload(payload) == result
     refs = {e["evidence_id"] for e in payload["evidence"]}
     assert set(payload["new_document_proposals"][0]["evidence_refs"]) <= refs
@@ -53,6 +63,10 @@ def test_new_only_candidate_is_proposed_and_strict_parser_accepts_it():
     candidate = replace(case.expected, relation_proposals=())
     raw = asdict(candidate)
     raw.pop("usage")
+    raw.pop("facts")
+    for proposals in raw.values():
+        for proposal in proposals:
+            proposal.pop("fact_ids")
     parsed = parse_candidate(
         json.dumps(raw), Usage(1), schema_version="refresh-candidate-v2"
     )
@@ -155,7 +169,9 @@ def test_existing_name_and_conflicting_new_content_are_rejected():
 def test_v2_parser_requires_creation_list():
     with pytest.raises(RefreshFailure):
         parse_candidate(
-            '{"document_proposals": [], "relation_proposals": []}', Usage(1)
+            '{"document_proposals": [], "relation_proposals": []}',
+            Usage(1),
+            schema_version="refresh-candidate-v2",
         )
 
 

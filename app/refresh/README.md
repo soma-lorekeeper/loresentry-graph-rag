@@ -15,6 +15,7 @@
 | `evidence.py`, `../text/chunking.py` | 원문 구간 분할과 근거 중복 제거 |
 | `context.py`, `prompts.py` | 결정적 출처·문맥·프롬프트 구성과 예산 확인 |
 | `validation.py` | 문서·관계 후보 검증, 중복·충돌·NO_CHANGE 판정 |
+| `facts.py` | 구조화 사실의 짧은 원문·명시 역할 식별·제안 참조 검사와 관계 설명 조립 |
 | `serialization.py` | 결과 JSON과 완료 이벤트 값으로 순수 변환 |
 | `service.py` | IO 순서·다중 호출·저장·발행·복구 조율 |
 

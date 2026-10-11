@@ -11,6 +11,7 @@ from app.refresh.models import (
     InputSnapshot,
     JobKey,
     ModelCandidate,
+    ModelSettings,
     RefreshRequest,
     RelatedDocuments,
     Relation,
@@ -21,7 +22,14 @@ from app.refresh.models import (
 
 def real_example():
     job = JobKey("project", "request", "fixed-input-v1")
-    request = RefreshRequest(job, ArtifactRef("input", "input.json"), ("m1", "m2"))
+    request = RefreshRequest(
+        job,
+        ArtifactRef("input", "input.json"),
+        ("m1", "m2"),
+        model_settings=ModelSettings(
+            "unconfigured", "refresh-prompt-v7", "refresh-candidate-v3"
+        ),
+    )
     documents = (
         DocumentSnapshot(
             "project", "m1", 3, "유나는 파란 망토를 입었다.\n😀 다시 만났다."

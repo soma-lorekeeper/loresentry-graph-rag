@@ -86,6 +86,12 @@ def case_lines(filename, report, attempts):
             pending = report["assessment"].get(key, [])
             if pending:
                 lines.append(f"| {label} | 검토 필요: {inline(', '.join(pending))} |")
+        semantic = report["assessment"].get("semantic_assessment", {})
+        if semantic.get("criteria_count"):
+            lines.append(
+                "\n역할·수령인·범위 검사는 등록된 사실 기준을 비교합니다. "
+                "전체 본문의 의미와 사실 해석은 별도 검토가 필요합니다."
+            )
     lines.extend(
         [
             "### 응답 시간과 사용량",

@@ -201,6 +201,7 @@ class RefreshService:
             )
         usage = Usage()
         documents, relations, new_documents = [], [], []
+        facts = {}
         for model_input in inputs:
             try:
                 candidate = self.model.generate(model_input)
@@ -229,8 +230,34 @@ class RefreshService:
             documents.extend(candidate.document_proposals)
             relations.extend(candidate.relation_proposals)
             new_documents.extend(candidate.new_document_proposals)
+            referenced = {
+                key
+                for proposal in candidate.document_proposals
+                + candidate.relation_proposals
+                + candidate.new_document_proposals
+                for key in proposal.fact_ids
+            }
+            for fact in candidate.facts:
+                if fact.fact_id not in referenced:
+                    continue
+                previous = facts.get(fact.fact_id)
+                if previous is not None and previous != fact:
+                    return RefreshResult(
+                        request.job,
+                        Outcome.FAILED,
+                        usage=usage,
+                        failure=Failure(
+                            "INVALID_FACT", "Conflicting aggregate fact identifier"
+                        ),
+                        prompt_version=model_input.prompt_version,
+                    )
+                facts[fact.fact_id] = fact
         aggregate = ModelCandidate(
-            tuple(documents), usage, tuple(relations), tuple(new_documents)
+            tuple(documents),
+            usage,
+            tuple(relations),
+            tuple(new_documents),
+            tuple(facts[key] for key in sorted(facts)),
         )
         return self.rules.validate_candidate(
             snapshot,

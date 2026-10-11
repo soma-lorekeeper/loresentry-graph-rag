@@ -18,6 +18,7 @@ from evaluation.markdown import write_report
 from evaluation.novel import novel_case, novel_settings_case
 from evaluation.replay import ResponseReplay
 from evaluation.runner import CallBudget, assemble, planned_calls, run_case
+from evaluation.semantic_cases import semantic_cases
 
 
 def environment(path: Path | None) -> dict:
@@ -43,7 +44,7 @@ def main(argv=None) -> int:
     mode.add_argument("--responses-dir", type=Path)
     parser.add_argument(
         "--suite",
-        choices=("basic", "novel", "novel-settings", "new-settings"),
+        choices=("basic", "novel", "novel-settings", "new-settings", "semantic"),
         default="basic",
     )
     parser.add_argument("--env-file", type=Path)
@@ -87,6 +88,8 @@ def main(argv=None) -> int:
             if args.suite == "novel-settings"
             else new_setting_cases(limits.model, args.trial)
             if args.suite == "new-settings"
+            else semantic_cases(limits.model, args.trial)
+            if args.suite == "semantic"
             else cases(limits.model, args.trial)
         )
         if args.selected:

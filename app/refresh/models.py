@@ -6,6 +6,7 @@ frozen 데이터 클래스와 tuple 필드로 스냅샷을 표현한다. 생성�
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 
 class DocumentState(StrEnum):
@@ -85,8 +86,8 @@ class ModelSettings:
     """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
 
     model: str = "unconfigured"
-    prompt_version: str = "refresh-prompt-v7"
-    schema_version: str = "refresh-candidate-v3"
+    prompt_version: str = "refresh-prompt-v11"
+    schema_version: str = "refresh-candidate-v5"
 
 
 @dataclass(frozen=True)
@@ -223,6 +224,30 @@ class Chunk:
 
 
 @dataclass(frozen=True)
+class FactEntity:
+    """원문의 역할 표면과 명시적으로 확인한 문서 참조. 익명 지시는 참조를 비운다."""
+
+    surface: str
+    document_id: str | None
+
+
+@dataclass(frozen=True)
+class SourceFact:
+    """생성에 사용한 개별 사실. 구조화 자체가 원문의 의미적 함의를 보증하지 않는다."""
+
+    fact_id: str
+    actor: FactEntity | None
+    action: str
+    recipient: FactEntity | None
+    object: FactEntity | None
+    certainty: Literal["CONFIRMED", "REPORTED", "PLANNED", "UNKNOWN"]
+    extent: Literal["PARTIAL", "COMPLETE", "UNSPECIFIED"]
+    time: Literal["CURRENT", "PAST", "FUTURE", "UNSPECIFIED"]
+    statement: str
+    evidence: tuple[Evidence, ...]
+
+
+@dataclass(frozen=True)
 class DocumentProposal:
     """기준 revision_no의 문서 필드에 제안하는 값과 근거. 생성만으로 문서를 변경하지 않는다."""
 
@@ -231,6 +256,7 @@ class DocumentProposal:
     field: str
     value: str
     evidence: tuple[Evidence, ...]
+    fact_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -242,6 +268,7 @@ class NewDocumentProposal:
     name: str
     body_text: str
     evidence: tuple[Evidence, ...]
+    fact_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -257,6 +284,7 @@ class RelationProposal:
     description: str
     evidence: tuple[Evidence, ...]
     operation: str = "ADD"
+    fact_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -299,6 +327,7 @@ class ModelCandidate:
     usage: Usage = Usage()
     relation_proposals: tuple[RelationProposal, ...] = ()
     new_document_proposals: tuple[NewDocumentProposal, ...] = ()
+    facts: tuple[SourceFact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -325,6 +354,8 @@ class RefreshResult:
     prompt_version: str | None = None
     relation_proposals: tuple[RelationProposal, ...] = ()
     new_document_proposals: tuple[NewDocumentProposal, ...] = ()
+    facts: tuple[SourceFact, ...] = ()
+    candidate_schema_version: str | None = None
 
 
 @dataclass(frozen=True)

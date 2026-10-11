@@ -82,7 +82,7 @@ class EvaluationModel:
         if self.snapshot is None:
             self.snapshot = evaluation_snapshot(self.case)
         snapshot = self.snapshot
-        return replace(
+        candidate = replace(
             self.case.expected,
             document_proposals=tuple(
                 p
@@ -101,6 +101,40 @@ class EvaluationModel:
                 if relation_in_scope(snapshot, p, model_input.relation_scope)
             ),
         )
+        used = {
+            key
+            for p in candidate.document_proposals
+            + candidate.relation_proposals
+            + candidate.new_document_proposals
+            for key in p.fact_ids
+        }
+        return replace(
+            candidate, facts=tuple(f for f in candidate.facts if f.fact_id in used)
+        )
+
+
+class EvaluationRules(RefreshRules):
+    """명시적인 과거 응답/기준선만 이전 계약으로 검사하며 live 계약은 완화하지 않는다."""
+
+    def __init__(self, model, recorder):
+        self.model, self.recorder = model, recorder
+
+    def validate_candidate(self, snapshot, candidate, model_input):
+        legacy = None
+        if self.model is None and not candidate.facts:
+            legacy = "refresh-candidate-v3"  # old expected-fixture baseline only
+        elif self.recorder is not None:
+            version = self.recorder.current.get("replayed_schema_version")
+            if version in {
+                "refresh-candidate-v1",
+                "refresh-candidate-v2",
+                "refresh-candidate-v3",
+                "refresh-candidate-v4",
+            }:
+                legacy = version
+        if legacy is not None:
+            model_input = replace(model_input, schema_version=legacy)
+        return super().validate_candidate(snapshot, candidate, model_input)
 
 
 def assemble(case: EvaluationCase, model, budget: CallBudget, recorder=None):
@@ -114,6 +148,7 @@ def assemble(case: EvaluationCase, model, budget: CallBudget, recorder=None):
         model=EvaluationModel(case, model, budget, recorder),
         jobs=FakeJobs(calls=calls),
         publisher=FakePublisher(calls),
+        rules=EvaluationRules(model, recorder),
     )
     return SimpleNamespace(service=service, artifacts=artifacts, calls=calls)
 

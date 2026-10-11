@@ -34,6 +34,11 @@ The internal refresh service validates changed documents, builds source-preservi
 context, coordinates multiple target calls, and validates existing-document updates, new setting-document candidates, and relation
 proposals. Manuscript bodies remain read-only. New setting candidates use temporary
 IDs so relations can reference them before Content approval. Results serialize to JSON; completion values carry the result location.
+Current generation uses `refresh-prompt-v11` / `refresh-candidate-v5`, with
+structured facts referenced by every proposal. Each fact selects one source marker;
+the server restores the full original chunk and builds relation descriptions and evidence
+from the referenced facts. Results use `refresh-result-v3`. Historical candidate readers
+and response replay retain older contracts without relaxing current live validation.
 The OpenAI Responses adapter and local HTTP integration are implemented. Conversation-authored
 responses verify the refresh flow. Real OpenAI calls are also evaluated against synthetic
 novel fixtures; see [refresh quality changes and validation](docs/migration/refresh-quality.md)

@@ -13,6 +13,7 @@ from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Evidence, ModelInput, Usage
+from tests.refresh.test_llm_schema import source_fact
 
 pytestmark = pytest.mark.integration
 
@@ -45,6 +46,7 @@ def response_payload():
                         "annotations": [],
                         "text": json.dumps(
                             {
+                                "facts": [],
                                 "document_proposals": [],
                                 "relation_proposals": [],
                                 "new_document_proposals": [],
@@ -143,11 +145,14 @@ def test_sdk_wire_format_usage_and_lifecycle(server):
 @pytest.mark.parametrize("marker", ["C0001", "C9999"])
 def test_sdk_marker_response_resolves_exact_unicode_source_or_fails(server, marker):
     state, url = server
-    quote = "한글 🐈 같은 말."
+    quote = "서하가 한글 🐈 같은 말을 말했다."
     source = Evidence("chapter", 4, 7, 7 + len(quote), quote)
     context = {"evidence": [{"marker": "C0001", **asdict(source)}]}
     state["payload"]["output"][0]["content"][0]["text"] = json.dumps(
         {
+            "facts": [
+                source_fact(source, marker=marker, actor="서하", action="말했다")
+            ],
             "document_proposals": [],
             "relation_proposals": [],
             "new_document_proposals": [
@@ -155,8 +160,9 @@ def test_sdk_marker_response_resolves_exact_unicode_source_or_fails(server, mark
                     "candidate_id": "new:CHARACTER:서하",
                     "folder_code": "CHARACTER",
                     "name": "서하",
-                    "body_text": "서하는 고양이와 함께 왔다.",
+                    "body_text": quote,
                     "evidence": [{"marker": marker}],
+                    "fact_ids": ["F1"],
                 }
             ],
         }
@@ -164,6 +170,10 @@ def test_sdk_marker_response_resolves_exact_unicode_source_or_fails(server, mark
     if marker == "C0001":
         candidate = invoke(url, context=context)
         assert candidate.new_document_proposals[0].evidence == (source,)
+        assert candidate.new_document_proposals[0].fact_ids == (
+            candidate.facts[0].fact_id,
+        )
+        assert candidate.facts[0].evidence == (source,)
         assert candidate.usage == Usage(1, 10, 20)
     else:
         with pytest.raises(RefreshFailure) as caught:

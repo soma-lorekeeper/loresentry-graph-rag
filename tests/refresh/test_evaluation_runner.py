@@ -43,6 +43,37 @@ def test_offline_cli_all_cases_without_network(tmp_path):
         main(arguments(target))
 
 
+def test_semantic_cli_uses_current_contract_without_exposing_fact_refs(
+    tmp_path, capsys
+):
+    target = tmp_path / "semantic"
+    assert (
+        main(
+            arguments(target)
+            + ["--suite", "semantic", "--max-calls", "16", "--repeat-saved"]
+        )
+        == 0
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["cases"] == 6 and summary["calls"] == 16
+    markdown = (target / "report.md").read_text()
+    assert "역할·수령인·범위 검사는 등록된 사실 기준을 비교합니다" in markdown
+    for path in target.glob("*.json"):
+        if "-attempt-" in path.stem:
+            continue
+        report = json.loads(path.read_text())
+        assert report["result"]["execution"]["candidate_schema_version"] == (
+            "refresh-candidate-v5"
+        )
+        semantic = report["assessment"]["semantic_assessment"]
+        assert semantic["structured_criteria"] == "matched"
+        assert semantic["criteria_count"] > 0
+        assert semantic["source_entailment"] == "human_review_pending"
+        assert semantic["free_text_bodies"] == "human_review_pending"
+        assert report["result"]["facts"]
+    assert "evidence_refs" not in markdown and "fact_id" not in markdown
+
+
 @pytest.mark.parametrize("change", [" ", "\n", "다른 문장"])
 def test_assessment_detects_manuscript_changes(change):
     from dataclasses import replace
@@ -223,6 +254,18 @@ def test_cli_and_markdown_distinguish_extra_creation_review(
     from evaluation.markdown import status
 
     case = new_setting_cases("gpt-5.6-luna", "test")[0]
+    # This test supplies an old golden response, rather than a current v4 model.
+    case = replace(
+        case,
+        request=replace(
+            case.request,
+            model_settings=replace(
+                case.request.model_settings,
+                schema_version="refresh-candidate-v3",
+                prompt_version="refresh-prompt-v7",
+            ),
+        ),
+    )
     if classification != "unreviewed":
         case = replace(
             case, **{f"{classification}_new_settings": (("LOCATION", "항구"),)}

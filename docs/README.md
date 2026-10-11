@@ -34,8 +34,9 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 
 ## 현재 제안 계약과 검증
 
-후보는 `refresh-candidate-v3`, 프롬프트는 `refresh-prompt-v7`, 결과는
-`refresh-result-v2`다. 저장된 v1 결과와 과거 대화 응답은 읽기 호환하며, 과거 응답
+후보는 `refresh-candidate-v5`, 프롬프트는 `refresh-prompt-v11`, 결과는
+`refresh-result-v3`다. 생성에 사용한 사실의 역할·시점·확실성과 제안의 `fact_ids`를 기록하며,
+관계 설명은 참조한 사실에서 서버가 조립한다. 저장된 v1/v2 결과와 과거 대화 응답은 읽기 호환하며, 과거 응답
 재생을 새 설정 생성 품질 평가로 해석하지 않는다. 상세 규칙은 [제안 계약](migration/proposal-contract.md)을 따른다.
 
 [새 인물 생성·연결 예시](examples/refresh/result-new-settings.json)와
