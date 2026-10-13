@@ -8,16 +8,19 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from app.adapters.llm_schema import (
     CANDIDATE_VERSION,
-    PROMPT_VERSION,
     candidate_schema,
     parse_candidate,
     response_usage,
 )
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Failure, ModelCandidate, ModelInput
+from app.refresh.models import Failure, ModelCandidate, ModelInput, Usage
+from app.refresh.prompt_versions import SUPPORTED_PROMPT_VERSIONS
 
-# Official model limits verified 2026-10-03; add models explicitly.
-MODEL_CAPABILITIES = {"gpt-5.6-luna": (922000, 128000, 1050000)}
+# Official model limits: GPT-5.6 Luna 2026-10-03, GPT-6 Luna 2026-10-11.
+MODEL_CAPABILITIES = {
+    "gpt-5.6-luna": (922000, 128000, 1050000),
+    "gpt-6-luna": (922000, 128000, 1050000),
+}
 
 
 @dataclass(frozen=True)
@@ -56,9 +59,20 @@ class ModelLimits:
             fail("MODEL_REQUEST_INVALID", "Invalid model limits")
 
 
-def fail(code: str, message: str, retryable: bool = False) -> None:
+def fail(
+    code: str,
+    message: str,
+    retryable: bool = False,
+    *,
+    usage: Usage | None = None,
+    candidate_text: str | None = None,
+) -> None:
     """공급자 원문을 노출하지 않는 실패 값으로 변환한다."""
-    raise RefreshFailure(Failure(code, message, retryable)) from None
+    raise RefreshFailure(
+        Failure(code, message, retryable),
+        usage=usage if usage is not None else Usage(),
+        candidate_text=candidate_text,
+    ) from None
 
 
 class OpenAIProposalModel:
@@ -77,7 +91,7 @@ class OpenAIProposalModel:
         if (
             model_input.model != self.limits.model
             or model_input.schema_version != CANDIDATE_VERSION
-            or model_input.prompt_version != PROMPT_VERSION
+            or model_input.prompt_version not in SUPPORTED_PROMPT_VERSIONS
             or not model_input.instructions.strip()
             or not model_input.prompt.strip()
             or self.client.max_retries != 0
@@ -122,7 +136,7 @@ class OpenAIProposalModel:
         except APIConnectionError:
             fail("MODEL_CONNECTION_FAILED", "Model connection failed", True)
         except APIStatusError as error:
-            raise RefreshFailure(status_failure(error)) from None
+            raise RefreshFailure(status_failure(error), usage=Usage(calls=1)) from None
         return decode_response(response, model_input=model_input)
 
 
@@ -150,17 +164,44 @@ def decode_response(
     response, *, model_input: ModelInput | None = None
 ) -> ModelCandidate:
     """완료 상태·거절·본문을 검증한 뒤 DTO로 변환한다."""
+    candidate_text = response.output_text
+    raw_usage = getattr(response, "usage", None)
+    usage_error = None
+    try:
+        usage = response_usage(raw_usage.model_dump() if raw_usage else None)
+    except RefreshFailure as error:
+        usage_error = error
+        usage = Usage(calls=1)
     if response.status != "completed":
-        fail("MODEL_INCOMPLETE", "Model response incomplete")
+        fail(
+            "MODEL_INCOMPLETE",
+            "Model response incomplete",
+            usage=usage,
+            candidate_text=candidate_text,
+        )
     for item in response.output:
         if item.type == "message" and any(
             part.type == "refusal" for part in item.content
         ):
-            fail("MODEL_REFUSED", "Model refused the request")
-    if not response.output_text or not response.output_text.strip():
-        fail("MODEL_EMPTY_RESPONSE", "Model returned no candidate")
+            fail(
+                "MODEL_REFUSED",
+                "Model refused the request",
+                usage=usage,
+                candidate_text=candidate_text,
+            )
+    if not candidate_text or not candidate_text.strip():
+        fail(
+            "MODEL_EMPTY_RESPONSE",
+            "Model returned no candidate",
+            usage=usage,
+            candidate_text=candidate_text,
+        )
+    if usage_error is not None:
+        raise RefreshFailure(
+            usage_error.failure, usage=usage, candidate_text=candidate_text
+        ) from None
     return parse_candidate(
-        response.output_text,
-        response_usage(response.usage.model_dump() if response.usage else None),
+        candidate_text,
+        usage,
         model_input=model_input,
     )

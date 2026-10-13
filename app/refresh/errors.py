@@ -1,13 +1,23 @@
 """예상 가능한 외부 연동·판단 실패와 구현 미완료를 구분하는 예외."""
 
-from app.refresh.models import Failure
+from app.refresh.models import Failure, Usage, ValidationDiagnostic
 
 
 class RefreshFailure(Exception):
     """실패 코드와 재시도 가능 여부를 Failure 값으로 전달하는 예상 가능한 실패."""
 
-    def __init__(self, failure: Failure):
+    def __init__(
+        self,
+        failure: Failure,
+        *,
+        diagnostics: tuple[ValidationDiagnostic, ...] = (),
+        usage: Usage | None = None,
+        candidate_text: str | None = None,
+    ):
         self.failure = failure
+        self.diagnostics = diagnostics
+        self.usage = usage if usage is not None else Usage()
+        self.candidate_text = candidate_text
         super().__init__(failure.message)
 
 

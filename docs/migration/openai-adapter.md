@@ -56,24 +56,62 @@ S3 결과용 `result_from_payload`를 모델 파서로 재사용하지 않는다
 | 항목 | 구현 값 또는 규칙 |
 |---|---|
 | SDK·DTO | `openai==3.24.0`, `pydantic==2.13.5` |
-| 선택 모델 | `gpt-5.6-luna`. 현재 지원 한도 registry에 명시된 모델만 허용 |
-| 프롬프트·후보 버전 | `refresh-prompt-v11`, `refresh-candidate-v5` |
+| 선택 모델 | 기본 설정은 `gpt-6-luna`. `gpt-5.6-luna`도 지원하며 한도 registry에 명시된 모델만 허용 |
+| 프롬프트·후보 버전 | 기본 `refresh-prompt-v11`, 명시 선택 `refresh-prompt-v12`; 둘 다 `refresh-candidate-v5` |
+| 청크·겹침 | `chunk_chars` 기본 1,000자, `chunk_overlap_chars` 기본 0; `0 <= 겹침 < 청크 크기`인 정수만 허용하며 bool은 거절 |
 | S3 결과 외곽 버전 | `refresh-result-v3`; 저장된 v1/v2 읽기 호환 |
-| 예시 timeout·출력 한도 | 120초, 8,192토큰. SDK 요청 timeout이며 전체 평가 시간 제한은 아님 |
-| 예시 입력·문맥 예산 | 입력 120,000토큰, 입력+출력 128,192토큰 |
+| 예시 timeout·출력 한도 | 120초, 16,384토큰. SDK 요청 timeout이며 전체 평가 시간 제한은 아님 |
+| 예시 입력·문맥 예산 | 입력 120,000토큰, 입력+출력 136,384토큰 |
 | 전체 평가 호출 상한 | 기본 예시 9회. 기본 6사례는 7회, 확장 소설은 신규 탐색 1회 + 기존 수정 8회. 독립 semantic 6사례는 `--max-calls 16` 필요 |
 
-선택 모델의 [공식 한도](https://developers.openai.com/api/docs/models/gpt-5.6-luna)는
-입력 922,000·출력 128,000·문맥 1,050,000토큰이다(2026-10-03 확인).
+[prompt_versions.py](../../app/refresh/prompt_versions.py)가 실제 생성에 허용한 v11·v12를
+정의한다. v11 지시문과 기본 선택은 유지한다. v12는 허용 대상의 사실을 먼저 구조화하고
+source 원문과 대조한 뒤 본문·관계를 작성하도록 보강한다. 새로 추가하거나 수정하는
+주장에서 행위자·수령인·소유자·부정·조건·범위·시점·확실성을 보존하고, 검증을 통과하려고
+같은 장면의 다른 행동으로 바꾸지 않도록 지시한다. 그대로 보존한 기존 본문은 모두
+재추출하지 않는다. 후보 스키마와 서버의 엄격 검증 조건은 바뀌지 않는다.
+
+겹침 0은 과거 청크와 요청·문맥·실행 설정의 직렬화를 유지한다. 양수이면 이전 청크 끝의
+완전한 문장을 다음 청크에 포함하되, 겹침 한도와 청크 크기에 들어오는 경우에만 적용한다.
+넣을 여유가 없으면 겹침을 생략한다. 문장 경계는 문장부호·줄바꿈으로 나누며, 지나치게 긴
+문장은 기존처럼 크기 상한에서 분할한다. 원문 위치·전체 덮기·전진을 보존하고, 겹친 원문도
+문맥 예산에 포함한다. `--chunk-chars`, `--chunk-overlap-chars`로 평가 조건을 지정한다.
+
+현행 후보의 구체적 검증 오류는 서비스가 호출 범위별 최대 한 번 보완한다.
+보완은 원래 자료와 실패 후보·진단을 함께 제공하는 `refresh-validation-repair-v1` 경로이며
+SDK 자체 재시도와 별개다. 요청의 `max_model_calls`와 평가 `--max-calls`에 추가 호출도
+포함된다. 긴 원고에서 보완 여유를 두려면 `--max-calls 18`, 독립 의미 6사례는
+`--max-calls 32`를 사용할 수 있다. 최초 호출만 허용하는 9회·16회 설정에서는 보완 여유가
+소진되면 실패한다. 보완 입력에도 문맥·어댑터 토큰 예산을 적용한다. 실제 결과와 한계는
+[품질 검증 기록](refresh-quality.md#검증-오류-보완-repair-v1)을 참고한다.
+
+기본 모델 `gpt-6-luna`의 [공식 한도](https://developers.openai.com/api/docs/models/gpt-6-luna)는
+입력 922,000·출력 128,000·문맥 1,050,000토큰이다(2026-10-11 확인).
 설정 예산은 그 안으로 제한한다. 기존 문자 예산과 별도로 UTF-8 바이트 길이와 스키마,
 4,096토큰 프레이밍 여유로 입력량을 보수적으로 추정한다. 정확한 tokenizer 계수는 아니므로
 실제 한도에 들어가는 입력도 거절할 수 있다. 초과 원문을 자르거나 자동 요약하지 않는다.
+
+`gpt-6-luna`로 모델 설정을 변경하면서 Responses API·구조화 출력과 기존 토큰·시간
+예산은 처음 유지했다. 이후 긴 원고 반복 비교의 출력 한도 실패를 확인하고 예시·로컬
+출력 예산을 16,384, 문맥 예산을 136,384토큰으로 늘렸다. 별도 v12 실행에서 13회 호출·
+보완 4회 성공 후 PROPOSED를 확인했으며 프롬프트 효과와 별개인 예산 진단이다.
+기본 v11의 같은 예산 단건은 응답 잘림 없이 완료됐지만 잘못된 출처 선택을 보완하지
+못해 최종 FAILED였다. 출력 여유만으로 출처·의미 품질을 해결한 것은 아니다.
+`reasoning.effort`는 기존처럼 생략하며 공식 기본값은 `medium`이다.
+Responses API에는 seed 설정을 제공하지 않으므로 seed로 같은 답변을 보장하지 않는다.
+2026-10-11 `gpt-6-luna` 실제 smoke는 v11의 `semantic-record-and-consent` 한 사례에서
+4회 호출·보완 1회 성공 뒤 `PROPOSED`를 반환했다. 실제 응답의 model도 `gpt-6-luna`다.
+의미 판정은 `review_required`이고 원문 함의·자유 본문은 `human_review_pending`이다.
+[품질 평가 기록](refresh-quality.md)의 이전 `gpt-5.6-luna` 실행과 구분한다.
+이후 의미 6사례 A/B 각 2회는 모두 PROPOSED였지만 v12는 최초 검증 실패·보완이
+2회 필요했고 등록 구조화 불일치도 더 많아 기본 v11을 유지했다. 본문 패턴 통과가
+전체 의미 합격을 뜻하지 않으며, 일반 품질의 승자는 정하지 않았다.
 
 이전 `refresh-v1` / `refresh-result-v1` 모델 설정의 실행 스냅샷은 새 계약으로
 묵시적으로 바꾸지 않고 실제 어댑터에서 거절한다. 이미 저장된 결과는 그대로 복구한다.
 새 계약으로 평가하려면 새 요청 ID·모델 설정을 사용한다. 재생 응답은 입력 fingerprint·
 대상을 대조하고 알려진 과거 후보/프롬프트 조합(v1/v2, v2/v3, v3/v4, v3/v5, v3/v6,
-v3/v7, v4/v8, v4/v9, v4/v10) 또는 현재 v5/v11 조합만 허용한다.
+v3/v7, v4/v8, v4/v9, v4/v10) 또는 입력과 일치하는 현재 v5/v11·v5/v12 조합만 허용한다.
 v4의 `source:{marker,excerpt}`는 마커 원문에서 유일하게 일치하는 500자 이하 발췌를
 복원하는 과거 읽기 계약이다. 현행 v5의 생성·검증에 발췌 필드를 허용하는 예외는 아니다.
 관계쌍 소유권이 없던 v1/v2·v2/v3·v3/v4 응답은 전체 후보를 기존 규칙으로 검증한 뒤 소유 호출에 분배하고,
@@ -94,6 +132,12 @@ v4의 `source:{marker,excerpt}`는 마커 원문에서 유일하게 일치하는
 # 실제 OpenAI 호출: 유효한 키 필요, 유료 호출 가능
 .venv/bin/python -m scripts.evaluate_refresh \
   --live --env-file .env --trial live-2 --output .evaluation/live-2
+
+# v12와 문장 겹침을 명시한 단일 평가
+.venv/bin/python -m scripts.evaluate_refresh \
+  --live --env-file .env --suite semantic --max-calls 32 \
+  --prompt-version refresh-prompt-v12 --chunk-chars 1000 --chunk-overlap-chars 200 \
+  --trial semantic-v12 --output .evaluation/semantic-v12
 ```
 
 두 모드 옵션을 모두 생략하면 고정 기대 후보를 반환하는 오프라인 기준선이다.
@@ -114,6 +158,40 @@ CLI와 Markdown은 같은 판정을 사용한다. 종료 코드 0은 등록된 �
 캐시·추론 토큰은 총량에 다시 더하지 않는다.
 usage가 없는 API 응답은 실패시키고 시도 기록의 사용량은 null로 남긴다. 현재 내부 결과의
 `Usage`만으로 실패한 시도의 실제 비용을 복원할 수 없다.
+
+### 프롬프트와 청크 겹침 반복 비교
+
+[evaluate_refresh_ab.py](../../scripts/evaluate_refresh_ab.py)는 동일 자료·등록 기준·모델·
+예산에서 A(v11, 겹침 0)와 B(v12, 겹침 0)를 각각 독립 요청으로 실행한다. 각 조건은
+`--repeats`로 최소 2회 반복하고 순서를 번갈아 배치한다. 선택적인 C는 v12에 양수 겹침을
+추가한다. 입력 자료와 평가 기준 fingerprint도 대조하여 서로 다른 조건의 결과를 섞지 않는다.
+
+```bash
+# 실제 비교: 2조건 × 2반복 × 자식 전체 상한 32회 = 최대 128회 예약
+.venv/bin/python -m scripts.evaluate_refresh_ab \
+  --live --env-file .env --suite semantic --repeats 2 --max-calls 32 \
+  --max-total-calls 128 --trial semantic-ab --output .evaluation/semantic-ab
+
+# 이미 저장된 실험만 비교: 모델 호출 없음, 새 출력 디렉터리 사용
+.venv/bin/python -m scripts.evaluate_refresh_ab \
+  --reports-dir .evaluation/semantic-ab --output .evaluation/semantic-ab-summary
+```
+
+실제 호출 모드는 `--max-total-calls`가 필수이며 보완까지 포함한 각 자식 `--max-calls`의
+합계를 실행 전에 예약한다. 위 예시에 `--include-overlap --overlap-chars 200`을 추가하면
+3조건이므로 전체 상한도 최소 192회로 늘려야 한다. 겹침은 청크 크기보다 작아야 하며
+`--chunk-chars`를 지정하면 모든 조건에 같은 크기를 적용한다. 실제 호출 수는 예약보다
+작을 수 있다. 인증·할당량 소진 시 나머지 실행은 중단한다.
+
+`experiment.json`에 실행 조건을, `comparison.json`·`comparison.md`에 최초 모델·검증 실패,
+보완 성공, 최종 제안·필수 누락, 등록 의미 기준, 토큰·시간의 요약을 저장한다. 비교 요약에는
+원문·제안 본문·공급자 응답·오류를 복사하지 않고 파일 권한은 0600으로 둔다. 개별 실행의
+JSON과 `report.md`에는 본문이 있으므로 별도로 보호한다. 실패한 결과의 누락은 미평가이며,
+실패까지의 일부 시간과 완료 실행 시간을 직접 비교하지 않는다. 사용량 미확인은 0이 아니다.
+자동 요약은 `inconclusive`를 유지하며, 등록 검사 통과나 `PROPOSED`를 사람의 의미 승인으로
+취급하지 않는다. 오프라인 고정 기대값 실행도 가능하지만 독립 모델 생성의 품질 근거가 아니다.
+각 시도의 자동 평가 판정과 조건별 평가·실행 실패도 표시한다. 실제 실행과 저장 결과
+재집계 모두 실행·등록 검사 실패나 비교 불완전은 종료 코드 1, 검토가 남은 완결 비교는 2다.
 
 ### Markdown으로 결과 검토
 
@@ -174,7 +252,7 @@ S3·Content·Neptune 관계 조회·영속 상태·Kafka와 FastAPI 갱신안 �
 
 새 설정 생성·임시 ID 관계 제안은 [제안 계약](proposal-contract.md)의 생성 규칙을 따른다.
 과거 v1/v2 평가 응답은 명시적 읽기 호환으로 재생할 수 있으나 현재 생성 품질의 검증 근거가 아니다.
-실제 OpenAI 생성 요청은 v5 후보·v11 프롬프트만 사용한다. 개별 사실의 source에서
+실제 OpenAI 생성 요청은 v5 후보에 기본 v11 또는 명시 선택한 v12 프롬프트를 사용한다. 개별 사실의 source에서
 전체 마커 원문을 복원하며 관계 설명·근거는 fact_ids에서 조립한다.
 과거 응답과 사실이 없는 고정 기대값의 오프라인 실행은 명시적인 이전 계약 검증이며,
 현재 v5의 사실 필수 검증을 우회하는 live 모드는 제공하지 않는다.

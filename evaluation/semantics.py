@@ -152,6 +152,136 @@ def validate_semantic_criteria(criteria: tuple[SemanticCriterion, ...]):
         raise ValueError("Semantic criterion names must be unique")
 
 
+@dataclass(frozen=True)
+class BodyCriterion:
+    """본문에 등록한 좁은 표현 검사. 낯선 의역을 틀렸다고 단정하지 않는다.
+
+    required_patterns는 동등한 표현의 대안이며 forbidden_patterns는 명시적
+    오귀속·상태 왜곡이다. 패턴 일치는 전체 본문의 함의나 사실 참조 일치를
+    증명하지 않는다. 정규식 작성자는 부정·인용 문맥을 포함해 범위를 제한한다.
+    """
+
+    name: str
+    scope: ProposalScope
+    required_patterns: tuple[str, ...] = ()
+    forbidden_patterns: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not self.name.strip() or self.scope.kind not in {"document", "new", "any"}:
+            raise ValueError("Body criteria require a name and a body proposal scope")
+        if not self.required_patterns and not self.forbidden_patterns:
+            raise ValueError("Body criteria require explicit expression patterns")
+        for pattern in self.required_patterns + self.forbidden_patterns:
+            if not pattern.strip():
+                raise ValueError("Body criterion patterns must be nonempty")
+            re.compile(pattern)
+
+
+def validate_body_criteria(criteria: tuple[BodyCriterion, ...]):
+    if len({criterion.name for criterion in criteria}) != len(criteria):
+        raise ValueError("Body criterion names must be unique")
+
+
+def assess_body_claims(
+    criteria,
+    result,
+    *,
+    resolve_expected_id=lambda value: value,
+    resolve_actual_id=lambda value: value,
+):
+    """알려진 오류와 표현 미확인을 분리하며 패턴 통과를 의미 합격으로 부르지 않는다."""
+    validate_body_criteria(criteria)
+    bodies = [
+        ("document", resolve_actual_id(p.target_document_id), p.value)
+        for p in result.document_proposals
+        if p.field == "body_text"
+    ] + [
+        ("new", resolve_actual_id(p.candidate_id), p.body_text)
+        for p in result.new_document_proposals
+    ]
+    mismatches, pending, details = [], [], []
+    for criterion in criteria:
+        scope = criterion.scope
+        selected = [
+            body
+            for kind, document_id, body in bodies
+            if scope.kind == "any"
+            or (
+                kind == scope.kind
+                and document_id == resolve_expected_id(scope.document_id)
+            )
+        ]
+        statuses = []
+        for body in selected:
+            text = normalized_text(body)
+            forbidden = [
+                pattern
+                for pattern in criterion.forbidden_patterns
+                if re.search(pattern, text, re.IGNORECASE)
+            ]
+            matched = [
+                pattern
+                for pattern in criterion.required_patterns
+                if re.search(pattern, text, re.IGNORECASE)
+            ]
+            if forbidden:
+                mismatches.append(f"{criterion.name}: 등록된 본문 오류 표현")
+                status = "mismatch"
+            elif criterion.required_patterns and not matched:
+                pending.append(f"{criterion.name}: 본문 표현 미확인")
+                status = "review_required"
+            else:
+                status = "matched_patterns"
+            statuses.append(status)
+        details.append(
+            {
+                "criterion": criterion.name,
+                "scope": scope.kind,
+                "document_id": scope.document_id,
+                "bodies_evaluated": len(selected),
+                "statuses": statuses,
+                "status": (
+                    "not_applicable"
+                    if not statuses
+                    else "mismatch"
+                    if "mismatch" in statuses
+                    else "review_required"
+                    if "review_required" in statuses
+                    else "matched_patterns"
+                ),
+            }
+        )
+    return {
+        **(
+            {
+                "body_claim_mismatches": sorted(set(mismatches)),
+                "unreviewed_body_claims": sorted(set(pending)),
+            }
+            if criteria
+            else {}
+        ),
+        "body_assessment": {
+            "registered_patterns": (
+                "not_configured"
+                if not criteria
+                else "not_applicable"
+                if not any(item["bodies_evaluated"] for item in details)
+                else "mismatch"
+                if mismatches
+                else "review_required"
+                if pending
+                else "matched_patterns"
+            ),
+            "criteria_count": len(criteria),
+            "details": details,
+            "semantic_entailment": (
+                "human_review_pending" if bodies else "not_applicable"
+            ),
+            "fact_alignment": "human_review_pending" if bodies else "not_applicable",
+        },
+    }
+
+
 def assess_semantic_claims(
     criteria,
     result,

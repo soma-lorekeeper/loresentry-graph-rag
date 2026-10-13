@@ -10,7 +10,10 @@ def test_normal_flow_preserves_snapshots_and_orders_io():
     assert done.outcome == Outcome.PROPOSED
     assert s.artifacts.read_input(s.request) == s.source
     assert s.artifacts.read_context(s.request) == s.snapshot
-    assert s.artifacts.read_result(s.request) == s.result
+    stored = s.artifacts.read_result(s.request)
+    assert replace(stored, attempts=()) == s.result
+    assert len(stored.attempts) == 1
+    assert stored.attempts[0].outcome == Outcome.PROPOSED
     assert s.jobs.load(s.request).state == JobState.COMPLETED
     assert s.publisher.delivered == [done]
     names = s.calls.names()

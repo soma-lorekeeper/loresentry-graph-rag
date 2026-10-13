@@ -1,5 +1,6 @@
 """생성 후보를 원문 스냅샷과 대조한다. 인용의 의미적 함의나 모델 품질은 보증하지 않는다."""
 
+import json
 from dataclasses import dataclass, replace
 from unicodedata import normalize
 
@@ -10,6 +11,7 @@ from app.refresh.models import (
     DocumentProposal,
     DocumentState,
     Evidence,
+    Failure,
     ModelCandidate,
     NewDocumentProposal,
     Outcome,
@@ -17,43 +19,120 @@ from app.refresh.models import (
     RelationGenerationScope,
     RelationProposal,
     Usage,
+    ValidationDiagnostic,
 )
 from app.refresh.policy import ALLOWED_FIELDS, RELATION_KEYS
 from app.refresh.selection import reject
 
 
-def validate_evidence(snapshot, evidence):
+def diagnostic_reject(code, message, path, rule, value=None):
+    """판단 실패의 필드·규칙을 전달하며 실패 메시지는 원문과 별도로 유지한다."""
+    raise RefreshFailure(
+        Failure(code, message),
+        diagnostics=(
+            ValidationDiagnostic(
+                path,
+                rule,
+                offending_value=str(value)[:200]
+                if isinstance(value, (str, int, float, bool))
+                else None,
+            ),
+        ),
+    ) from None
+
+
+def source_markers(model_input):
+    """서버 문맥의 마커를 진단용으로만 조회한다. 원문 검증은 별도로 유지한다."""
+    indexed = {}
+    try:
+        context = json.loads(model_input.prompt)
+        values = context.get("evidence", ()) if isinstance(context, dict) else ()
+        for item in values:
+            if not isinstance(item, dict) or not isinstance(item.get("marker"), str):
+                continue
+            try:
+                evidence = Evidence(
+                    **{
+                        key: item[key]
+                        for key in (
+                            "document_id",
+                            "revision_no",
+                            "start",
+                            "end",
+                            "quote",
+                        )
+                    }
+                )
+                indexed.setdefault(evidence, item["marker"])
+            except (KeyError, TypeError):
+                continue
+    except (ValueError, TypeError):
+        pass
+    return indexed
+
+
+def validate_evidence(snapshot, evidence, *, path="evidence"):
     """근거의 ID·revision·Unicode 구간·인용을 원본과 정확히 대조한다."""
     if not isinstance(evidence, tuple) or not evidence:
-        reject("INVALID_EVIDENCE", "Nonempty evidence tuple required")
+        diagnostic_reject(
+            "INVALID_EVIDENCE",
+            "Nonempty evidence tuple required",
+            path,
+            "source.nonempty",
+        )
     documents = {d.document_id: d for d in snapshot.documents}
-    for item in evidence:
+    for index, item in enumerate(evidence):
+        item_path = f"{path}[{index}]"
         if (
             not isinstance(item, Evidence)
             or not isinstance(item.document_id, str)
             or not isinstance(item.quote, str)
         ):
-            reject("INVALID_EVIDENCE", "Evidence value required")
+            diagnostic_reject(
+                "INVALID_EVIDENCE", "Evidence value required", item_path, "source.typed"
+            )
         document = documents.get(item.document_id)
         if (
             document is None
             or document.state != DocumentState.ACTIVE
             or document.project_id != snapshot.request.job.project_id
         ):
-            reject("INVALID_EVIDENCE", "Evidence source unavailable")
+            diagnostic_reject(
+                "INVALID_EVIDENCE",
+                "Evidence source unavailable",
+                item_path + ".document_id",
+                "source.document_active",
+                item.document_id,
+            )
         if (
             type(item.revision_no) is not int
             or item.revision_no != document.revision_no
         ):
-            reject("INVALID_EVIDENCE", "Evidence revision differs")
+            diagnostic_reject(
+                "INVALID_EVIDENCE",
+                "Evidence revision differs",
+                item_path + ".revision_no",
+                "source.revision_matches",
+                item.revision_no,
+            )
         if (
             type(item.start) is not int
             or type(item.end) is not int
             or not 0 <= item.start < item.end <= len(document.body_text)
         ):
-            reject("INVALID_EVIDENCE", "Evidence span invalid")
+            diagnostic_reject(
+                "INVALID_EVIDENCE",
+                "Evidence span invalid",
+                item_path,
+                "source.span_valid",
+            )
         if item.quote != document.body_text[item.start : item.end]:
-            reject("INVALID_EVIDENCE", "Evidence quote differs from original")
+            diagnostic_reject(
+                "INVALID_EVIDENCE",
+                "Evidence quote differs from original",
+                item_path + ".quote",
+                "source.quote_exact",
+            )
     return unique_evidence(evidence)
 
 
@@ -64,7 +143,7 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
     documents = {d.document_id: d for d in snapshot.documents}
     allowed = set(snapshot.target_ids if allowed_targets is None else allowed_targets)
     merged = {}
-    for proposal in proposals:
+    for index, proposal in enumerate(proposals):
         if (
             not isinstance(proposal, DocumentProposal)
             or not isinstance(proposal.target_document_id, str)
@@ -91,7 +170,9 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
             or len(proposal.value) > snapshot.request.settings.max_input_chars
         ):
             reject("INVALID_FIELD", "Only bounded body_text replacement is allowed")
-        evidence = validate_evidence(snapshot, proposal.evidence)
+        evidence = validate_evidence(
+            snapshot, proposal.evidence, path=f"document_proposals[{index}].evidence"
+        )
         key = (proposal.target_document_id, proposal.field)
         previous = merged.get(key)
         fact_ids = proposal.fact_ids
@@ -151,7 +232,7 @@ def validate_new_document_proposals(snapshot, proposals):
     documents = {d.document_id: d for d in snapshot.documents}
     existing_names = existing_setting_names(snapshot)
     merged, names = {}, {}
-    for proposal in proposals:
+    for index, proposal in enumerate(proposals):
         if (
             not isinstance(proposal, NewDocumentProposal)
             or not isinstance(proposal.folder_code, str)
@@ -178,7 +259,11 @@ def validate_new_document_proposals(snapshot, proposals):
         if name in names and names[name] != proposal.candidate_id:
             reject("DUPLICATE_SETTING", "Multiple candidates name the same setting")
         names[name] = proposal.candidate_id
-        evidence = validate_evidence(snapshot, proposal.evidence)
+        evidence = validate_evidence(
+            snapshot,
+            proposal.evidence,
+            path=f"new_document_proposals[{index}].evidence",
+        )
         if not any(
             e.document_id in snapshot.changed_ids
             and documents[e.document_id].folder_code == "MANUSCRIPT"
@@ -258,7 +343,7 @@ def validate_relation_proposals(
         + tuple(r for d in snapshot.documents for r in d.relations)
     }
     merged = {}
-    for proposal in proposals:
+    for index, proposal in enumerate(proposals):
         if (
             not isinstance(proposal, RelationProposal)
             or not isinstance(proposal.document_id, str)
@@ -316,7 +401,9 @@ def validate_relation_proposals(
                 "INVALID_RELATION_DESCRIPTION",
                 "Bounded nonempty relation description required",
             )
-        evidence = validate_evidence(snapshot, proposal.evidence)
+        evidence = validate_evidence(
+            snapshot, proposal.evidence, path=f"relation_proposals[{index}].evidence"
+        )
         key = tuple(sorted((a.document_id, b.document_id)))
         if key in existing:
             continue
@@ -416,6 +503,7 @@ def validate_candidate(snapshot, candidate, model_input):
             in {"refresh-candidate-v4", "refresh-candidate-v5"},
             schema_version=model_input.schema_version,
             aggregate=model_input.relation_scope is None,
+            source_markers=source_markers(model_input),
         )
         relations = validate_relation_proposals(
             snapshot, candidate.relation_proposals, new_documents, scope
@@ -450,4 +538,5 @@ def validate_candidate(snapshot, candidate, model_input):
             failure=error.failure,
             prompt_version=model_input.prompt_version,
             candidate_schema_version=model_input.schema_version,
+            diagnostics=error.diagnostics,
         )

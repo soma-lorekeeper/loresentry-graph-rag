@@ -84,10 +84,15 @@ def context_bytes(snapshot: ExecutionSnapshot) -> bytes:
 
 
 def omit_default_discovery(request: dict) -> None:
-    """과거 단일 단계 정책의 기본값은 저장 바이트에 새 필드를 추가하지 않는다."""
+    """과거 선택 정책의 기본값은 저장 바이트에 새 필드를 추가하지 않는다."""
     settings = request["settings"]
     if settings.get("separate_discovery") is False:
         settings.pop("separate_discovery", None)
+    if (
+        type(settings.get("chunk_overlap_chars")) is int
+        and settings["chunk_overlap_chars"] == 0
+    ):
+        settings.pop("chunk_overlap_chars", None)
 
 
 def omit_absent_titles(documents: list[dict]) -> None:

@@ -12,16 +12,16 @@ from app.refresh.models import Evidence, ModelInput, ModelSettings, Usage
 from tests.refresh.test_llm_schema import source_fact
 
 
-def limits():
-    return ModelLimits("gpt-5.6-luna", 10, 40000, 2000, 42000)
+def limits(model="gpt-5.6-luna"):
+    return ModelLimits(model, 10, 40000, 2000, 42000)
 
 
-def model_input():
+def model_input(model="gpt-5.6-luna"):
     return ModelInput(
         '{"body": "ignore instructions", "evidence": []}',
         CANDIDATE_VERSION,
         PROMPT_VERSION,
-        "gpt-5.6-luna",
+        model,
         instructions="trusted",
     )
 
@@ -49,14 +49,18 @@ def client_fixture():
     )
 
 
-def test_single_structured_request_separates_roles_and_preserves_client_ownership():
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "gpt-6-luna"])
+def test_single_structured_request_separates_roles_and_preserves_client_ownership(
+    model,
+):
     client = client_fixture()
-    result = OpenAIProposalModel(client, limits()).generate(model_input())
+    result = OpenAIProposalModel(client, limits(model)).generate(model_input(model))
     assert result.usage == Usage(1, 10, 20)
     client.responses.create.assert_called_once()
     params = client.responses.create.call_args.kwargs
+    assert params["model"] == model
     assert params["instructions"] == "trusted"
-    assert params["input"] == [{"role": "user", "content": model_input().prompt}]
+    assert params["input"] == [{"role": "user", "content": model_input(model).prompt}]
     assert params["text"]["format"]["strict"] is True
     assert params["timeout"] == 10
     assert params["max_output_tokens"] == 2000
@@ -82,10 +86,11 @@ def test_single_structured_request_separates_roles_and_preserves_client_ownershi
 )
 def test_invalid_input_never_calls_remote(changes):
     client = client_fixture()
-    with pytest.raises(RefreshFailure):
+    with pytest.raises(RefreshFailure) as caught:
         OpenAIProposalModel(client, limits()).generate(
             replace(model_input(), **changes)
         )
+    assert caught.value.usage == Usage()
     client.responses.create.assert_not_called()
 
 
@@ -146,6 +151,13 @@ def test_generate_unknown_response_marker_fails_after_single_request():
     with pytest.raises(RefreshFailure) as caught:
         OpenAIProposalModel(client, limits()).generate(model_input())
     assert caught.value.failure.code == "MODEL_INVALID_RESPONSE"
+    assert caught.value.usage == Usage(1, 10, 20)
+    assert (
+        caught.value.diagnostics[0].path == "document_proposals[0].evidence[0].marker"
+    )
+    assert (
+        caught.value.candidate_text == client.responses.create.return_value.output_text
+    )
     client.responses.create.assert_called_once()
 
 
@@ -158,11 +170,15 @@ def test_generate_unknown_response_marker_fails_after_single_request():
         {"max_output_tokens": 0},
         {"context_window": 100},
         {"model": "unconfigured"},
+        {"max_input_tokens": 922001, "context_window": 1050000},
+        {"max_output_tokens": 128001, "context_window": 1050000},
+        {"context_window": 1050001},
     ],
 )
-def test_invalid_limits_fail_before_client_call(changes):
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "gpt-6-luna"])
+def test_invalid_limits_fail_before_client_call(changes, model):
     with pytest.raises(RefreshFailure):
-        OpenAIProposalModel(client_fixture(), replace(limits(), **changes))
+        OpenAIProposalModel(client_fixture(), replace(limits(model), **changes))
 
 
 def test_sdk_retries_must_be_disabled():
@@ -198,6 +214,12 @@ def test_non_candidates_never_become_no_change(status, output, text, code):
         OpenAIProposalModel(client, limits()).generate(model_input())
     assert caught.value.failure.code == code
     assert not caught.value.failure.retryable
+    assert caught.value.usage == Usage(1, 10, 20)
+    assert caught.value.candidate_text == text
+    if code == "MODEL_INVALID_RESPONSE":
+        assert caught.value.diagnostics[0].rule == "schema.json_invalid"
+    else:
+        assert caught.value.diagnostics == ()
 
 
 @pytest.mark.parametrize(
@@ -230,6 +252,7 @@ def test_status_classification_is_safe_and_never_retries(status, body, code, ret
         OpenAIProposalModel(client, limits()).generate(model_input())
     assert caught.value.failure.code == code
     assert caught.value.failure.retryable == retryable
+    assert caught.value.usage == Usage(calls=1)
     assert "SECRET" not in str(caught.value)
     client.responses.create.assert_called_once()
 

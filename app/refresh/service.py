@@ -1,7 +1,8 @@
 """조회·판단·실행을 조율하는 갱신안 생성 서비스.
 
 외부 IO와 순수 업무 규칙을 주입한다. 실제 HTTP·Kafka 어댑터에는 연결하지 않았다.
-실행 ID, 재시도 횟수, 임대 복구는 전달 계층이 담당하고 여기서는 자동 재시도하지 않는다.
+실행 ID, 연동 오류 재시도와 임대 복구는 전달 계층이 담당한다. 현행 후보의 구체적
+검증 오류는 같은 호출 범위에서 최대 한 번 보완한 뒤 결과를 저장한다.
 """
 
 from dataclasses import replace
@@ -12,6 +13,7 @@ from app.refresh.models import (
     DocumentBatch,
     Failure,
     JobState,
+    ModelAttempt,
     ModelCandidate,
     Outcome,
     Readiness,
@@ -27,6 +29,14 @@ from app.refresh.ports import (
     RefreshCompletionPublisher,
     RefreshJobStore,
     RelatedDocumentSource,
+)
+from app.refresh.repair import (
+    MAX_REPAIRS_PER_CALL,
+    add_usage,
+    build_repair_input,
+    failed_result,
+    proposal_counts,
+    repairable,
 )
 from app.refresh.rules import RefreshRules
 
@@ -200,31 +210,22 @@ class RefreshService:
                 prompt_version=request.model_settings.prompt_version,
             )
         usage = Usage()
+        attempts = []
         documents, relations, new_documents = [], [], []
         facts = {}
-        for model_input in inputs:
-            try:
-                candidate = self.model.generate(model_input)
-            except RefreshFailure as error:
-                if error.failure.retryable:
-                    raise
-                return RefreshResult(
-                    request.job,
-                    Outcome.FAILED,
-                    usage=replace(usage, calls=usage.calls + 1),
-                    failure=error.failure,
-                    prompt_version=model_input.prompt_version,
-                )
-            checked = self.rules.validate_candidate(snapshot, candidate, model_input)
-            usage = Usage(
-                usage.calls + 1,
-                usage.input_tokens + checked.usage.input_tokens,
-                usage.output_tokens + checked.usage.output_tokens,
+        for index, model_input in enumerate(inputs):
+            candidate, checked, usage = self._validated_call(
+                snapshot,
+                model_input,
+                index + 1,
+                len(inputs) - index - 1,
+                usage,
+                attempts,
             )
             if checked.outcome == Outcome.FAILED:
-                return replace(checked, usage=usage)
+                return failed_result(checked, checked.failure, usage, attempts)
             if len(inputs) == 1:
-                return replace(checked, usage=usage)
+                return replace(checked, usage=usage, attempts=tuple(attempts))
             # Keep raw proposals until aggregate validation so conflicts with no-ops
             # or candidates from another call cannot disappear during normalization.
             documents.extend(candidate.document_proposals)
@@ -250,6 +251,8 @@ class RefreshService:
                             "INVALID_FACT", "Conflicting aggregate fact identifier"
                         ),
                         prompt_version=model_input.prompt_version,
+                        candidate_schema_version=model_input.schema_version,
+                        attempts=tuple(attempts),
                     )
                 facts[fact.fact_id] = fact
         aggregate = ModelCandidate(
@@ -259,7 +262,7 @@ class RefreshService:
             tuple(new_documents),
             tuple(facts[key] for key in sorted(facts)),
         )
-        return self.rules.validate_candidate(
+        result = self.rules.validate_candidate(
             snapshot,
             aggregate,
             replace(
@@ -269,6 +272,87 @@ class RefreshService:
                 allow_document_updates=True,
             ),
         )
+        return replace(result, usage=usage, attempts=tuple(attempts))
+
+    def _validated_call(
+        self, snapshot, model_input, call_index, remaining_calls, usage, attempts
+    ):
+        """하나의 후보를 검증하고 진단이 있는 오류만 한 번 보완한다.
+
+        보완은 이미 통과한 다른 호출을 반복하지 않는다. 남은 최초 호출 예산을 예약하고
+        원 후보를 통째로 교체한다. 최종 통합 실패와 연동 오류는 이 루프의 대상이 아니다.
+        """
+        current_input = model_input
+        for attempt_index in range(MAX_REPAIRS_PER_CALL + 1):
+            try:
+                candidate = self.model.generate(current_input)
+            except RefreshFailure as error:
+                if error.failure.retryable:
+                    raise
+                candidate = error.candidate_text
+                checked = RefreshResult(
+                    snapshot.request.job,
+                    Outcome.FAILED,
+                    usage=error.usage,
+                    failure=error.failure,
+                    prompt_version=model_input.prompt_version,
+                    candidate_schema_version=(
+                        model_input.schema_version
+                        if model_input.schema_version == "refresh-candidate-v5"
+                        else None
+                    ),
+                    diagnostics=error.diagnostics,
+                )
+                if error.failure.code == "EVALUATION_CALL_BUDGET" or (
+                    error.failure.code == "MODEL_REQUEST_INVALID"
+                    and error.usage.calls == 0
+                ):
+                    # The evaluator/adapter rejected the invocation before IO.
+                    return None, checked, usage
+            else:
+                checked = self.rules.validate_candidate(
+                    snapshot, candidate, current_input
+                )
+            observed = Usage(1, checked.usage.input_tokens, checked.usage.output_tokens)
+            usage = add_usage(usage, observed)
+            attempts.append(
+                ModelAttempt(
+                    call_index,
+                    attempt_index,
+                    model_input.target_ids,
+                    checked.outcome,
+                    observed,
+                    **proposal_counts(candidate),
+                    failure=checked.failure,
+                    diagnostics=checked.diagnostics,
+                )
+            )
+            if checked.outcome != Outcome.FAILED:
+                return candidate, checked, usage
+            if attempt_index == MAX_REPAIRS_PER_CALL or not repairable(
+                model_input, checked.failure, checked.diagnostics
+            ):
+                return None, checked, usage
+            if usage.calls + 1 + remaining_calls > (
+                snapshot.request.settings.max_model_calls
+            ):
+                checked = replace(
+                    checked,
+                    failure=Failure(
+                        "CALL_BUDGET_EXCEEDED",
+                        "No repair call available after reserving remaining calls",
+                    ),
+                )
+                return None, checked, usage
+            try:
+                current_input = build_repair_input(
+                    model_input,
+                    candidate,
+                    checked.diagnostics,
+                    snapshot.request.settings.max_context_chars,
+                )
+            except RefreshFailure as error:
+                return None, replace(checked, failure=error.failure), usage
 
     @staticmethod
     def _completion(request, result_ref, result):

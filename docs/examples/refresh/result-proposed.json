@@ -42,6 +42,44 @@
     }
   ],
   "execution": {
+    "attempts": [
+      {
+        "attempt_index": 0,
+        "call_index": 1,
+        "diagnostics": [],
+        "document_proposals": 1,
+        "failure": null,
+        "new_document_proposals": 0,
+        "outcome": "PROPOSED",
+        "relation_proposals": 1,
+        "target_ids": [
+          "c1"
+        ],
+        "usage": {
+          "calls": 1,
+          "input_tokens": 100,
+          "output_tokens": 50
+        }
+      },
+      {
+        "attempt_index": 0,
+        "call_index": 2,
+        "diagnostics": [],
+        "document_proposals": 1,
+        "failure": null,
+        "new_document_proposals": 0,
+        "outcome": "PROPOSED",
+        "relation_proposals": 0,
+        "target_ids": [
+          "i1"
+        ],
+        "usage": {
+          "calls": 1,
+          "input_tokens": 100,
+          "output_tokens": 50
+        }
+      }
+    ],
     "candidate_schema_version": "refresh-candidate-v3",
     "changed_ids": [
       "m1",

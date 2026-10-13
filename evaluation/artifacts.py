@@ -39,17 +39,43 @@ class AttemptRecorder:
         self.records = []
         self.current = None
 
-    def flush(self):
+    def flush(self, record=None):
+        record = self.current if record is None else record
         write_json(
-            self.directory / f"{self.case.name}-attempt-{len(self.records)}.json",
-            self.current,
+            self.directory / f"{self.case.name}-attempt-{record['attempt']}.json",
+            record,
         )
 
+    def reconcile(self, attempts):
+        """서비스의 검증 결과를 같은 순서의 모델 기록에 연결한다. 재호출은 없다."""
+        for record, attempt in zip(self.records, attempts, strict=False):
+            record["validation"] = asdict(attempt)
+            if attempt.failure is not None:
+                record["failure"] = asdict(attempt.failure)
+            self.flush(record)
+
     def generate(self, model_input, call):
+        try:
+            prompt = json.loads(model_input.prompt)
+        except (TypeError, ValueError):
+            prompt = {}
+        repair = prompt.get("validation_repair", {}) if isinstance(prompt, dict) else {}
+        repair = repair if isinstance(repair, dict) else {}
+        attempt_index = repair.get("attempt", 0)
+        if type(attempt_index) is not int or attempt_index < 0:
+            attempt_index = 0
+        call_index = (
+            self.records[-1]["call_index"]
+            if attempt_index and self.records
+            else sum(record["attempt_index"] == 0 for record in self.records) + 1
+        )
         record = {
             "case": self.case.name,
             "request": asdict(self.case.request.job),
             "attempt": len(self.records) + 1,
+            "call_index": call_index,
+            "attempt_index": attempt_index,
+            "repair_version": repair.get("version"),
             "sdk_version": sdk_version,
             "live": self.live,
             "settings": asdict(self.limits),

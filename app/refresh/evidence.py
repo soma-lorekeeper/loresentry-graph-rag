@@ -29,6 +29,8 @@ def make_chunks(snapshot):
         for document in sorted(snapshot.documents, key=lambda d: d.document_id)
         if document.state == DocumentState.ACTIVE
         for start, end in chunk_spans(
-            document.body_text, snapshot.request.settings.chunk_chars
+            document.body_text,
+            snapshot.request.settings.chunk_chars,
+            snapshot.request.settings.chunk_overlap_chars,
         )
     )

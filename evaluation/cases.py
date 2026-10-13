@@ -15,6 +15,7 @@ from app.refresh.models import (
     ModelCandidate,
     ModelSettings,
     NewDocumentProposal,
+    Outcome,
     RefreshRequest,
     RelatedDocuments,
     Relation,
@@ -22,8 +23,11 @@ from app.refresh.models import (
     Usage,
 )
 from evaluation.semantics import (
+    BodyCriterion,
     SemanticCriterion,
+    assess_body_claims,
     assess_semantic_claims,
+    validate_body_criteria,
     validate_semantic_criteria,
 )
 
@@ -49,10 +53,12 @@ class EvaluationCase:
     allowed_relations: tuple[RelationProposal, ...] = ()
     acceptable_new_names: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     semantic_criteria: tuple[SemanticCriterion, ...] = ()
+    body_criteria: tuple[BodyCriterion, ...] = ()
 
     def __post_init__(self):
         new_name_aliases(self.acceptable_new_names)
         validate_semantic_criteria(self.semantic_criteria)
+        validate_body_criteria(self.body_criteria)
 
 
 CHECKS = {
@@ -70,6 +76,7 @@ CHECKS = {
     "expected_relations": "필수 관계 충족",
     "missing_relations": "관계 누락 없음",
     "semantic_claim_mismatches": "구조화 사실 기준 불일치 없음",
+    "body_claim_mismatches": "등록된 본문 오류 표현 없음",
 }
 LIST_CHECKS = {
     "missing_targets",
@@ -78,11 +85,13 @@ LIST_CHECKS = {
     "forbidden_new_settings",
     "missing_relations",
     "semantic_claim_mismatches",
+    "body_claim_mismatches",
 }
 REVIEW_CHECKS = {
     "unreviewed_new_settings": "기준에 등록되지 않은 신규 설정",
     "unreviewed_relations": "기준에 등록되지 않은 관계",
     "unreviewed_semantic_claims": "구조화 사실 의미 미확인",
+    "unreviewed_body_claims": "등록된 본문 기준 표현 미확인",
 }
 
 
@@ -280,6 +289,27 @@ def cases(model: str, trial: str) -> tuple[EvaluationCase, ...]:
 
 def assess(case: EvaluationCase, result) -> dict:
     """필수·허용·금지 기준을 검사한다. 사실의 의미상 타당성은 사람 검토가 필요하다."""
+    if result.outcome == Outcome.FAILED:
+        # Failure discards the combined candidate atomically. Final empty lists
+        # cannot measure extraction recall or imply that each scope was empty.
+        return {
+            "rules_accepted": False,
+            "assessment_availability": "unavailable_final_failure",
+            "omission_metrics": "not_evaluated",
+            "semantic_assessment": {
+                "structured_criteria": "not_evaluated",
+                "criteria_count": len(case.semantic_criteria),
+                "source_entailment": "not_evaluated",
+                "free_text_bodies": "not_evaluated",
+            },
+            "body_assessment": {
+                "registered_patterns": "not_evaluated",
+                "criteria_count": len(case.body_criteria),
+                "details": [],
+                "semantic_entailment": "not_evaluated",
+                "fact_alignment": "not_evaluated",
+            },
+        }
     aliases = new_name_aliases(case.acceptable_new_names)
 
     def new_identity(code, name):
@@ -387,6 +417,8 @@ def assess(case: EvaluationCase, result) -> dict:
     )
 
     assessment = {
+        "assessment_availability": "available",
+        "omission_metrics": "evaluated",
         "rules_accepted": result.failure is None,
         "missing_targets": sorted(map(field_label, expected_fields - actual_fields)),
         "unexpected_targets": sorted(
@@ -419,6 +451,16 @@ def assess(case: EvaluationCase, result) -> dict:
     assessment.update(
         assess_semantic_claims(
             case.semantic_criteria,
+            result,
+            resolve_expected_id=lambda value: relation_endpoint(
+                value, expected_endpoints
+            ),
+            resolve_actual_id=lambda value: relation_endpoint(value, actual_endpoints),
+        )
+    )
+    assessment.update(
+        assess_body_claims(
+            case.body_criteria,
             result,
             resolve_expected_id=lambda value: relation_endpoint(
                 value, expected_endpoints

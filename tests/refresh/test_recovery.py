@@ -139,7 +139,9 @@ def test_saved_result_recovers_without_regeneration(
     s.calls.failures[operation].extend([*prefix, failure()])
     with pytest.raises(RefreshFailure):
         s.service().run(s.request, "execution-1")
-    assert s.artifacts.read_result(s.request) == s.result
+    stored = s.artifacts.read_result(s.request)
+    assert replace(stored, attempts=()) == s.result
+    assert len(stored.attempts) == 1
     assert len(s.publisher.delivered) == delivered_before
     s.artifacts.inputs.clear()
     s.documents.documents.clear()

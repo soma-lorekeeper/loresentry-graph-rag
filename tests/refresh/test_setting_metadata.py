@@ -167,6 +167,7 @@ def test_legacy_context_replay_preserves_canonical_bytes_and_immutability():
     for document in legacy["snapshot"]["documents"]:
         document.pop("title", None)
     legacy["snapshot"]["request"]["settings"].pop("separate_discovery", None)
+    legacy["snapshot"]["request"]["settings"].pop("chunk_overlap_chars", None)
     body = json_bytes(legacy)
     restored = ContextObject.model_validate_json(body).snapshot
     assert restored == snapshot

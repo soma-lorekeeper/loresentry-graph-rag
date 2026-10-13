@@ -34,11 +34,25 @@ The internal refresh service validates changed documents, builds source-preservi
 context, coordinates multiple target calls, and validates existing-document updates, new setting-document candidates, and relation
 proposals. Manuscript bodies remain read-only. New setting candidates use temporary
 IDs so relations can reference them before Content approval. Results serialize to JSON; completion values carry the result location.
-Current generation uses `refresh-prompt-v11` / `refresh-candidate-v5`, with
-structured facts referenced by every proposal. Each fact selects one source marker;
+Generation defaults to `refresh-prompt-v11`; `refresh-prompt-v12` is an explicit
+option. Both use the unchanged `refresh-candidate-v5` contract, with
+structured facts referenced by every proposal. [prompt_versions.py](app/refresh/prompt_versions.py)
+defines the supported live versions. Each fact selects one source marker;
 the server restores the full original chunk and builds relation descriptions and evidence
 from the referenced facts. Results use `refresh-result-v3`. Historical candidate readers
 and response replay retain older contracts without relaxing current live validation.
+The v12 instructions structure facts and compare them with the source before writing
+new or changed body claims. They preserve ownership, negation, conditions, scope,
+time, and certainty; preserved existing body text does not require fact extraction again.
+`chunk_overlap_chars` defaults to `0`, preserving the earlier chunks and serialized
+settings. A positive value below `chunk_chars` repeats complete sentences from the
+previous chunk when space permits. Original source positions and the chunk size
+limit remain exact; overlapping text counts toward the context budget.
+Current candidates with specific validation diagnostics can receive one feedback
+repair per call (`refresh-validation-repair-v1`). Only that call is regenerated;
+successful calls are retained, and the replacement and final aggregate are validated.
+Repairs share the request's call budget and reserve calls for remaining targets.
+Saved results, including failures, remain immutable and are reused without generation.
 The OpenAI Responses adapter and local HTTP integration are implemented. Conversation-authored
 responses verify the refresh flow. Real OpenAI calls are also evaluated against synthetic
 novel fixtures; see [refresh quality changes and validation](docs/migration/refresh-quality.md)
@@ -47,11 +61,35 @@ service injection; the evaluation CLI still uses fake stores. HTTP/Kafka refresh
 are not implemented. See
 [OpenAI migration results](docs/migration/openai-adapter.md).
 
+The Responses adapter provides no seed setting and leaves `reasoning.effort` at the
+model default (`medium`). A real `gpt-6-luna` smoke run using v11 completed one
+record-and-consent case with four calls, including one successful repair. Its final
+result was `PROPOSED` with human semantic review pending. Repeated semantic A/B
+trials did not establish a v12 advantage, so v11 remains the default. Long-input
+trials reached the earlier output limit; the example and local output budget now
+allow 16,384 tokens. This budget change is separate from prompt quality.
+
 Each evaluation run also writes `report.md` with proposal diffs,
 check results, latency, and known token usage. To render existing evaluation JSON
 without model calls, run `.venv/bin/python -m scripts.report_refresh .evaluation/live-2`
 from this repository, replacing the directory with your evaluation output.
 See [report usage and limits](docs/migration/openai-adapter.md#markdown으로-결과-검토).
+The report separates candidate counts across attempts (including regeneration
+duplicates), validation failures, repair attempts and successes, and final proposals.
+For independent repeated v11/v12 trials, run the following from this repository:
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh_ab \
+  --live --env-file .env --suite semantic --repeats 2 --max-calls 32 \
+  --max-total-calls 128 --trial semantic-ab --output .evaluation/semantic-ab
+```
+
+This live command reserves the full call budget, including repairs, for both
+conditions and both repetitions. `--repeats` must be at least two. Add
+`--include-overlap --overlap-chars 200` for a third v12 condition and raise the
+total reservation to at least 192 for this example. The private comparison summary
+contains counts and status labels, without source or proposal bodies, and leaves
+the quality decision pending human review. See [A/B usage](docs/migration/openai-adapter.md#프롬프트와-청크-겹침-반복-비교).
 
 ## Stack
 

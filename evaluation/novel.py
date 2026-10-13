@@ -25,6 +25,7 @@ from app.refresh.models import (
 )
 from app.refresh.policy import RELATION_KEYS
 from evaluation.cases import EvaluationCase
+from evaluation.semantics import BodyCriterion, ProposalScope
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "docs/examples/refresh/novel"
 SETTINGS_ROOT = (
@@ -237,12 +238,95 @@ def novel_settings_case(
             ("ITEM", "항만 지하의 종"),
         ),
         new_required_words=(("CHARACTER", "강연오", ("등대", "신청", "노래")),),
-        new_forbidden_words=(
-            ("CHARACTER", "강연오", ("완전히 회복", "모든 기억을", "딸이 살아")),
-            ("EVENT", "강연오의 기억 반환", ("완전히 회복", "모든 기억을")),
-        ),
+        # Affirmative body criteria below distinguish completion from a negated
+        # or historical mention of the same words.
+        new_forbidden_words=(),
         allowed_relations=novel_allowed_relations(
             base.source.documents + tuple(documents), allowed_new
+        ),
+        body_criteria=(
+            BodyCriterion(
+                "도윤 파견 기간의 본문 표현",
+                ProposalScope("document", "character-doyun"),
+                required_patterns=(
+                    r"(?:기한|파견|기간)[^.!?。]{0,20}한 달",
+                    r"한 달[^.!?。]{0,20}(?:파견|담당)",
+                ),
+                forbidden_patterns=(
+                    r"(?:백)?도윤(?:은|이|가) (?:두 달|세 달|무기한) 동안 임시 파견(?:되어|돼) [^.!?。]{0,30}(?:맡는다|담당한다|근무한다)(?=[.!?。]|$)",
+                    r"(?:파견 기간|파견 기한)(?:은|이)? (?:두 달|세 달|무기한)(?:이다|이었다)(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "도윤 이름표 소유자의 오귀속 금지",
+                ProposalScope("document", "character-doyun"),
+                forbidden_patterns=(
+                    r"(?:조합장|반장)(?:의|이 가진) (?:이름표|명찰)(?: 뒤|에|에는)[^.!?。]{0,20}임시 파견[^.!?。]{0,20}(?:붙어 있었다|적혀 있었다|기록되어 있었다|있었다)(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "도윤에게 승인과 봉인 해제를 이전하지 않음",
+                ProposalScope("document", "character-doyun"),
+                forbidden_patterns=(
+                    r"(?:백)?도윤(?:은|이|가) (?:반환 승인(?:과 봉인 해제)?|봉인 해제)(?:를|을)? (?:담당한다|맡는다|책임진다)(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "서명과 현재 동의를 구분하는 본문 표현",
+                ProposalScope("document", "character-haeju"),
+                required_patterns=(
+                    r"(?:지금|현재)[^.!?。]{0,15}동의",
+                    r"서명[^.!?。]{0,30}동의[^.!?。]{0,20}(?:대신할 수 없|별개|구분)",
+                ),
+                forbidden_patterns=(
+                    r"서명(?:이|은|만으로)[^.!?。]{0,25}(?:현재|지금)의? 동의(?:를|를 충분히) 대신한다(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "강연오의 부분 반환 본문 표현",
+                ProposalScope("new", "new:CHARACTER:강연오"),
+                required_patterns=(
+                    r"노래[^.!?。]{0,15}(?:한 소절|일부)",
+                    r"(?:한 소절|일부)[^.!?。]{0,15}노래",
+                ),
+                forbidden_patterns=(
+                    r"(?:모든 기억|기억 전부|기억 전체|기억을 완전히)[^.!?。]{0,20}(?:회복했다|되찾았다|돌려받았다)(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "강연오가 정확한 가사를 되찾지 못한 상태",
+                ProposalScope("new", "new:CHARACTER:강연오"),
+                required_patterns=(
+                    r"가사[^.!?。]{0,30}(?:못|않|기억나지)",
+                    r"(?:못|않)[^.!?。]{0,15}가사",
+                ),
+                forbidden_patterns=(
+                    r"정확한 가사(?:를|가)[^.!?。]{0,12}(?:기억한다|기억했다|되찾았다)(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "강연오 딸의 귀환을 새 사실로 만들지 않음",
+                ProposalScope("new", "new:CHARACTER:강연오"),
+                forbidden_patterns=(
+                    r"딸(?:은|이) 살아 (?:돌아왔다|있다)(?=[.!?。]|$)",
+                    r"딸(?:은|이) 다시 살아났다(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "기억 반환 이벤트의 전체 회복 단정 금지",
+                ProposalScope("new", "new:EVENT:강연오의 기억 반환"),
+                forbidden_patterns=(
+                    r"(?:모든 기억|기억 전부|기억 전체|기억을 완전히)[^.!?。]{0,20}(?:회복했다|되찾았다|돌려받았다)(?=[.!?。]|$)",
+                    r"기억(?:을|이|은)? 완전히 회복(?:했다|되었다)(?=[.!?。]|$)",
+                ),
+            ),
+            BodyCriterion(
+                "기억세 징수 중지를 완전 폐지로 단정하지 않음",
+                ProposalScope("document", "worldview-memory-tax"),
+                forbidden_patterns=(
+                    r"기억세(?:는|가)? 완전히 폐지(?:됐다|되었다)(?=[.!?。]|$)",
+                ),
+            ),
         ),
     )
 

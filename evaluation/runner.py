@@ -20,7 +20,7 @@ from evaluation.fakes import (
 
 
 class CallBudget:
-    """전체 사례·재실행에 공유하는 호출 상한. 자동 재시도는 하지 않는다."""
+    """전체 사례·보완에 공유하는 실제 모델 시도 상한."""
 
     def __init__(self, maximum: int):
         if type(maximum) is not int or maximum <= 0:
@@ -69,6 +69,8 @@ class EvaluationModel:
         self.snapshot = None
 
     def generate(self, model_input):
+        # A rejected budget check never invokes the model and creates no attempt.
+        self.budget.consume()
         if self.recorder is not None:
             return self.recorder.generate(
                 model_input, lambda: self._generate(model_input)
@@ -76,7 +78,6 @@ class EvaluationModel:
         return self._generate(model_input)
 
     def _generate(self, model_input):
-        self.budget.consume()
         if self.delegate is not None:
             return self.delegate.generate(model_input)
         if self.snapshot is None:
@@ -150,7 +151,9 @@ def assemble(case: EvaluationCase, model, budget: CallBudget, recorder=None):
         publisher=FakePublisher(calls),
         rules=EvaluationRules(model, recorder),
     )
-    return SimpleNamespace(service=service, artifacts=artifacts, calls=calls)
+    return SimpleNamespace(
+        service=service, artifacts=artifacts, calls=calls, recorder=recorder
+    )
 
 
 def run_case(case, scenario, *, repeat_saved=False):
@@ -159,6 +162,8 @@ def run_case(case, scenario, *, repeat_saved=False):
     if repeat_saved:
         assert scenario.service.run(case.request, "evaluation-2") == completion
     result = scenario.artifacts.read_result(case.request)
+    if getattr(scenario, "recorder", None) is not None:
+        scenario.recorder.reconcile(result.attempts)
     assessment = assess(case, result)
     snapshot = scenario.artifacts.read_context(case.request)
     original = {

@@ -120,6 +120,7 @@ def test_budget_exhaustion_does_not_call_delegate():
     scenario = assemble(case, delegate, budget)
     result, _ = run_case(case, scenario)
     assert result.failure.code == "EVALUATION_CALL_BUDGET"
+    assert result.usage.calls == 0 and not result.attempts
     delegate.generate.assert_not_called()
 
 
@@ -309,3 +310,80 @@ def test_cli_and_markdown_distinguish_extra_creation_review(
     if classification == "unreviewed":
         assert "기준에 등록되지 않은 신규 설정 | 검토 필요: LOCATION:항구" in text
     assert "근거 E" not in text and "E0001" not in text
+
+
+@pytest.mark.parametrize("fixed,maximum", [(False, 4), (True, 4), (True, 3)])
+def test_cli_records_validation_repair_and_saved_reuse_with_shared_call_budget(
+    tmp_path, monkeypatch, capsys, fixed, maximum
+):
+    from dataclasses import replace
+
+    import scripts.evaluate_refresh as cli
+    from evaluation.runner import EvaluationModel
+    from evaluation.semantic_cases import semantic_cases
+
+    case = semantic_cases("gpt-5.6-luna", "test")[0]
+    baseline = EvaluationModel(case, None, CallBudget(20))
+
+    class InvalidInitialModel:
+        def __init__(self):
+            self.count = 0
+
+        def generate(self, model_input):
+            candidate = baseline._generate(model_input)
+            self.count += 1
+            if self.count == 1 or not fixed:
+                fact = candidate.facts[0]
+                candidate = replace(
+                    candidate,
+                    facts=(
+                        replace(
+                            fact,
+                            actor=replace(fact.actor, document_id="unknown-character"),
+                        ),
+                    )
+                    + candidate.facts[1:],
+                )
+            return candidate
+
+    delegate = InvalidInitialModel()
+    original_assemble = cli.assemble
+
+    def assemble_scripted(case, model, budget, recorder):
+        return original_assemble(case, delegate, budget, recorder)
+
+    monkeypatch.setattr(cli, "assemble", assemble_scripted)
+    monkeypatch.setattr(cli, "semantic_cases", lambda model, trial: (case,))
+    output = tmp_path / "repair"
+    succeeded = fixed and maximum == 4
+    calls = maximum if fixed else 2
+    assert main(
+        arguments(output)
+        + ["--suite", "semantic", "--max-calls", str(maximum), "--repeat-saved"]
+    ) == (0 if succeeded else 1)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["calls"] == calls
+    assert summary["repair_attempts"] == 1
+    assert summary["repair_successes"] == int(fixed)
+    assert delegate.count == summary["calls"]
+    report = json.loads((output / "semantic-roles.json").read_text())
+    assert report["attempts"] == summary["calls"]
+    assert report["result"]["execution"]["usage"]["calls"] == summary["calls"]
+    records = [
+        json.loads(path.read_text()) for path in sorted(output.glob("*-attempt-*.json"))
+    ]
+    assert len(records) == summary["calls"]
+    assert [record["attempt_index"] for record in records[:2]] == [0, 1]
+    assert [record["call_index"] for record in records[:2]] == [1, 1]
+    assert records[0]["validation"]["outcome"] == "FAILED"
+    assert records[1]["validation"]["outcome"] == ("PROPOSED" if fixed else "FAILED")
+    text = (output / "report.md").read_text()
+    assert "| 보완 시도 | 1 |" in text
+    assert f"| 보완 성공 | {int(fixed)} |" in text
+    assert (
+        f"| 최종 채택 수정 / 신규 설정 / 관계 | {'3 / 0 / 2' if succeeded else '0 / 0 / 0'} |"
+        in text
+    )
+    counts = f"{calls} / 0 / {3 if fixed else 2}"
+    assert f"| 호출별 후보 수(중복 포함) | {counts} |" in text
+    assert "evidence_refs" not in text and "source_marker" not in text

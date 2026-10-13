@@ -55,6 +55,198 @@ def status(report):
     }[evaluation_outcome(report)]
 
 
+PROPOSAL_FIELDS = (
+    "document_proposals",
+    "new_document_proposals",
+    "relation_proposals",
+)
+
+
+def proposal_counts(candidate):
+    return {
+        key: len(candidate[key]) if isinstance(candidate.get(key), list) else None
+        for key in PROPOSAL_FIELDS
+    }
+
+
+def attempt_details(report, attempts):
+    """실행별 검증 결과를 원본 기록과 연결한다. 과거의 없는 검증 상태는 추측하지 않는다."""
+    result = report.get("result", {})
+    tracked = result.get("execution", {}).get("attempts", [])
+    details = []
+    for index in range(max(len(tracked), len(attempts))):
+        filename, record = attempts[index] if index < len(attempts) else (None, {})
+        validation = (
+            tracked[index] if index < len(tracked) else record.get("validation", {})
+        )
+        candidate = record.get("candidate") or {}
+        counts = proposal_counts(candidate)
+        counts.update(
+            {key: validation[key] for key in PROPOSAL_FIELDS if key in validation}
+        )
+        failure = validation.get("failure") or record.get("failure")
+        outcome = validation.get("outcome")
+        if outcome in {"PROPOSED", "NO_CHANGE"}:
+            state = "validated"
+        elif failure:
+            state = (
+                "validation_failed"
+                if candidate
+                or validation.get("diagnostics")
+                or failure.get("code") == "MODEL_INVALID_RESPONSE"
+                else "model_failed"
+            )
+        else:
+            state = "unknown"
+        details.append(
+            {
+                "filename": filename,
+                "record": record,
+                "call_index": validation.get("call_index", record.get("call_index")),
+                "attempt_index": validation.get(
+                    "attempt_index", record.get("attempt_index")
+                ),
+                "state": state,
+                "counts": counts,
+                "failure": failure or {},
+            }
+        )
+    return details
+
+
+def known_total(values):
+    known = [value for value in values if type(value) is int]
+    total = sum(known)
+    if len(known) == len(values):
+        return str(total)
+    return f"{total} + 미확인" if total else "미확인"
+
+
+def integration_validation_failure(report):
+    """검증을 통과한 호출들 이후의 통합 오류만 집계한다. 과거 단계는 추정하지 않는다."""
+    result = report.get("result", {})
+    if result.get("outcome") in {"PROPOSED", "NO_CHANGE"}:
+        return "0"
+    failure = report.get("failure") or result.get("error") or {}
+    code = failure.get("code", "")
+    domain_error = code.startswith(
+        ("INVALID_", "CONFLICTING_", "UNKNOWN_")
+    ) or code in {
+        "REVISION_MISMATCH",
+        "DUPLICATE_SETTING",
+    }
+    if code and not domain_error:
+        # Model, budget and IO failures do not come from candidate integration.
+        return "0"
+    tracked = result.get("execution", {}).get("attempts", [])
+    if tracked and result.get("outcome") == "FAILED":
+        last_outcome = tracked[-1].get("outcome")
+        if last_outcome == "FAILED":
+            return "0"
+        if domain_error and last_outcome in {"PROPOSED", "NO_CHANGE"}:
+            return "1"
+    return "미확인"
+
+
+def generation_lines(report, attempts):
+    result = report.get("result", {})
+    details = attempt_details(report, attempts)
+    final = " / ".join(str(len(result.get(key, []))) for key in PROPOSAL_FIELDS)
+    generated = (
+        " / ".join(
+            known_total([detail["counts"][key] for detail in details])
+            for key in PROPOSAL_FIELDS
+        )
+        if details
+        else "미확인"
+    )
+    failures = (
+        known_total(
+            [
+                None
+                if detail["state"] == "unknown"
+                else int(detail["state"] == "validation_failed")
+                for detail in details
+            ]
+        )
+        if details
+        else "기록 없음"
+    )
+    repairs = (
+        known_total(
+            [
+                int(detail["attempt_index"] > 0)
+                if type(detail["attempt_index"]) is int
+                else None
+                for detail in details
+            ]
+        )
+        if details
+        else "기록 없음"
+    )
+    successes = (
+        known_total(
+            [
+                None
+                if detail["attempt_index"] is None
+                or (detail["attempt_index"] > 0 and detail["state"] == "unknown")
+                else int(detail["attempt_index"] > 0 and detail["state"] == "validated")
+                for detail in details
+            ]
+        )
+        if details
+        else "기록 없음"
+    )
+    lines = [
+        "### 생성·검증·보완 현황",
+        "후보 수는 수정 / 신규 설정 / 관계 순서입니다. 호출별 합계는 재생성된 후보의 중복을 포함하며, 최종 채택 수는 최종 결과의 제안만 집계합니다.",
+        "| 항목 | 수 |",
+        "| --- | --- |",
+        f"| 기록된 모델 시도 | {len(details) if details else '기록 없음'} |",
+        f"| 호출별 후보 수(중복 포함) | {generated} |",
+        f"| 호출 후보 검증 실패 | {failures} |",
+        f"| 최종 통합 검증 실패 | {integration_validation_failure(report)} |",
+        f"| 보완 시도 | {repairs} |",
+        f"| 보완 성공 | {successes} |",
+        f"| 최종 채택 수정 / 신규 설정 / 관계 | {final} |",
+        "",
+        "| 시도 | 호출 범위 | 단계 | 검증 결과 | 수정 / 신규 설정 / 관계 | 실패 코드 |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    states = {
+        "validated": "검증 통과",
+        "validation_failed": "검증 실패",
+        "model_failed": "모델 호출 실패",
+        "unknown": "검증 정보 없음",
+    }
+    for index, detail in enumerate(details, 1):
+        link = (
+            f"[{index}]({quote(detail['filename'])})"
+            if detail["filename"]
+            else str(index)
+        )
+        phase = (
+            "미확인"
+            if detail["attempt_index"] is None
+            else "보완"
+            if detail["attempt_index"]
+            else "초기"
+        )
+        counts = " / ".join(
+            str(detail["counts"][key])
+            if detail["counts"][key] is not None
+            else "미확인"
+            for key in PROPOSAL_FIELDS
+        )
+        state = states[detail["state"]]
+        lines.append(
+            f"| {link} | {detail['call_index'] or '미확인'} | {phase} | {state} | {counts} | {inline(detail['failure'].get('code', '없음'))} |"
+        )
+    if not details:
+        lines.append("\n시도별 생성·검증·보완 기록이 없습니다.")
+    return lines
+
+
 def case_lines(filename, report, attempts):
     result = report.get("result", {})
     lines = [
@@ -92,6 +284,19 @@ def case_lines(filename, report, attempts):
                 "\n역할·수령인·범위 검사는 등록된 사실 기준을 비교합니다. "
                 "전체 본문의 의미와 사실 해석은 별도 검토가 필요합니다."
             )
+        if report["assessment"].get("body_assessment", {}).get("criteria_count"):
+            lines.append(
+                "본문 검사는 등록된 표현의 누락과 잘못된 단정을 확인합니다. "
+                "표현이 일치해도 전체 의미와 사실 연결은 검토 대기로 남습니다."
+            )
+        if (
+            report["assessment"].get("assessment_availability")
+            == "unavailable_final_failure"
+        ):
+            lines.append(
+                "최종 실패로 제안 전체가 폐기되어 추출 누락과 본문 평가는 수행하지 않았습니다."
+            )
+    lines.extend(generation_lines(report, attempts))
     lines.extend(
         [
             "### 응답 시간과 사용량",
@@ -234,7 +439,7 @@ def write_report(directory: Path) -> Path:
         "기존 설정 보존과 관계의 타당성은 사람이 검토해야 합니다.",
         "S3·Content·관계 조회·상태 저장·Kafka는 평가용 fake입니다. "
         "제안이 실제 문서에 반영됐거나 운영 연동이 검증됐다는 뜻은 아닙니다.",
-        "| 사례 | 응답 출처 | 판정 | 결과 | 수정 / 생성 / 관계 |",
+        "| 사례 | 응답 출처 | 판정 | 결과 | 최종 채택 수정 / 신규 설정 / 관계 |",
         "| --- | --- | --- | --- | --- |",
     ]
     sources = {

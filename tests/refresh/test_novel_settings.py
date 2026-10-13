@@ -111,10 +111,14 @@ def test_expanded_cli_writes_reviewable_report_without_network(tmp_path):
             arguments(output)
             + ["--suite", "novel-settings", "--max-calls", "9", "--repeat-saved"]
         )
-        == 0
+        == 2
     )
     report = json.loads((output / "novel-settings.json").read_text())
     assert not report["live"]
+    assert report["assessment"]["body_claim_mismatches"] == []
+    assert report["assessment"]["unreviewed_body_claims"] == [
+        "서명과 현재 동의를 구분하는 본문 표현: 본문 표현 미확인"
+    ]
     assert report["result"]["execution"]["usage"]["calls"] == 9
     assert len(report["snapshot"]["documents"]) == 10
     assert len(list(output.glob("*-attempt-*.json"))) == 9
@@ -144,7 +148,13 @@ def test_expanded_cli_uses_nine_call_default_when_no_budget_is_configured(
     values = arguments(output)
     offset = values.index("--max-calls")
     del values[offset : offset + 2]
-    assert main(values + ["--suite", "novel-settings"]) == 0
+    assert main(values + ["--suite", "novel-settings"]) == 2
+    report = json.loads((output / "novel-settings.json").read_text())
+    assert report["result"]["execution"]["usage"]["calls"] == 9
+    assert report["assessment"]["body_claim_mismatches"] == []
+    assert report["assessment"]["unreviewed_body_claims"] == [
+        "서명과 현재 동의를 구분하는 본문 표현: 본문 표현 미확인"
+    ]
 
 
 def test_expanded_cli_preserves_environment_call_budget(tmp_path, monkeypatch):

@@ -11,12 +11,14 @@ from app.refresh.models import (
     FactEntity,
     Failure,
     JobKey,
+    ModelAttempt,
     NewDocumentProposal,
     Outcome,
     RefreshResult,
     RelationProposal,
     SourceFact,
     Usage,
+    ValidationDiagnostic,
 )
 
 RESULT_SCHEMA_VERSION = "refresh-result-v3"
@@ -92,9 +94,20 @@ def result_to_payload(request, result, snapshot=None):
             "settings": {
                 key: value
                 for key, value in asdict(request.settings).items()
-                if key != "separate_discovery" or value is not False
+                if (key != "separate_discovery" or value is not False)
+                and (key != "chunk_overlap_chars" or value != 0)
             },
             "usage": asdict(result.usage),
+            **(
+                {"attempts": [asdict(a) for a in result.attempts]}
+                if result.attempts
+                else {}
+            ),
+            **(
+                {"validation_diagnostics": [asdict(d) for d in result.diagnostics]}
+                if result.diagnostics
+                else {}
+            ),
             "changed_ids": list(changed_ids),
             "target_ids": list(snapshot.target_ids) if snapshot else [],
             "observed_graph_version": snapshot.related.observed_version
@@ -180,6 +193,13 @@ def result_from_payload(payload):
             if payload["schema_version"] == RESULT_SCHEMA_VERSION
             else (),
             execution.get("candidate_schema_version"),
+            tuple(
+                _attempt_from_payload(item) for item in execution.get("attempts", [])
+            ),
+            tuple(
+                ValidationDiagnostic(**item)
+                for item in execution.get("validation_diagnostics", [])
+            ),
         )
         _check_outcome(result)
         if (
@@ -200,6 +220,7 @@ def result_from_payload(payload):
 
 
 def _check_outcome(result):
+    _check_attempts(result)
     if result.candidate_schema_version is not None and (
         not isinstance(result.candidate_schema_version, str)
         or result.candidate_schema_version not in _CANDIDATE_SCHEMAS
@@ -248,6 +269,111 @@ def _check_outcome(result):
         or (result.outcome == Outcome.PROPOSED) != has_proposals
     ):
         raise ValueError("Result outcome conflicts with proposals or error")
+
+
+def _attempt_from_payload(raw):
+    """보완 이력의 열거형·불변 값과 내부 진단을 복원한다."""
+    item = dict(raw)
+    item["target_ids"] = tuple(item["target_ids"])
+    item["outcome"] = Outcome(item["outcome"])
+    item["usage"] = Usage(**item["usage"])
+    item["failure"] = Failure(**item["failure"]) if item["failure"] else None
+    item["diagnostics"] = tuple(
+        ValidationDiagnostic(**diagnostic) for diagnostic in item["diagnostics"]
+    )
+    return ModelAttempt(**item)
+
+
+def _check_diagnostics(diagnostics):
+    if not isinstance(diagnostics, tuple) or any(
+        not isinstance(d, ValidationDiagnostic)
+        or not isinstance(d.path, str)
+        or not d.path
+        or not isinstance(d.rule, str)
+        or not d.rule
+        or any(
+            value is not None and not isinstance(value, str)
+            for value in (d.fact_id, d.source_marker, d.offending_value)
+        )
+        for d in diagnostics
+    ):
+        raise ValueError("Malformed validation diagnostics")
+
+
+def _check_attempts(result):
+    """시도 순서·상태·관측량을 검증한다. 이력이 없는 과거 결과도 읽는다."""
+    _check_diagnostics(result.diagnostics)
+    if not isinstance(result.attempts, tuple):
+        raise ValueError("Attempt tuple required")
+    previous = None
+    for attempt in result.attempts:
+        if (
+            not isinstance(attempt, ModelAttempt)
+            or type(attempt.call_index) is not int
+            or attempt.call_index < 1
+            or type(attempt.attempt_index) is not int
+            or attempt.attempt_index not in {0, 1}
+            or not isinstance(attempt.target_ids, tuple)
+            or not all(
+                isinstance(target, str) and target for target in attempt.target_ids
+            )
+            or len(set(attempt.target_ids)) != len(attempt.target_ids)
+            or not isinstance(attempt.outcome, Outcome)
+            or not isinstance(attempt.usage, Usage)
+            or attempt.usage.calls != 1
+            or any(
+                type(value) is not int or value < 0
+                for value in (
+                    attempt.usage.calls,
+                    attempt.usage.input_tokens,
+                    attempt.usage.output_tokens,
+                )
+            )
+            or any(
+                value is not None and (type(value) is not int or value < 0)
+                for value in (
+                    attempt.document_proposals,
+                    attempt.relation_proposals,
+                    attempt.new_document_proposals,
+                )
+            )
+            or (attempt.outcome == Outcome.FAILED) != (attempt.failure is not None)
+            or (
+                attempt.failure is not None and not isinstance(attempt.failure, Failure)
+            )
+        ):
+            raise ValueError("Malformed model attempt")
+        _check_diagnostics(attempt.diagnostics)
+        if previous is None:
+            valid_order = attempt.call_index == 1 and attempt.attempt_index == 0
+        elif attempt.call_index == previous.call_index:
+            valid_order = (
+                previous.attempt_index == 0
+                and previous.outcome == Outcome.FAILED
+                and attempt.attempt_index == 1
+                and attempt.target_ids == previous.target_ids
+            )
+        else:
+            valid_order = (
+                attempt.call_index == previous.call_index + 1
+                and attempt.attempt_index == 0
+                and previous.outcome != Outcome.FAILED
+            )
+        if not valid_order:
+            raise ValueError("Model attempt sequence invalid")
+        previous = attempt
+    if (
+        previous is not None
+        and previous.outcome == Outcome.FAILED
+        and result.outcome != Outcome.FAILED
+    ):
+        raise ValueError("Successful result ends with failed model attempt")
+    if result.attempts and result.usage != Usage(
+        len(result.attempts),
+        sum(a.usage.input_tokens for a in result.attempts),
+        sum(a.usage.output_tokens for a in result.attempts),
+    ):
+        raise ValueError("Attempt usage differs from result")
 
 
 def completion_to_payload(completion: Completion):

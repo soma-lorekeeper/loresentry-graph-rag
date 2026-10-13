@@ -4,21 +4,31 @@ import argparse
 import json
 import os
 from contextlib import ExitStack
-from dataclasses import asdict
+from dataclasses import asdict, fields, replace
 from pathlib import Path
 
 from openai import OpenAI
 
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.refresh.errors import RefreshFailure
+from app.refresh.prompt_versions import SUPPORTED_PROMPT_VERSIONS
 from app.refresh.serialization import result_to_payload
 from evaluation.artifacts import AttemptRecorder, RecordingClient, write_json
-from evaluation.cases import cases, evaluation_outcome, new_setting_cases
+from evaluation.cases import (
+    cases,
+    evaluation_fingerprint,
+    evaluation_outcome,
+    new_setting_cases,
+)
 from evaluation.markdown import write_report
 from evaluation.novel import novel_case, novel_settings_case
 from evaluation.replay import ResponseReplay
 from evaluation.runner import CallBudget, assemble, planned_calls, run_case
-from evaluation.semantic_cases import semantic_cases
+from evaluation.semantic_cases import (
+    boundary_cases,
+    rebase_expected_sources,
+    semantic_cases,
+)
 
 
 def environment(path: Path | None) -> dict:
@@ -44,7 +54,14 @@ def main(argv=None) -> int:
     mode.add_argument("--responses-dir", type=Path)
     parser.add_argument(
         "--suite",
-        choices=("basic", "novel", "novel-settings", "new-settings", "semantic"),
+        choices=(
+            "basic",
+            "novel",
+            "novel-settings",
+            "new-settings",
+            "semantic",
+            "boundary",
+        ),
         default="basic",
     )
     parser.add_argument("--env-file", type=Path)
@@ -54,6 +71,9 @@ def main(argv=None) -> int:
     parser.add_argument("--max-output-tokens", type=int)
     parser.add_argument("--context-window", type=int)
     parser.add_argument("--max-calls", type=int)
+    parser.add_argument("--prompt-version", choices=sorted(SUPPORTED_PROMPT_VERSIONS))
+    parser.add_argument("--chunk-chars", type=int)
+    parser.add_argument("--chunk-overlap-chars", type=int, default=0)
     parser.add_argument("--trial", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case", action="append", dest="selected")
@@ -90,12 +110,59 @@ def main(argv=None) -> int:
             if args.suite == "new-settings"
             else semantic_cases(limits.model, args.trial)
             if args.suite == "semantic"
+            else boundary_cases(limits.model, args.trial)
+            if args.suite == "boundary"
             else cases(limits.model, args.trial)
         )
         if args.selected:
             if not set(args.selected) <= {c.name for c in fixtures}:
                 raise ValueError("Unknown evaluation case")
             fixtures = tuple(c for c in fixtures if c.name in args.selected)
+        metadata = {
+            case.name: {
+                "dataset_fingerprint": evaluation_fingerprint(
+                    {
+                        "documents": case.source.documents,
+                        "related": case.related,
+                        "targets": case.targets,
+                    }
+                ),
+                "criteria_fingerprint": evaluation_fingerprint(
+                    {
+                        field.name: getattr(case, field.name)
+                        for field in fields(case)
+                        if field.name
+                        not in {"name", "request", "source", "related", "targets"}
+                    }
+                ),
+            }
+            for case in fixtures
+        }
+        configured = []
+        for case in fixtures:
+            settings = replace(
+                case.request.settings,
+                chunk_chars=(
+                    args.chunk_chars
+                    if args.chunk_chars is not None
+                    else case.request.settings.chunk_chars
+                ),
+                chunk_overlap_chars=args.chunk_overlap_chars,
+            )
+            model_settings = replace(
+                case.request.model_settings,
+                prompt_version=(
+                    args.prompt_version or case.request.model_settings.prompt_version
+                ),
+            )
+            request = replace(
+                case.request, settings=settings, model_settings=model_settings
+            )
+            case = replace(case, request=request)
+            if not args.live and args.responses_dir is None:
+                case = rebase_expected_sources(case)
+            configured.append(case)
+        fixtures = tuple(configured)
         required_calls = sum(planned_calls(case) for case in fixtures)
         if required_calls > budget.maximum:
             raise ValueError("Call budget smaller than selected evaluation suite")
@@ -140,7 +207,10 @@ def main(argv=None) -> int:
                 "trial": args.trial,
                 "request": asdict(case.request),
                 "settings": asdict(limits),
+                "evaluation": metadata[case.name],
+                "evaluation_call_budget": budget.maximum,
             }
+            result = None
             try:
                 result, assessment = run_case(
                     case, scenario, repeat_saved=args.repeat_saved
@@ -159,8 +229,23 @@ def main(argv=None) -> int:
                 report["unexpected_error_type"] = type(error).__name__
                 raise
             finally:
+                if result is not None:
+                    recorder.reconcile(result.attempts)
                 report["attempts"] = len(recorder.records)
                 report["observed_usage"] = [r["usage"] for r in recorder.records]
+                report["observed_attempts"] = [
+                    {
+                        key: record.get(key)
+                        for key in (
+                            "attempt",
+                            "call_index",
+                            "attempt_index",
+                            "repair_version",
+                            "validation",
+                        )
+                    }
+                    for record in recorder.records
+                ]
                 report["snapshot"] = (
                     asdict(snapshot)
                     if (snapshot := scenario.artifacts.read_context(case.request))
@@ -188,6 +273,18 @@ def main(argv=None) -> int:
                 "live": args.live,
                 "cases": len(reports),
                 "calls": budget.used,
+                "repair_attempts": sum(
+                    attempt["attempt_index"] > 0
+                    for report in reports
+                    for attempt in report["observed_attempts"]
+                ),
+                "repair_successes": sum(
+                    attempt["attempt_index"] > 0
+                    and (attempt.get("validation") or {}).get("outcome")
+                    in {"PROPOSED", "NO_CHANGE"}
+                    for report in reports
+                    for attempt in report["observed_attempts"]
+                ),
                 "failed": failed,
                 "review_required": review_required,
                 "output": str(args.output),

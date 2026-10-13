@@ -9,10 +9,11 @@ from openai.types.responses import Response
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Failure, ModelSettings
+from app.refresh.models import Failure, ModelAttempt, ModelSettings, Outcome, Usage
+from app.refresh.rules import RefreshRules
 from evaluation.artifacts import AttemptRecorder, RecordingClient
 from evaluation.cases import cases
-from evaluation.runner import CallBudget, assemble, run_case
+from evaluation.runner import CallBudget, assemble, evaluation_snapshot, run_case
 
 
 def setup(tmp_path, text):
@@ -88,3 +89,69 @@ def test_preflight_failure_keeps_unknown_usage(tmp_path):
     assert not record["remote_requested"]
     assert not record["usage_known"]
     assert record["usage"] is None
+
+
+def test_repair_records_keep_separate_files_and_reconcile_without_duplicate_attempts(
+    tmp_path,
+):
+    case = cases("gpt-5.6-luna", "recording")[0]
+    recorder = AttemptRecorder(
+        tmp_path, case, ModelLimits("gpt-5.6-luna", 10, 40000, 2000, 42000), False
+    )
+    snapshot = evaluation_snapshot(case)
+    model_input = RefreshRules().model_inputs(snapshot, RefreshRules().chunk(snapshot))[
+        0
+    ]
+    recorder.generate(model_input, lambda: case.expected)
+    prompt = json.loads(model_input.prompt)
+    prompt["validation_repair"] = {
+        "version": "refresh-validation-repair-v1",
+        "attempt": 1,
+    }
+    recorder.generate(
+        replace(model_input, prompt=json.dumps(prompt)), lambda: case.expected
+    )
+    failure = Failure("INVALID_EVIDENCE", "private source detail")
+    attempts = (
+        ModelAttempt(1, 0, ("c1",), Outcome.FAILED, Usage(1, 10, 20), 1, 0, 0, failure),
+        ModelAttempt(1, 1, ("c1",), Outcome.PROPOSED, Usage(1, 12, 22), 1, 0, 0),
+    )
+    recorder.records[0]["usage"] = {"input_tokens": 10, "output_tokens": 20}
+    recorder.records[0]["usage_known"] = True
+    recorder.reconcile(attempts)
+    recorder.reconcile(attempts)
+    paths = sorted(tmp_path.glob("*-attempt-*.json"))
+    assert len(paths) == 2
+    first, repair = [json.loads(path.read_text()) for path in paths]
+    assert first["attempt"] == 1 and repair["attempt"] == 2
+    assert first["call_index"] == repair["call_index"] == 1
+    assert first["attempt_index"] == 0 and repair["attempt_index"] == 1
+    assert repair["repair_version"] == "refresh-validation-repair-v1"
+    assert first["validation"]["outcome"] == "FAILED"
+    assert repair["validation"]["outcome"] == "PROPOSED"
+    assert first["failure"]["code"] == "INVALID_EVIDENCE"
+    assert first["usage"] == {"input_tokens": 10, "output_tokens": 20}
+    assert first["usage_known"]
+    assert first["candidate"] is not None and repair["candidate"] is not None
+
+
+def test_exhausted_budget_does_not_create_an_attempt_record(tmp_path):
+    case = cases("gpt-5.6-luna", "budget")[0]
+    recorder = AttemptRecorder(
+        tmp_path, case, ModelLimits("gpt-5.6-luna", 10, 40000, 2000, 42000), False
+    )
+    budget = CallBudget(1)
+    budget.consume()
+    delegate = Mock()
+    scenario = assemble(case, delegate, budget, recorder)
+    snapshot = evaluation_snapshot(case)
+    model_input = RefreshRules().model_inputs(snapshot, RefreshRules().chunk(snapshot))[
+        0
+    ]
+    with pytest.raises(RefreshFailure) as error:
+        scenario.service.model.generate(model_input)
+    assert error.value.failure.code == "EVALUATION_CALL_BUDGET"
+    assert not recorder.records
+    assert not list(tmp_path.glob("*.json"))
+    assert budget.used == 1
+    delegate.generate.assert_not_called()

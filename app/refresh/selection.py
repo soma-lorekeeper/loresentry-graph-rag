@@ -70,6 +70,8 @@ def validate_input(request, source):
         or type(settings.max_depth) is not int
         or not 0 <= settings.max_depth <= 3
         or type(settings.separate_discovery) is not bool
+        or type(settings.chunk_overlap_chars) is not int
+        or not 0 <= settings.chunk_overlap_chars < settings.chunk_chars
     ):
         reject("INVALID_POLICY", "Invalid execution budget")
     if (

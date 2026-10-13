@@ -79,6 +79,7 @@ class SelectionSettings:
     max_model_calls: int = 20
     chunk_chars: int = 1000
     separate_discovery: bool = False
+    chunk_overlap_chars: int = 0
 
 
 @dataclass(frozen=True)
@@ -343,6 +344,33 @@ class Failure:
 
 
 @dataclass(frozen=True)
+class ValidationDiagnostic:
+    """후보 보완에 전달하는 필드·규칙 진단. 사용자 리포트의 근거 표시는 아니다."""
+
+    path: str
+    rule: str
+    fact_id: str | None = None
+    source_marker: str | None = None
+    offending_value: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelAttempt:
+    """호출 범위별 최초·보완 시도의 검증 결과와 관측 후보 수·사용량."""
+
+    call_index: int
+    attempt_index: int
+    target_ids: tuple[str, ...]
+    outcome: Outcome
+    usage: Usage
+    document_proposals: int | None = None
+    relation_proposals: int | None = None
+    new_document_proposals: int | None = None
+    failure: Failure | None = None
+    diagnostics: tuple[ValidationDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True)
 class RefreshResult:
     """요청별 처리 결과와 갱신안·사용량·실패 정보. 결과 저장소에 보존할 값."""
 
@@ -356,6 +384,8 @@ class RefreshResult:
     new_document_proposals: tuple[NewDocumentProposal, ...] = ()
     facts: tuple[SourceFact, ...] = ()
     candidate_schema_version: str | None = None
+    attempts: tuple[ModelAttempt, ...] = ()
+    diagnostics: tuple[ValidationDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True)

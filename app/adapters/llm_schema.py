@@ -21,10 +21,11 @@ from app.refresh.models import (
     RelationProposal,
     SourceFact,
     Usage,
+    ValidationDiagnostic,
 )
+from app.refresh.prompt_versions import PROMPT_VERSION as PROMPT_VERSION
 
 CANDIDATE_VERSION = "refresh-candidate-v5"
-PROMPT_VERSION = "refresh-prompt-v11"
 MARKER_VERSIONS = {"refresh-candidate-v3", "refresh-candidate-v4", CANDIDATE_VERSION}
 
 
@@ -238,6 +239,58 @@ def response_usage(payload: dict | None) -> Usage:
     return Usage(1, payload["input_tokens"], payload["output_tokens"])
 
 
+def diagnostic_path(location) -> str:
+    """DTO 위치를 보완 응답이 찾아갈 수 있는 필드 경로로 표현한다."""
+    path = ""
+    for part in location:
+        path += (
+            f"[{part}]" if isinstance(part, int) else ("." if path else "") + str(part)
+        )
+    return path or "$"
+
+
+def diagnostic_value(value) -> str | None:
+    """잘못된 필드 값만 짧게 보존하며 전체 응답·공급자 오류를 복사하지 않는다."""
+    return str(value)[:200] if isinstance(value, (str, int, float, bool)) else None
+
+
+def schema_diagnostics(error: ValidationError, text: str):
+    """Pydantic 오류의 위치·유형만 전달하고 오류 문자열·공급자 본문은 노출하지 않는다."""
+    try:
+        raw = json.loads(text)
+    except (ValueError, TypeError):
+        raw = None
+    diagnostics = []
+    for item in error.errors(include_url=False, include_context=False):
+        location = item["loc"]
+        fact = None
+        if (
+            len(location) > 1
+            and location[0] == "facts"
+            and isinstance(location[1], int)
+            and isinstance(raw, dict)
+            and isinstance(raw.get("facts"), list)
+            and location[1] < len(raw["facts"])
+            and isinstance(raw["facts"][location[1]], dict)
+        ):
+            fact = raw["facts"][location[1]]
+        source = fact.get("source") if fact is not None else None
+        diagnostics.append(
+            ValidationDiagnostic(
+                diagnostic_path(location),
+                f"schema.{item['type']}",
+                fact.get("fact_id")
+                if fact is not None and isinstance(fact.get("fact_id"), str)
+                else None,
+                source.get("marker")
+                if isinstance(source, dict) and isinstance(source.get("marker"), str)
+                else None,
+                diagnostic_value(item.get("input")) if location else None,
+            )
+        )
+    return tuple(diagnostics)
+
+
 def parse_candidate(
     text: str,
     usage: Usage,
@@ -246,6 +299,15 @@ def parse_candidate(
     model_input: ModelInput | None = None,
 ) -> ModelCandidate:
     """JSON 후보를 불변 내부 값으로 변환하며 실패를 빈 제안으로 바꾸지 않는다."""
+
+    def fail(message, diagnostic=None):
+        raise RefreshFailure(
+            Failure("MODEL_INVALID_RESPONSE", message),
+            diagnostics=(diagnostic,) if diagnostic is not None else (),
+            usage=usage,
+            candidate_text=text,
+        ) from None
+
     try:
         if schema_version == "refresh-candidate-v1":
             dto = LegacyCandidateDTO.model_validate_json(text)
@@ -259,16 +321,22 @@ def parse_candidate(
             dto = FactCandidateDTO.model_validate_json(text)
         else:
             raise ValueError("Unsupported candidate schema")
-    except (ValidationError, ValueError):
+    except ValidationError as error:
         raise RefreshFailure(
-            Failure("MODEL_INVALID_RESPONSE", "Invalid model candidate")
+            Failure("MODEL_INVALID_RESPONSE", "Invalid model candidate"),
+            diagnostics=schema_diagnostics(error, text),
+            usage=usage,
+            candidate_text=text,
         ) from None
+    except ValueError:
+        fail("Invalid model candidate")
 
-    proposals = (
-        dto.document_proposals
-        + dto.relation_proposals
-        + getattr(dto, "new_document_proposals", [])
+    groups = (
+        ("document_proposals", dto.document_proposals),
+        ("relation_proposals", dto.relation_proposals),
+        ("new_document_proposals", getattr(dto, "new_document_proposals", [])),
     )
+    proposals = [item for _, group in groups for item in group]
     try:
         sources = (
             context_evidence(model_input)
@@ -276,22 +344,49 @@ def parse_candidate(
             and (proposals or getattr(dto, "facts", ()) or model_input is not None)
             else {}
         )
-        if schema_version in MARKER_VERSIONS and any(
-            evidence.marker not in sources
-            for item in proposals
-            for evidence in getattr(item, "evidence", ())
-        ):
-            raise ValueError("Unknown evidence marker")
     except (ValidationError, ValueError, TypeError):
-        raise RefreshFailure(
-            Failure("MODEL_INVALID_RESPONSE", "Invalid model candidate evidence")
-        ) from None
+        fail("Invalid model candidate evidence")
+    if schema_version in MARKER_VERSIONS:
+        for name, group in groups:
+            for index, item in enumerate(group):
+                for source_index, evidence in enumerate(getattr(item, "evidence", ())):
+                    if evidence.marker not in sources:
+                        fail(
+                            "Invalid model candidate evidence",
+                            ValidationDiagnostic(
+                                f"{name}[{index}].evidence[{source_index}].marker",
+                                "source.marker_known",
+                                source_marker=evidence.marker,
+                                offending_value=evidence.marker,
+                            ),
+                        )
 
     facts, fact_refs = {}, {}
     try:
-        for item in getattr(dto, "facts", ()):
+        for index, item in enumerate(getattr(dto, "facts", ())):
+            path = f"facts[{index}]"
             if not item.fact_id.strip() or item.fact_id in fact_refs:
-                raise ValueError("Duplicate or empty fact identifier")
+                fail(
+                    "Invalid structured fact source",
+                    ValidationDiagnostic(
+                        path + ".fact_id",
+                        "fact.identifier_unique",
+                        item.fact_id,
+                        item.source.marker,
+                        diagnostic_value(item.fact_id),
+                    ),
+                )
+            if item.source.marker not in sources:
+                fail(
+                    "Invalid structured fact source",
+                    ValidationDiagnostic(
+                        path + ".source.marker",
+                        "source.marker_known",
+                        item.fact_id,
+                        item.source.marker,
+                        diagnostic_value(item.source.marker),
+                    ),
+                )
             source = sources[item.source.marker]
             if schema_version == "refresh-candidate-v4":
                 excerpt = item.source.excerpt
@@ -301,7 +396,16 @@ def parse_candidate(
                     or source.quote.find(excerpt) < 0
                     or source.quote.find(excerpt, source.quote.find(excerpt) + 1) >= 0
                 ):
-                    raise ValueError("Exact unambiguous fact source required")
+                    fail(
+                        "Invalid structured fact source",
+                        ValidationDiagnostic(
+                            path + ".source.excerpt",
+                            "source.excerpt_exact",
+                            item.fact_id,
+                            item.source.marker,
+                            diagnostic_value(excerpt),
+                        ),
+                    )
                 start = source.start + source.quote.index(excerpt)
                 source = Evidence(
                     source.document_id,
@@ -333,20 +437,36 @@ def parse_candidate(
             facts[canonical_id] = fact
             fact_refs[item.fact_id] = canonical_id
     except (KeyError, ValueError, TypeError):
-        raise RefreshFailure(
-            Failure("MODEL_INVALID_RESPONSE", "Invalid structured fact source")
-        ) from None
+        fail("Invalid structured fact source")
 
-    def values(item) -> dict:
+    def values(item, path) -> dict:
         data = item.model_dump(exclude={"evidence"})
         if "fact_ids" in data:
-            if any(key not in fact_refs for key in item.fact_ids):
-                raise RefreshFailure(
-                    Failure("MODEL_INVALID_RESPONSE", "Unknown declared fact reference")
-                )
+            for index, key in enumerate(item.fact_ids):
+                if key not in fact_refs:
+                    fail(
+                        "Unknown declared fact reference",
+                        ValidationDiagnostic(
+                            f"{path}.fact_ids[{index}]",
+                            "fact.reference_known",
+                            key,
+                            offending_value=diagnostic_value(key),
+                        ),
+                    )
             if len(item.fact_ids) != len(set(item.fact_ids)):
-                raise RefreshFailure(
-                    Failure("MODEL_INVALID_RESPONSE", "Duplicate fact reference")
+                key = next(
+                    key
+                    for index, key in enumerate(item.fact_ids)
+                    if key in item.fact_ids[:index]
+                )
+                fail(
+                    "Duplicate fact reference",
+                    ValidationDiagnostic(
+                        path + ".fact_ids",
+                        "fact.reference_unique",
+                        key,
+                        offending_value=diagnostic_value(key),
+                    ),
                 )
             data["fact_ids"] = tuple(
                 dict.fromkeys(fact_refs[key] for key in item.fact_ids)
@@ -366,12 +486,18 @@ def parse_candidate(
         return data
 
     return ModelCandidate(
-        tuple(DocumentProposal(**values(item)) for item in dto.document_proposals),
-        usage,
-        tuple(RelationProposal(**values(item)) for item in dto.relation_proposals),
         tuple(
-            NewDocumentProposal(**values(item))
-            for item in getattr(dto, "new_document_proposals", ())
+            DocumentProposal(**values(item, f"document_proposals[{index}]"))
+            for index, item in enumerate(dto.document_proposals)
+        ),
+        usage,
+        tuple(
+            RelationProposal(**values(item, f"relation_proposals[{index}]"))
+            for index, item in enumerate(dto.relation_proposals)
+        ),
+        tuple(
+            NewDocumentProposal(**values(item, f"new_document_proposals[{index}]"))
+            for index, item in enumerate(getattr(dto, "new_document_proposals", ()))
         ),
         tuple(sorted(facts.values(), key=lambda fact: fact.fact_id)),
     )
