@@ -93,11 +93,11 @@
     "settings": {
       "chunk_chars": 1000,
       "max_changed_documents": 20,
-      "max_context_chars": 240000,
+      "max_context_chars": 480000,
       "max_depth": 1,
-      "max_documents": 20,
+      "max_documents": 40,
       "max_input_chars": 5000,
-      "max_model_calls": 20,
+      "max_model_calls": 40,
       "policy_version": "refresh-v1",
       "relation_keys": []
     },

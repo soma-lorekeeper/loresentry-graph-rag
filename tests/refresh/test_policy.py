@@ -11,7 +11,7 @@ def test_policy_separates_input_and_reference_budgets():
     assert policy.max_changed_documents == 20
     assert policy.max_input_chars == 5000
     assert policy.max_documents == 2
-    assert policy.max_model_calls == 20
+    assert policy.max_model_calls == 40
     assert ALLOWED_FIELDS == {"body_text"}
     assert RELATION_KEYS["LOCATION"] == "related_place"
 

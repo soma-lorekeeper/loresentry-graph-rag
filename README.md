@@ -31,8 +31,7 @@ relation keys, revisions, and proposals across the internal contracts.
 ## Refresh implementation
 
 The internal refresh service validates changed documents, builds source-preserving
-context, coordinates multiple target calls, and validates existing-document updates, new setting-document candidates, and relation
-proposals. Manuscript bodies remain read-only. New setting candidates use temporary
+context, plans paragraph edits across all selected settings in one LLM call, then writes and assembles those edits in a second call. It validates existing-document updates, new setting-document candidates, and relation proposals. Manuscript bodies remain read-only. New setting candidates use temporary
 IDs so relations can reference them before Content approval. Results serialize to JSON; completion values carry the result location.
 Generation defaults to `refresh-prompt-v11`; `refresh-prompt-v12` is an explicit
 option. Both use the unchanged `refresh-candidate-v5` contract, with
@@ -48,7 +47,7 @@ time, and certainty; preserved existing body text does not require fact extracti
 settings. A positive value below `chunk_chars` repeats complete sentences from the
 previous chunk when space permits. Original source positions and the chunk size
 limit remain exact; overlapping text counts toward the context budget.
-Current candidates with specific validation diagnostics can receive one feedback
+Current candidates with specific validation diagnostics can receive up to two feedback
 repair per call (`refresh-validation-repair-v1`). Only that call is regenerated;
 successful calls are retained, and the replacement and final aggregate are validated.
 Repairs share the request's call budget and reserve calls for remaining targets.
@@ -67,7 +66,8 @@ record-and-consent case with four calls, including one successful repair. Its fi
 result was `PROPOSED` with human semantic review pending. Repeated semantic A/B
 trials did not establish a v12 advantage, so v11 remains the default. Long-input
 trials reached the earlier output limit; the example and local output budget now
-allow 16,384 tokens. This budget change is separate from prompt quality.
+allow 32,768 output tokens, 240,000 input tokens, a 272,768-token context budget,
+and a 240-second request timeout. This budget change is separate from prompt quality.
 
 Each evaluation run also writes `report.md` with proposal diffs,
 check results, latency, and known token usage. To render existing evaluation JSON
@@ -80,14 +80,14 @@ For independent repeated v11/v12 trials, run the following from this repository:
 
 ```bash
 .venv/bin/python -m scripts.evaluate_refresh_ab \
-  --live --env-file .env --suite semantic --repeats 2 --max-calls 32 \
-  --max-total-calls 128 --trial semantic-ab --output .evaluation/semantic-ab
+  --live --env-file .env --suite semantic --repeats 2 --max-calls 64 \
+  --max-total-calls 256 --trial semantic-ab --output .evaluation/semantic-ab
 ```
 
 This live command reserves the full call budget, including repairs, for both
 conditions and both repetitions. `--repeats` must be at least two. Add
 `--include-overlap --overlap-chars 200` for a third v12 condition and raise the
-total reservation to at least 192 for this example. The private comparison summary
+total reservation to at least 384 for this example. The private comparison summary
 contains counts and status labels, without source or proposal bodies, and leaves
 the quality decision pending human review. See [A/B usage](docs/migration/openai-adapter.md#프롬프트와-청크-겹침-반복-비교).
 

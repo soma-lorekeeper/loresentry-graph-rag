@@ -20,8 +20,10 @@ from evaluation.cases import (
     evaluation_outcome,
     new_setting_cases,
 )
+from evaluation.confidence import write_confidence_report
 from evaluation.markdown import write_report
 from evaluation.novel import novel_case, novel_settings_case
+from evaluation.repair_observation import write_repair_report
 from evaluation.replay import ResponseReplay
 from evaluation.runner import CallBudget, assemble, planned_calls, run_case
 from evaluation.semantic_cases import (
@@ -29,6 +31,7 @@ from evaluation.semantic_cases import (
     rebase_expected_sources,
     semantic_cases,
 )
+from evaluation.source_observation import write_source_report
 
 
 def environment(path: Path | None) -> dict:
@@ -78,8 +81,34 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case", action="append", dest="selected")
     parser.add_argument("--repeat-saved", action="store_true")
+    parser.add_argument(
+        "--two-stage",
+        action="store_true",
+        help="Plan by paragraph IDs, then write and assemble every planned edit",
+    )
+    parser.add_argument(
+        "--confidence",
+        action="store_true",
+        help="Request fact-level confidence with experimental v6 schema; observation only",
+    )
+    parser.add_argument(
+        "--observe-sources",
+        action="store_true",
+        help="Record all source expression mismatches without relaxing strict results",
+    )
+    parser.add_argument(
+        "--single-call",
+        action="store_true",
+        help="Evaluate all targets and new settings in one generation call",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.two_stage and not (args.live or args.responses_dir):
+            raise ValueError("Two-stage evaluation requires live or replayed responses")
+        if args.confidence and not (args.live or args.responses_dir):
+            raise ValueError(
+                "Confidence evaluation requires live or replayed model responses"
+            )
         env = environment(args.env_file)
 
         def option(name, key, cast, default=None):
@@ -100,7 +129,7 @@ def main(argv=None) -> int:
             option("context_window", "OPENAI_CONTEXT_WINDOW", int),
         )
         limits.validate()
-        budget = CallBudget(option("max_calls", "OPENAI_MAX_CALLS", int, 9))
+        budget = CallBudget(option("max_calls", "OPENAI_MAX_CALLS", int, 18))
         fixtures = (
             (novel_case(limits.model, args.trial),)
             if args.suite == "novel"
@@ -142,17 +171,43 @@ def main(argv=None) -> int:
         for case in fixtures:
             settings = replace(
                 case.request.settings,
+                max_model_calls=min(
+                    case.request.settings.max_model_calls, budget.maximum
+                )
+                if args.two_stage
+                else case.request.settings.max_model_calls,
                 chunk_chars=(
                     args.chunk_chars
                     if args.chunk_chars is not None
                     else case.request.settings.chunk_chars
                 ),
                 chunk_overlap_chars=args.chunk_overlap_chars,
+                separate_discovery=(
+                    False
+                    if args.single_call or args.two_stage
+                    else case.request.settings.separate_discovery
+                ),
             )
             model_settings = replace(
                 case.request.model_settings,
                 prompt_version=(
-                    args.prompt_version or case.request.model_settings.prompt_version
+                    (args.prompt_version or "refresh-prompt-v13")
+                    if args.two_stage
+                    else (
+                        args.prompt_version
+                        or case.request.model_settings.prompt_version
+                    )
+                ),
+                schema_version=(
+                    (
+                        "refresh-candidate-v8"
+                        if args.confidence
+                        else "refresh-candidate-v7"
+                    )
+                    if args.two_stage
+                    else "refresh-candidate-v6"
+                    if args.confidence
+                    else case.request.model_settings.schema_version
                 ),
             )
             request = replace(
@@ -163,7 +218,9 @@ def main(argv=None) -> int:
                 case = rebase_expected_sources(case)
             configured.append(case)
         fixtures = tuple(configured)
-        required_calls = sum(planned_calls(case) for case in fixtures)
+        required_calls = sum(
+            planned_calls(case, single_call=args.single_call) for case in fixtures
+        )
         if required_calls > budget.maximum:
             raise ValueError("Call budget smaller than selected evaluation suite")
         if args.live and not env.get("OPENAI_API_KEY"):
@@ -184,7 +241,14 @@ def main(argv=None) -> int:
                 )
             )
         for case in fixtures:
-            recorder = AttemptRecorder(args.output, case, limits, args.live)
+            recorder = AttemptRecorder(
+                args.output,
+                case,
+                limits,
+                args.live,
+                observe_sources=args.observe_sources,
+                observe_confidence=args.confidence,
+            )
             model = (
                 OpenAIProposalModel(RecordingClient(client, recorder), limits)
                 if client is not None
@@ -199,7 +263,13 @@ def main(argv=None) -> int:
                 if args.responses_dir
                 else "expected-fixture"
             )
-            scenario = assemble(case, model, budget, recorder)
+            scenario = assemble(
+                case,
+                model,
+                budget,
+                recorder,
+                **({"single_call": True} if args.single_call else {}),
+            )
             report = {
                 "case": case.name,
                 "response_source": source,
@@ -209,6 +279,12 @@ def main(argv=None) -> int:
                 "settings": asdict(limits),
                 "evaluation": metadata[case.name],
                 "evaluation_call_budget": budget.maximum,
+                "call_strategy": "two-stage"
+                if args.two_stage
+                else "single-call"
+                if args.single_call
+                else "default",
+                "confidence_mode": args.confidence,
             }
             result = None
             try:
@@ -235,14 +311,32 @@ def main(argv=None) -> int:
                 report["observed_usage"] = [r["usage"] for r in recorder.records]
                 report["observed_attempts"] = [
                     {
-                        key: record.get(key)
-                        for key in (
-                            "attempt",
-                            "call_index",
-                            "attempt_index",
-                            "repair_version",
-                            "validation",
-                        )
+                        **{
+                            key: record.get(key)
+                            for key in (
+                                "attempt",
+                                "call_index",
+                                "attempt_index",
+                                "repair_version",
+                                "stage",
+                                "validation",
+                                "instruction_fingerprint",
+                            )
+                        },
+                        **(
+                            {"source_observation": record["source_observation"]}
+                            if "source_observation" in record
+                            else {}
+                        ),
+                        **{
+                            key: record[key]
+                            for key in (
+                                "repair_observation",
+                                "raw_source_observation",
+                                "confidence_observation",
+                            )
+                            if key in record
+                        },
                     }
                     for record in recorder.records
                 ]
@@ -267,6 +361,11 @@ def main(argv=None) -> int:
             for outcome in outcomes
         )
         review_required = "review_required" in outcomes
+        if args.observe_sources:
+            write_source_report(args.output, reports)
+        write_repair_report(args.output, reports)
+        if args.confidence:
+            write_confidence_report(args.output, reports)
     print(
         json.dumps(
             {

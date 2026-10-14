@@ -2,10 +2,11 @@
 
 외부 IO와 순수 업무 규칙을 주입한다. 실제 HTTP·Kafka 어댑터에는 연결하지 않았다.
 실행 ID, 연동 오류 재시도와 임대 복구는 전달 계층이 담당한다. 현행 후보의 구체적
-검증 오류는 같은 호출 범위에서 최대 한 번 보완한 뒤 결과를 저장한다.
+검증 오류는 같은 호출 범위에서 최대 두 번 보완한 뒤 결과를 저장한다.
 """
 
-from dataclasses import replace
+import json
+from dataclasses import asdict, replace
 
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import (
@@ -35,10 +36,12 @@ from app.refresh.repair import (
     add_usage,
     build_repair_input,
     failed_result,
+    preserve_unaffected_proposals,
     proposal_counts,
     repairable,
 )
 from app.refresh.rules import RefreshRules
+from app.refresh.source_alignment import align_candidate
 
 
 class RefreshService:
@@ -211,6 +214,10 @@ class RefreshService:
             )
         usage = Usage()
         attempts = []
+        from app.refresh.workflow import WRITE_SCHEMAS
+
+        if len(inputs) == 1 and inputs[0].schema_version in WRITE_SCHEMAS:
+            return self._two_stage(snapshot, inputs[0])
         documents, relations, new_documents = [], [], []
         facts = {}
         for index, model_input in enumerate(inputs):
@@ -274,16 +281,140 @@ class RefreshService:
         )
         return replace(result, usage=usage, attempts=tuple(attempts))
 
+    def _two_stage(self, snapshot, base):
+        """계획·작성 두 호출과 전체 한 번의 보완. 계획 누락을 작성 단계에서 허용하지 않는다."""
+        from app.refresh.workflow import (
+            build_plan_input,
+            build_write_input,
+            plan_payload,
+        )
+
+        current = build_plan_input(snapshot, base)
+        initial = current
+        usage, attempts = Usage(), []
+        plan = None
+        for attempt_index in range(2):
+            try:
+                plan = self.model.generate(current)
+                self.rules.validate_plan(snapshot, plan, current)
+            except RefreshFailure as error:
+                observed = Usage(1, error.usage.input_tokens, error.usage.output_tokens)
+                if plan is not None:
+                    observed = Usage(
+                        1, plan.usage.input_tokens, plan.usage.output_tokens
+                    )
+                failure, diagnostics = error.failure, error.diagnostics
+                previous = (
+                    plan_payload(plan) if plan is not None else error.candidate_text
+                )
+                plan = None
+            else:
+                observed = Usage(1, plan.usage.input_tokens, plan.usage.output_tokens)
+                failure, diagnostics = None, ()
+            usage = add_usage(usage, observed)
+            attempts.append(
+                ModelAttempt(
+                    1,
+                    attempt_index,
+                    base.target_ids,
+                    Outcome.FAILED if failure else Outcome.PROPOSED,
+                    observed,
+                    failure=failure,
+                    diagnostics=diagnostics,
+                    stage="PLAN",
+                )
+            )
+            if failure is None:
+                break
+            if (
+                attempt_index
+                or failure.retryable
+                or failure.code not in {"INVALID_CHANGE_PLAN", "MODEL_INVALID_RESPONSE"}
+                or usage.calls + 2 > snapshot.request.settings.max_model_calls
+            ):
+                return RefreshResult(
+                    snapshot.request.job,
+                    Outcome.FAILED,
+                    usage=usage,
+                    failure=failure,
+                    prompt_version=base.prompt_version,
+                    candidate_schema_version=base.schema_version,
+                    attempts=tuple(attempts),
+                    diagnostics=diagnostics,
+                )
+            context = json.loads(initial.prompt)
+            context["validation_repair"] = {
+                "version": "refresh-plan-repair-v1",
+                "attempt": 1,
+                "previous_candidate": previous,
+                "diagnostics": [asdict(d) for d in diagnostics],
+            }
+            prompt = json.dumps(context, ensure_ascii=False)
+            if (
+                len(prompt) + len(initial.instructions)
+                > snapshot.request.settings.max_context_chars
+            ):
+                return RefreshResult(
+                    snapshot.request.job,
+                    Outcome.FAILED,
+                    usage=usage,
+                    failure=Failure(
+                        "CONTEXT_BUDGET_EXCEEDED", "Plan repair exceeds budget"
+                    ),
+                    prompt_version=base.prompt_version,
+                    candidate_schema_version=base.schema_version,
+                    attempts=tuple(attempts),
+                )
+            current = replace(
+                initial,
+                prompt=prompt,
+                instructions=initial.instructions
+                + "\n진단된 계획의 범위·ID·근거를 수정하고 전체 계획 JSON을 반환한다.",
+            )
+        try:
+            write_input = build_write_input(snapshot, base, plan)
+        except RefreshFailure as error:
+            return RefreshResult(
+                snapshot.request.job,
+                Outcome.FAILED,
+                usage=usage,
+                failure=error.failure,
+                prompt_version=base.prompt_version,
+                candidate_schema_version=base.schema_version,
+                attempts=tuple(attempts),
+                change_plan=plan,
+            )
+        _, checked, usage = self._validated_call(
+            snapshot,
+            write_input,
+            2,
+            0,
+            usage,
+            attempts,
+            max_repairs=1 - (len(attempts) - 1),
+        )
+        return replace(checked, usage=usage, attempts=tuple(attempts), change_plan=plan)
+
     def _validated_call(
-        self, snapshot, model_input, call_index, remaining_calls, usage, attempts
+        self,
+        snapshot,
+        model_input,
+        call_index,
+        remaining_calls,
+        usage,
+        attempts,
+        *,
+        max_repairs=MAX_REPAIRS_PER_CALL,
     ):
-        """하나의 후보를 검증하고 진단이 있는 오류만 한 번 보완한다.
+        """하나의 후보를 검증하고 진단이 있는 오류만 최대 두 번 보완한다.
 
         보완은 이미 통과한 다른 호출을 반복하지 않는다. 남은 최초 호출 예산을 예약하고
-        원 후보를 통째로 교체한다. 최종 통합 실패와 연동 오류는 이 루프의 대상이 아니다.
+        사실 표현 오류의 무관한 제안은 이전 후보에서 보존하고 전체를 재검증한다.
+        최종 통합 실패와 연동 오류는 이 루프의 대상이 아니다.
         """
         current_input = model_input
-        for attempt_index in range(MAX_REPAIRS_PER_CALL + 1):
+        previous_candidate, previous_diagnostics = None, ()
+        for attempt_index in range(max_repairs + 1):
             try:
                 candidate = self.model.generate(current_input)
             except RefreshFailure as error:
@@ -298,7 +429,13 @@ class RefreshService:
                     prompt_version=model_input.prompt_version,
                     candidate_schema_version=(
                         model_input.schema_version
-                        if model_input.schema_version == "refresh-candidate-v5"
+                        if model_input.schema_version
+                        in {
+                            "refresh-candidate-v5",
+                            "refresh-candidate-v6",
+                            "refresh-candidate-v7",
+                            "refresh-candidate-v8",
+                        }
                         else None
                     ),
                     diagnostics=error.diagnostics,
@@ -310,6 +447,23 @@ class RefreshService:
                     # The evaluator/adapter rejected the invocation before IO.
                     return None, checked, usage
             else:
+                if previous_candidate is not None:
+                    candidate = preserve_unaffected_proposals(
+                        previous_candidate, candidate, previous_diagnostics
+                    )
+                if model_input.schema_version in {
+                    "refresh-candidate-v7",
+                    "refresh-candidate-v8",
+                } and hasattr(candidate, "paragraph_edits"):
+                    from app.refresh.workflow import collect_source_extensions
+
+                    candidate = replace(
+                        candidate,
+                        source_scope_extensions=collect_source_extensions(
+                            candidate, current_input
+                        ),
+                    )
+                candidate = align_candidate(snapshot, candidate, current_input)
                 checked = self.rules.validate_candidate(
                     snapshot, candidate, current_input
                 )
@@ -325,11 +479,15 @@ class RefreshService:
                     **proposal_counts(candidate),
                     failure=checked.failure,
                     diagnostics=checked.diagnostics,
+                    stage="WRITE"
+                    if model_input.schema_version
+                    in {"refresh-candidate-v7", "refresh-candidate-v8"}
+                    else "GENERATE",
                 )
             )
             if checked.outcome != Outcome.FAILED:
                 return candidate, checked, usage
-            if attempt_index == MAX_REPAIRS_PER_CALL or not repairable(
+            if attempt_index == max_repairs or not repairable(
                 model_input, checked.failure, checked.diagnostics
             ):
                 return None, checked, usage
@@ -345,11 +503,16 @@ class RefreshService:
                 )
                 return None, checked, usage
             try:
+                previous_candidate, previous_diagnostics = (
+                    candidate,
+                    checked.diagnostics,
+                )
                 current_input = build_repair_input(
                     model_input,
                     candidate,
                     checked.diagnostics,
                     snapshot.request.settings.max_context_chars,
+                    attempt=attempt_index + 1,
                 )
             except RefreshFailure as error:
                 return None, replace(checked, failure=error.failure), usage

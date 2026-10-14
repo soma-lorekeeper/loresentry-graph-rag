@@ -20,6 +20,7 @@ from app.refresh.models import (
     RelatedDocuments,
     Relation,
     RelationProposal,
+    SourceFact,
     Usage,
 )
 from evaluation.semantics import (
@@ -158,9 +159,20 @@ def evaluation_fingerprint(value) -> str:
                 f"{field.name}={representation(getattr(item, field.name))}"
                 for field in fields(item)
                 if not (
-                    isinstance(item, DocumentSnapshot)
-                    and field.name == "title"
-                    and item.title is None
+                    (
+                        isinstance(item, DocumentSnapshot)
+                        and field.name == "title"
+                        and item.title is None
+                    )
+                    or (
+                        isinstance(item, ModelCandidate)
+                        and field.name == "paragraph_edits"
+                        and not getattr(item, "paragraph_edits", ())
+                    )
+                    or (
+                        isinstance(item, SourceFact)
+                        and field.name in {"confidence", "source_alignments"}
+                    )
                 )
             ]
             return f"{type(item).__name__}({', '.join(parts)})"
@@ -266,7 +278,11 @@ def cases(model: str, trial: str) -> tuple[EvaluationCase, ...]:
             job,
             ArtifactRef("evaluation", f"{name}/input.json"),
             tuple(d.document_id for d in documents),
-            model_settings=ModelSettings(model=model),
+            model_settings=ModelSettings(
+                model=model,
+                prompt_version="refresh-prompt-v11",
+                schema_version="refresh-candidate-v5",
+            ),
             changed_documents=tuple(
                 ChangedDocumentRef(d.document_id, d.revision_no, d.state)
                 for d in documents

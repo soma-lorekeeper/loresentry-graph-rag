@@ -6,11 +6,12 @@ from dataclasses import asdict, replace
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Evidence, Failure, ModelCandidate, Outcome, Usage
 
-REPAIR_VERSION = "refresh-validation-repair-v1"
-MAX_REPAIRS_PER_CALL = 1
+REPAIR_VERSION = "refresh-validation-repair-v2"
+MAX_REPAIRS_PER_CALL = 2
 _REPAIRABLE_CODES = frozenset(
     {
         "MODEL_INVALID_RESPONSE",
+        "INVALID_CHANGE_PLAN",
         "INVALID_FACT",
         "INVALID_FACT_REFERENCE",
         "INVALID_RELATION_FACT",
@@ -40,14 +41,115 @@ source.marker를 선택한 뒤 그 마커의 quote에서 action과 surface를 �
 오류와 무관한 확인된 제안과 기존 본문 내용은 보존한다. 사실을 고친 경우 그 사실을
 참조한 본문과 관계도 같은 의미를 유지하는지 확인한다. 사실 ID와 모든 fact_ids는
 응답 안에서 일관되게 유지하고, 참조하지 않는 facts는 제거한다.
+protected_proposal_keys가 있으면 그 제안은 서버가 이전 값으로 보존한다.
+보완 대상의 본문도 전체를 축약하지 않는다. 오류 사실과 직접 관련된 부분만 고치고,
+나머지 경력·기간·조건·목적·업무 분담은 이전 후보와 대조하여 보존한다.
 수정 설명이나 진단을 출력하지 않고 원래 네 목록의 JSON 객체만 반환한다.
 """
+
+_LOCAL_FACT_RULES = frozenset(
+    {
+        "fact.action_in_source",
+        "fact.role_surface_in_source",
+        "fact.role_surface_in_statement",
+        "fact.entity_reference_known",
+        "fact.entity_identity_matches",
+    }
+)
+_PROPOSAL_LISTS = (
+    "document_proposals",
+    "new_document_proposals",
+    "relation_proposals",
+)
+
+
+def proposal_key(proposal):
+    """제안의 동일성을 본문·사실 ID와 독립적으로 비교한다."""
+    if hasattr(proposal, "candidate_id"):
+        return (proposal.candidate_id,)
+    if hasattr(proposal, "field"):
+        return (proposal.target_document_id, proposal.field)
+    return tuple(sorted((proposal.document_id, proposal.target_document_id)))
+
+
+def protected_proposals(candidate, diagnostics):
+    """안전하게 위치를 특정할 수 있는 사실 표현 오류만 부분 보완한다."""
+    if not isinstance(candidate, ModelCandidate) or not diagnostics:
+        return {}
+    declared = {fact.fact_id for fact in candidate.facts}
+    if len(declared) != len(candidate.facts) or any(
+        diagnostic.rule not in _LOCAL_FACT_RULES or diagnostic.fact_id not in declared
+        for diagnostic in diagnostics
+    ):
+        return {}
+    affected = {diagnostic.fact_id for diagnostic in diagnostics}
+    protected = {}
+    for name in _PROPOSAL_LISTS:
+        proposals = getattr(candidate, name)
+        keys = [proposal_key(proposal) for proposal in proposals]
+        if len(set(keys)) != len(keys):
+            return {}  # 후보 전체의 중복을 부분 병합으로 숨기지 않는다.
+        protected[name] = tuple(
+            proposal
+            for proposal in proposals
+            if not affected.intersection(proposal.fact_ids)
+        )
+    return protected
+
+
+def preserve_unaffected_proposals(previous, repaired, diagnostics):
+    """무관한 제안·그 근거를 이전 후보에서 복원한 뒤 서비스가 전체를 재검증한다."""
+    protected = protected_proposals(previous, diagnostics)
+    if not protected:
+        return repaired
+    updates = {}
+    for name, originals in protected.items():
+        keys = {proposal_key(proposal) for proposal in originals}
+        updates[name] = (
+            tuple(
+                proposal
+                for proposal in getattr(repaired, name)
+                if proposal_key(proposal) not in keys
+            )
+            + originals
+        )
+    retained = {
+        key for proposals in protected.values() for p in proposals for key in p.fact_ids
+    }
+    referenced = {
+        key for proposals in updates.values() for p in proposals for key in p.fact_ids
+    }
+    updates["facts"] = tuple(
+        fact
+        for fact in repaired.facts
+        if fact.fact_id in referenced and fact.fact_id not in retained
+    ) + tuple(fact for fact in previous.facts if fact.fact_id in retained)
+    if hasattr(repaired, "paragraph_edits"):
+        preserved_edits = tuple(
+            edit for edit in previous.paragraph_edits if set(edit.fact_ids) <= retained
+        )
+        preserved_ids = {edit.edit_id for edit in preserved_edits}
+        updates["paragraph_edits"] = (
+            tuple(
+                edit
+                for edit in repaired.paragraph_edits
+                if edit.edit_id not in preserved_ids
+            )
+            + preserved_edits
+        )
+    return replace(repaired, **updates)
 
 
 def repairable(model_input, failure, diagnostics):
     """현행 후보의 구체적 검증 실패만 보완한다. 연동·설정 오류는 기존 실패 정책을 따른다."""
     return (
-        model_input.schema_version == "refresh-candidate-v5"
+        model_input.schema_version
+        in {
+            "refresh-candidate-v5",
+            "refresh-candidate-v6",
+            "refresh-candidate-v7",
+            "refresh-candidate-v8",
+        }
         and failure is not None
         and not failure.retryable
         and failure.code in _REPAIRABLE_CODES
@@ -147,11 +249,30 @@ def _wire_candidate(candidate, context, identifiers):
     facts = []
     for fact in candidate.facts:
         item = asdict(fact)
+        item.pop("source_alignments")
+        if item["confidence"] is None:
+            item.pop("confidence")
         if isinstance(fact.fact_id, str):
             item["fact_id"] = identifiers[fact.fact_id]
         item.pop("evidence")
         item["source"] = source(fact.evidence[0]) if len(fact.evidence) == 1 else None
         facts.append(item)
+    if context.get("workflow") == "refresh-two-stage-v1":
+        return {
+            "facts": facts,
+            "paragraph_edits": [
+                {
+                    "edit_id": edit.edit_id,
+                    "text": edit.text,
+                    "fact_ids": [identifiers[key] for key in edit.fact_ids],
+                }
+                for edit in candidate.paragraph_edits
+            ],
+            "relation_proposals": [proposal(p) for p in candidate.relation_proposals],
+            "new_document_proposals": [
+                proposal(p) for p in candidate.new_document_proposals
+            ],
+        }
     return {
         "facts": facts,
         "document_proposals": [proposal(p) for p in candidate.document_proposals],
@@ -162,8 +283,12 @@ def _wire_candidate(candidate, context, identifiers):
     }
 
 
-def build_repair_input(model_input, candidate, diagnostics, max_context_chars):
+def build_repair_input(
+    model_input, candidate, diagnostics, max_context_chars, *, attempt=1
+):
     """같은 원문·범위에 실패 후보와 진단만 추가한다. 보완 자료도 문맥 예산에 포함한다."""
+    if type(attempt) is not int or not 1 <= attempt <= MAX_REPAIRS_PER_CALL:
+        raise ValueError("Repair attempt is outside the supported budget")
     context = json.loads(model_input.prompt)
     identifiers = {}
     if isinstance(candidate, ModelCandidate):
@@ -191,9 +316,13 @@ def build_repair_input(model_input, candidate, diagnostics, max_context_chars):
         feedback.append(item)
     context["validation_repair"] = {
         "version": REPAIR_VERSION,
-        "attempt": 1,
+        "attempt": attempt,
         "previous_candidate": previous,
         "diagnostics": feedback,
+        "protected_proposal_keys": {
+            name: [proposal_key(proposal) for proposal in proposals]
+            for name, proposals in protected_proposals(candidate, diagnostics).items()
+        },
     }
     prompt = json.dumps(context, ensure_ascii=False, sort_keys=True)
     instructions = model_input.instructions + REPAIR_INSTRUCTION

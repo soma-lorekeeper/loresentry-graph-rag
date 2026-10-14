@@ -29,15 +29,17 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 | 다른 서버가 GraphRAG를 어떻게 호출하는가? | [제공 API](API.md) | 현재 HTTP 경로·응답·오류와 진단 결과의 의미 |
 | GraphRAG가 Neptune에 무엇을 요청하는가? | [호출 API](API_CALLS.md) | 주소·환경변수·타임아웃·응답 사용·실패 처리 |
 | 현재 코드의 어디부터 읽어야 하는가? | [코드 안내](code-guide.md) | 요청 흐름·시작 구성·테스트와 배포 파일 위치 |
-| S3 입력·스냅샷·결과를 어떻게 저장하는가? | [S3 저장소](implementation/S3_ARTIFACTS.md) | 설정·엄격 입력·해시·불변 저장·재사용·운영 검증 한계 |
+| S3에 어떤 JSON을 주고받으며 소비자는 무엇을 확인하는가? | [S3 입출력 계약](S3_IO_CONTRACT.md) | 객체 위치·입력 문서·요청·스냅샷·v3 결과·해시·불변 저장·완료 전달 |
+| S3 어댑터를 서비스에 어떻게 연결하는가? | [S3 저장소](implementation/S3_ARTIFACTS.md) | 설정·서비스 주입·타임아웃·권한·운영 검증 한계 |
 | 변경 후 무엇을 검증해야 하는가? | [검증 계획](implementation/TEST_PLAN.md) | 기존 테스트 범위·추가 테스트·운영 확인 항목 |
 | 기존 AI 기능을 어떤 순서로 이전하는가? | [마이그레이션 안내](migration/README.md) | 전체 이전 범위, 갱신안 생성 우선 계획, 후속 마이그레이션 |
 | 문서·관계 제안은 어디에 저장하고 어떻게 전달하는가? | [갱신안 입력·결과 계약](migration/proposal-contract.md) | 변경 입력 한도, 수정·생성·연결 제안, 임시 ID와 결과 버전, S3/Kafka 전달 경계 |
 
 ## 현재 제안 계약과 검증
 
-후보는 `refresh-candidate-v5`, 프롬프트는 `refresh-prompt-v11`, 결과는
-`refresh-result-v3`다. 생성에 사용한 사실의 역할·시점·확실성과 제안의 `fact_ids`를 기록하며,
+기본 후보는 `refresh-candidate-v7`, confidence 후보는 v8, 프롬프트는
+`refresh-prompt-v13`, 결과는 `refresh-result-v3`다. 계획과 문단 작성을 두 단계로 수행한다.
+생성에 사용한 사실의 역할·시점·확실성과 제안의 `fact_ids`를 기록하며,
 관계 설명은 참조한 사실에서 서버가 조립한다. 저장된 v1/v2 결과와 과거 대화 응답은 읽기 호환하며, 과거 응답
 재생을 새 설정 생성 품질 평가로 해석하지 않는다. 상세 규칙은 [제안 계약](migration/proposal-contract.md)을 따른다.
 

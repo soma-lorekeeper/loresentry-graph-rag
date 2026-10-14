@@ -23,6 +23,7 @@ from app.refresh.models import (
 )
 from app.refresh.policy import ALLOWED_FIELDS, RELATION_KEYS
 from app.refresh.selection import reject
+from app.refresh.source_alignment import align_candidate
 
 
 def diagnostic_reject(code, message, path, rule, value=None):
@@ -433,6 +434,7 @@ def validate_relation_proposals(
 
 def validate_candidate(snapshot, candidate, model_input):
     """하나라도 잘못되면 세 목록을 비운 FAILED를 반환한다. 유효 빈 결과는 NO_CHANGE다."""
+    candidate = align_candidate(snapshot, candidate, model_input)
     usage = Usage()
     try:
         if not isinstance(candidate, ModelCandidate) or not isinstance(
@@ -500,11 +502,24 @@ def validate_candidate(snapshot, candidate, model_input):
             candidate,
             validate_evidence,
             required=model_input.schema_version
-            in {"refresh-candidate-v4", "refresh-candidate-v5"},
+            in {
+                "refresh-candidate-v4",
+                "refresh-candidate-v5",
+                "refresh-candidate-v6",
+                "refresh-candidate-v7",
+                "refresh-candidate-v8",
+            },
             schema_version=model_input.schema_version,
             aggregate=model_input.relation_scope is None,
             source_markers=source_markers(model_input),
         )
+        if model_input.schema_version in {
+            "refresh-candidate-v7",
+            "refresh-candidate-v8",
+        }:
+            from app.refresh.workflow import validate_materialized_candidate
+
+            validate_materialized_candidate(snapshot, candidate, model_input)
         relations = validate_relation_proposals(
             snapshot, candidate.relation_proposals, new_documents, scope
         )
@@ -529,6 +544,8 @@ def validate_candidate(snapshot, candidate, model_input):
                 )
             ),
             candidate_schema_version=model_input.schema_version,
+            source_scope_extensions=getattr(candidate, "source_scope_extensions", ()),
+            paragraph_copy_removals=getattr(candidate, "paragraph_copy_removals", ()),
         )
     except RefreshFailure as error:
         return RefreshResult(

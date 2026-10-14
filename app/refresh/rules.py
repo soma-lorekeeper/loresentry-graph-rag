@@ -46,6 +46,30 @@ class RefreshRules:
         }
         if not active.intersection(snapshot.changed_ids):
             return ()
+        from app.refresh.workflow import WRITE_SCHEMAS
+
+        if snapshot.request.model_settings.schema_version in WRITE_SCHEMAS:
+            if separate_discovery:
+                reject(
+                    "INVALID_POLICY", "Two-stage workflow requires combined discovery"
+                )
+            if snapshot.request.model_settings.prompt_version != "refresh-prompt-v13":
+                reject(
+                    "INVALID_MODEL_SETTINGS", "Two-stage workflow requires v13 prompt"
+                )
+            if snapshot.request.settings.max_model_calls < 2:
+                reject("CALL_BUDGET_EXCEEDED", "Planning and writing require two calls")
+            return (
+                self.build_prompt(
+                    build_context(
+                        snapshot,
+                        chunks,
+                        relation_scope=RelationGenerationScope(
+                            snapshot.target_ids, True
+                        ),
+                    )
+                ),
+            )
         groups = tuple((target,) for target in snapshot.target_ids)
         if separate_discovery:
             groups = ((),) + groups
@@ -70,3 +94,8 @@ class RefreshRules:
     def validate_candidate(self, snapshot, candidate, model_input):
         """대상·revision·근거를 검증하고 전체 요청의 처리 결과를 반환한다."""
         return validate_candidate(snapshot, candidate, model_input)
+
+    def validate_plan(self, snapshot, plan, model_input):
+        from app.refresh.workflow import validate_plan
+
+        return validate_plan(snapshot, plan, model_input)

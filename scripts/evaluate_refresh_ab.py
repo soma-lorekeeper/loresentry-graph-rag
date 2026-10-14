@@ -70,7 +70,7 @@ def plan(args):
         _option(args, environment, "context_window", "OPENAI_CONTEXT_WINDOW", int),
     )
     limits.validate()
-    maximum = _option(args, environment, "max_calls", "OPENAI_MAX_CALLS", int, 9)
+    maximum = _option(args, environment, "max_calls", "OPENAI_MAX_CALLS", int, 18)
     if maximum <= 0:
         raise ValueError("--max-calls must be positive")
     fixtures = tuple(suite_cases(args.suite, limits.model, args.trial))

@@ -356,14 +356,15 @@ def test_cli_records_validation_repair_and_saved_reuse_with_shared_call_budget(
     monkeypatch.setattr(cli, "semantic_cases", lambda model, trial: (case,))
     output = tmp_path / "repair"
     succeeded = fixed and maximum == 4
-    calls = maximum if fixed else 2
+    calls = maximum if fixed else 3
     assert main(
         arguments(output)
         + ["--suite", "semantic", "--max-calls", str(maximum), "--repeat-saved"]
     ) == (0 if succeeded else 1)
     summary = json.loads(capsys.readouterr().out)
     assert summary["calls"] == calls
-    assert summary["repair_attempts"] == 1
+    repairs = 1 if fixed else 2
+    assert summary["repair_attempts"] == repairs
     assert summary["repair_successes"] == int(fixed)
     assert delegate.count == summary["calls"]
     report = json.loads((output / "semantic-roles.json").read_text())
@@ -378,12 +379,12 @@ def test_cli_records_validation_repair_and_saved_reuse_with_shared_call_budget(
     assert records[0]["validation"]["outcome"] == "FAILED"
     assert records[1]["validation"]["outcome"] == ("PROPOSED" if fixed else "FAILED")
     text = (output / "report.md").read_text()
-    assert "| 보완 시도 | 1 |" in text
+    assert f"| 보완 시도 | {repairs} |" in text
     assert f"| 보완 성공 | {int(fixed)} |" in text
     assert (
         f"| 최종 채택 수정 / 신규 설정 / 관계 | {'3 / 0 / 2' if succeeded else '0 / 0 / 0'} |"
         in text
     )
-    counts = f"{calls} / 0 / {3 if fixed else 2}"
+    counts = f"{calls} / 0 / 3"
     assert f"| 호출별 후보 수(중복 포함) | {counts} |" in text
     assert "evidence_refs" not in text and "source_marker" not in text

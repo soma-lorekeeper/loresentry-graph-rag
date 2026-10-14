@@ -232,12 +232,21 @@ def generation_lines(report, attempts):
             if detail["attempt_index"]
             else "초기"
         )
+        stage = detail["record"].get(
+            "stage", detail["record"].get("validation", {}).get("stage")
+        )
+        if stage in {"PLAN", "WRITE"}:
+            phase = ("계획" if stage == "PLAN" else "본문 작성") + (
+                " 보완" if detail["attempt_index"] else ""
+            )
         counts = " / ".join(
             str(detail["counts"][key])
             if detail["counts"][key] is not None
             else "미확인"
             for key in PROPOSAL_FIELDS
         )
+        if stage == "PLAN":
+            counts = "계획 단계"
         state = states[detail["state"]]
         lines.append(
             f"| {link} | {detail['call_index'] or '미확인'} | {phase} | {state} | {counts} | {inline(detail['failure'].get('code', '없음'))} |"

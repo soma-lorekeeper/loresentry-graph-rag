@@ -27,7 +27,7 @@ def setup(tmp_path, text):
             ),
         ),
     )
-    limits = ModelLimits("gpt-5.6-luna", 10, 40000, 2000, 42000)
+    limits = ModelLimits("gpt-5.6-luna", 10, 80000, 2000, 82000)
     recorder = AttemptRecorder(tmp_path, case, limits, True)
     # Use SDK deserialization for the same candidate shape as a real response.
     from tests.integration.test_openai_http import response_payload
@@ -40,7 +40,7 @@ def setup(tmp_path, text):
         max_retries=0, responses=SimpleNamespace(create=Mock(return_value=response))
     )
     model = OpenAIProposalModel(RecordingClient(client, recorder), limits)
-    return case, assemble(case, model, CallBudget(2), recorder), recorder
+    return case, assemble(case, model, CallBudget(3), recorder), recorder
 
 
 def test_invalid_json_retains_raw_response_usage_and_failure(tmp_path):

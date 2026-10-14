@@ -3,8 +3,9 @@
 from dataclasses import asdict
 
 from app.refresh.evidence import unique_evidence
-from app.refresh.facts import fact_description
+from app.refresh.facts import fact_description, valid_confidence
 from app.refresh.models import (
+    ChangePlan,
     Completion,
     DocumentProposal,
     Evidence,
@@ -14,12 +15,17 @@ from app.refresh.models import (
     ModelAttempt,
     NewDocumentProposal,
     Outcome,
+    ParagraphCopyRemoval,
     RefreshResult,
     RelationProposal,
+    SourceAlignment,
     SourceFact,
+    SourceScopeExtension,
     Usage,
     ValidationDiagnostic,
 )
+from app.refresh.repair import MAX_REPAIRS_PER_CALL
+from app.refresh.source_alignment import valid_alignment_records
 
 RESULT_SCHEMA_VERSION = "refresh-result-v3"
 _CANDIDATE_SCHEMAS = {
@@ -28,6 +34,9 @@ _CANDIDATE_SCHEMAS = {
     "refresh-candidate-v3",
     "refresh-candidate-v4",
     "refresh-candidate-v5",
+    "refresh-candidate-v6",
+    "refresh-candidate-v7",
+    "refresh-candidate-v8",
 }
 
 
@@ -52,6 +61,10 @@ def result_to_payload(request, result, snapshot=None):
 
     def proposal_payload(proposal):
         value = asdict(proposal)
+        if isinstance(proposal, SourceFact) and value["confidence"] is None:
+            value.pop("confidence")
+        if isinstance(proposal, SourceFact) and not value["source_alignments"]:
+            value.pop("source_alignments")
         value.pop("evidence")
         value["evidence_refs"] = [refs[e] for e in proposal.evidence]
         return value
@@ -91,6 +104,24 @@ def result_to_payload(request, result, snapshot=None):
                 if result.candidate_schema_version is not None
                 else {}
             ),
+            **(
+                {
+                    "source_scope_extensions": [
+                        asdict(item) for item in result.source_scope_extensions
+                    ]
+                }
+                if result.source_scope_extensions
+                else {}
+            ),
+            **(
+                {
+                    "paragraph_copy_removals": [
+                        asdict(item) for item in result.paragraph_copy_removals
+                    ]
+                }
+                if result.paragraph_copy_removals
+                else {}
+            ),
             "settings": {
                 key: value
                 for key, value in asdict(request.settings).items()
@@ -99,7 +130,21 @@ def result_to_payload(request, result, snapshot=None):
             },
             "usage": asdict(result.usage),
             **(
-                {"attempts": [asdict(a) for a in result.attempts]}
+                {"change_plan": asdict(result.change_plan)}
+                if result.change_plan is not None
+                else {}
+            ),
+            **(
+                {
+                    "attempts": [
+                        {
+                            key: value
+                            for key, value in asdict(a).items()
+                            if key != "stage" or value != "GENERATE"
+                        }
+                        for a in result.attempts
+                    ]
+                }
                 if result.attempts
                 else {}
             ),
@@ -159,6 +204,10 @@ def result_from_payload(payload):
                 if "fact_ids" in item:
                     item["fact_ids"] = tuple(item["fact_ids"])
                 if cls is SourceFact:
+                    item["source_alignments"] = tuple(
+                        SourceAlignment(**entry)
+                        for entry in item.get("source_alignments", ())
+                    )
                     for role in ("actor", "recipient", "object"):
                         if item[role] is not None:
                             item[role] = FactEntity(**item[role])
@@ -171,6 +220,8 @@ def result_from_payload(payload):
             or execution["candidate_schema_version"] not in _CANDIDATE_SCHEMAS
         ):
             raise ValueError("Unsupported stored candidate schema")
+        from app.refresh.workflow import load_plan
+
         result = RefreshResult(
             JobKey(
                 payload["project_id"],
@@ -200,12 +251,36 @@ def result_from_payload(payload):
                 ValidationDiagnostic(**item)
                 for item in execution.get("validation_diagnostics", [])
             ),
+            load_plan(execution["change_plan"]) if "change_plan" in execution else None,
+            tuple(
+                SourceScopeExtension(
+                    item["plan_item_id"], tuple(item["source_markers"])
+                )
+                for item in execution.get("source_scope_extensions", ())
+            ),
+            tuple(
+                ParagraphCopyRemoval(
+                    item["edit_id"], tuple(item["paragraph_ids"]), item["original_text"]
+                )
+                for item in execution.get("paragraph_copy_removals", ())
+            ),
         )
         _check_outcome(result)
+        if execution.get("candidate_schema_version", execution["schema_version"]) in {
+            "refresh-candidate-v6",
+            "refresh-candidate-v8",
+        } and any(not valid_confidence(fact.confidence) for fact in result.facts):
+            raise ValueError("Invalid stored fact confidence")
         if (
             payload["schema_version"] == RESULT_SCHEMA_VERSION
             and execution.get("candidate_schema_version", execution["schema_version"])
-            in {"refresh-candidate-v4", "refresh-candidate-v5"}
+            in {
+                "refresh-candidate-v4",
+                "refresh-candidate-v5",
+                "refresh-candidate-v6",
+                "refresh-candidate-v7",
+                "refresh-candidate-v8",
+            }
             and any(
                 not p.fact_ids
                 for p in result.document_proposals
@@ -221,6 +296,29 @@ def result_from_payload(payload):
 
 def _check_outcome(result):
     _check_attempts(result)
+    if result.change_plan is not None:
+        if not isinstance(result.change_plan, ChangePlan):
+            raise ValueError("Typed stored change plan required")
+        if result.outcome != Outcome.FAILED:
+            plan = result.change_plan
+            if (
+                set(p.target_document_id for p in result.document_proposals)
+                != set(e.document_id for e in plan.edits)
+                or {
+                    (p.candidate_id, p.folder_code, p.name)
+                    for p in result.new_document_proposals
+                }
+                != {(p.candidate_id, p.folder_code, p.name) for p in plan.new_documents}
+                or {
+                    tuple(sorted((p.document_id, p.target_document_id)))
+                    for p in result.relation_proposals
+                }
+                != {
+                    tuple(sorted((p.document_id, p.target_document_id)))
+                    for p in plan.relations
+                }
+            ):
+                raise ValueError("Stored result differs from change plan")
     if result.candidate_schema_version is not None and (
         not isinstance(result.candidate_schema_version, str)
         or result.candidate_schema_version not in _CANDIDATE_SCHEMAS
@@ -229,6 +327,15 @@ def _check_outcome(result):
     facts = {fact.fact_id: fact for fact in result.facts}
     if len(facts) != len(result.facts):
         raise ValueError("Duplicate stored fact identifier")
+    for fact in result.facts:
+        if not valid_alignment_records(fact):
+            raise ValueError("Invalid stored source alignment")
+        if (
+            result.candidate_schema_version
+            in {"refresh-candidate-v6", "refresh-candidate-v8"}
+            or fact.confidence is not None
+        ) and not valid_confidence(fact.confidence):
+            raise ValueError("Invalid stored fact confidence")
     used = set()
     for proposal in (
         result.document_proposals
@@ -237,7 +344,13 @@ def _check_outcome(result):
     ):
         if (
             result.candidate_schema_version
-            in {"refresh-candidate-v4", "refresh-candidate-v5"}
+            in {
+                "refresh-candidate-v4",
+                "refresh-candidate-v5",
+                "refresh-candidate-v6",
+                "refresh-candidate-v7",
+                "refresh-candidate-v8",
+            }
             and not proposal.fact_ids
         ):
             raise ValueError("Current stored proposals require structured facts")
@@ -312,12 +425,13 @@ def _check_attempts(result):
             or type(attempt.call_index) is not int
             or attempt.call_index < 1
             or type(attempt.attempt_index) is not int
-            or attempt.attempt_index not in {0, 1}
+            or not 0 <= attempt.attempt_index <= MAX_REPAIRS_PER_CALL
             or not isinstance(attempt.target_ids, tuple)
             or not all(
                 isinstance(target, str) and target for target in attempt.target_ids
             )
             or len(set(attempt.target_ids)) != len(attempt.target_ids)
+            or attempt.stage not in {"GENERATE", "PLAN", "WRITE"}
             or not isinstance(attempt.outcome, Outcome)
             or not isinstance(attempt.usage, Usage)
             or attempt.usage.calls != 1
@@ -348,9 +462,8 @@ def _check_attempts(result):
             valid_order = attempt.call_index == 1 and attempt.attempt_index == 0
         elif attempt.call_index == previous.call_index:
             valid_order = (
-                previous.attempt_index == 0
-                and previous.outcome == Outcome.FAILED
-                and attempt.attempt_index == 1
+                previous.outcome == Outcome.FAILED
+                and attempt.attempt_index == previous.attempt_index + 1
                 and attempt.target_ids == previous.target_ids
             )
         else:

@@ -1,14 +1,23 @@
 """실제 refresh 서비스와 평가 전용 IO를 조립한다. import 시 IO는 없다."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 
+from app.refresh.context import build_context
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import DocumentBatch, DocumentState, Failure, RelatedDocuments
+from app.refresh.models import (
+    DocumentBatch,
+    DocumentState,
+    Failure,
+    RelatedDocuments,
+    RelationGenerationScope,
+)
 from app.refresh.rules import RefreshRules
 from app.refresh.service import RefreshService
+from app.refresh.source_alignment import align_candidate
 from app.refresh.validation import relation_in_scope
 from evaluation.cases import EvaluationCase, assess
+from evaluation.confidence import observe_confidence
 from evaluation.fakes import (
     Calls,
     FakeDocuments,
@@ -17,6 +26,8 @@ from evaluation.fakes import (
     FakePublisher,
     FakeRelations,
 )
+from evaluation.repair_observation import observe_repair
+from evaluation.source_observation import observe_sources
 
 
 class CallBudget:
@@ -53,11 +64,17 @@ def evaluation_snapshot(case: EvaluationCase):
     return rules.assemble(case.request, case.source, related, selection, fetched)
 
 
-def planned_calls(case: EvaluationCase) -> int:
+def planned_calls(case: EvaluationCase, *, single_call=False) -> int:
     """신규 발견·대상 갱신 분리와 활성 입력을 실제 호출 계획으로 계산한다."""
-    rules = RefreshRules()
+    rules = EvaluationRules(None, None, single_call=single_call)
     snapshot = evaluation_snapshot(case)
-    return len(rules.model_inputs(snapshot, rules.chunk(snapshot)))
+    inputs = rules.model_inputs(snapshot, rules.chunk(snapshot))
+    return (
+        2
+        if inputs
+        and inputs[0].schema_version in {"refresh-candidate-v7", "refresh-candidate-v8"}
+        else len(inputs)
+    )
 
 
 class EvaluationModel:
@@ -117,8 +134,54 @@ class EvaluationModel:
 class EvaluationRules(RefreshRules):
     """명시적인 과거 응답/기준선만 이전 계약으로 검사하며 live 계약은 완화하지 않는다."""
 
-    def __init__(self, model, recorder):
+    def __init__(self, model, recorder, *, single_call=False):
         self.model, self.recorder = model, recorder
+        self.single_call = single_call
+
+    def model_inputs(self, snapshot, chunks):
+        """평가 전용 단일 호출은 모든 대상과 신규 생성의 소유권을 함께 가진다."""
+        if snapshot.request.model_settings.schema_version in {
+            "refresh-candidate-v7",
+            "refresh-candidate-v8",
+        }:
+            return super().model_inputs(snapshot, chunks)
+        if not self.single_call:
+            return super().model_inputs(snapshot, chunks)
+        if snapshot.request.settings.separate_discovery:
+            raise ValueError("Single-call evaluation requires combined discovery")
+        if not any(
+            document.state == DocumentState.ACTIVE
+            and document.document_id in snapshot.changed_ids
+            for document in snapshot.documents
+        ):
+            return ()
+        return (
+            self.build_prompt(
+                build_context(
+                    snapshot,
+                    chunks,
+                    relation_scope=RelationGenerationScope(snapshot.target_ids, True),
+                )
+            ),
+        )
+
+    def validate_plan(self, snapshot, plan, model_input):
+        if self.recorder is not None:
+            record = self.recorder.current
+            record["stage"] = "PLAN"
+            record["source_observation"] = {
+                "status": "not_applicable",
+                "reason": "planning_stage_has_no_facts",
+            }
+            record["confidence_observation"] = {
+                source: {
+                    "status": "not_applicable",
+                    "reason": "planning_stage_has_no_facts",
+                }
+                for source in ("raw", "effective")
+            }
+            self.recorder.flush()
+        return super().validate_plan(snapshot, plan, model_input)
 
     def validate_candidate(self, snapshot, candidate, model_input):
         legacy = None
@@ -135,10 +198,51 @@ class EvaluationRules(RefreshRules):
                 legacy = version
         if legacy is not None:
             model_input = replace(model_input, schema_version=legacy)
-        return super().validate_candidate(snapshot, candidate, model_input)
+        candidate = align_candidate(snapshot, candidate, model_input)
+        result = super().validate_candidate(snapshot, candidate, model_input)
+        if self.recorder is not None and model_input.relation_scope is not None:
+            raw = self.recorder.last_candidate
+            if raw is not None:
+                self.recorder.current["effective_candidate"] = asdict(candidate)
+                if self.recorder.current["attempt_index"]:
+                    self.recorder.current["repair_observation"] = observe_repair(
+                        model_input, raw, candidate
+                    )
+                if self.recorder.observe_confidence:
+                    self.recorder.current["confidence_observation"] = {
+                        "raw": observe_confidence(
+                            snapshot,
+                            raw,
+                            result.diagnostics
+                            if asdict(raw) == asdict(candidate)
+                            else None,
+                        ),
+                        "effective": observe_confidence(
+                            snapshot, candidate, result.diagnostics
+                        ),
+                    }
+        if (
+            self.recorder is not None
+            and self.recorder.observe_sources
+            and model_input.relation_scope is not None
+        ):
+            self.recorder.current["source_observation"] = observe_sources(
+                self.recorder.case, snapshot, candidate, model_input
+            )
+            raw = self.recorder.last_candidate
+            if raw is not None and raw != candidate:
+                self.recorder.current["raw_source_observation"] = observe_sources(
+                    self.recorder.case, snapshot, raw, model_input
+                )
+            self.recorder.flush()
+        elif self.recorder is not None:
+            self.recorder.flush()
+        return result
 
 
-def assemble(case: EvaluationCase, model, budget: CallBudget, recorder=None):
+def assemble(
+    case: EvaluationCase, model, budget: CallBudget, recorder=None, *, single_call=False
+):
     """다섯 외부 IO를 fake로 고정하고 ProposalModel만 선택한다."""
     calls = Calls()
     artifacts = FakeJsonArtifacts({case.request.input_ref: case.source}, calls)
@@ -149,7 +253,7 @@ def assemble(case: EvaluationCase, model, budget: CallBudget, recorder=None):
         model=EvaluationModel(case, model, budget, recorder),
         jobs=FakeJobs(calls=calls),
         publisher=FakePublisher(calls),
-        rules=EvaluationRules(model, recorder),
+        rules=EvaluationRules(model, recorder, single_call=single_call),
     )
     return SimpleNamespace(
         service=service, artifacts=artifacts, calls=calls, recorder=recorder

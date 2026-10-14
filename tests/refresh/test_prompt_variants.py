@@ -64,7 +64,10 @@ def test_baseline_remains_exact_and_variants_preserve_context_and_scope():
 def test_both_registered_prompts_reach_responses_with_the_same_strict_schema(version):
     client = client_fixture()
     item = prompt(version)
-    result = OpenAIProposalModel(client, limits("gpt-6-luna")).generate(item)
+    model_limits = replace(
+        limits("gpt-6-luna"), max_input_tokens=80000, context_window=82000
+    )
+    result = OpenAIProposalModel(client, model_limits).generate(item)
     assert result.usage.calls == 1
     params = client.responses.create.call_args.kwargs
     assert params["instructions"] == item.instructions

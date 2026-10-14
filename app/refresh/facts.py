@@ -1,5 +1,6 @@
 """개별 사실의 출처·명시 식별·제안 참조 검사. 역할의 의미적 정답은 보증하지 않는다."""
 
+from math import isfinite
 from unicodedata import normalize
 
 from app.refresh.errors import RefreshFailure
@@ -19,6 +20,11 @@ def identity(value):
 
 def bounded(value, maximum):
     return isinstance(value, str) and bool(value.strip()) and len(value) <= maximum
+
+
+def valid_confidence(value):
+    """점수의 형식만 검사한다. 신뢰도 임계값으로 사실을 거절하지 않는다."""
+    return type(value) in {int, float} and isfinite(value) and 0 <= value <= 1
 
 
 def fact_description(facts):
@@ -105,13 +111,30 @@ def validate_facts(
     facts = {}
     chunks = (
         {chunk.evidence for chunk in make_chunks(snapshot)}
-        if schema_version == "refresh-candidate-v5"
+        if schema_version
+        in {
+            "refresh-candidate-v5",
+            "refresh-candidate-v6",
+            "refresh-candidate-v7",
+            "refresh-candidate-v8",
+        }
         else set()
     )
     for index, fact in enumerate(candidate.facts):
         path = f"facts[{index}]"
         if not isinstance(fact, SourceFact):
             fail(path, "fact.typed", "Bounded fact with explicit status required")
+        if (
+            schema_version in {"refresh-candidate-v6", "refresh-candidate-v8"}
+            or fact.confidence is not None
+        ) and not valid_confidence(fact.confidence):
+            fail(
+                path + ".confidence",
+                "fact.confidence_bounded",
+                "Confidence must be a finite number between zero and one",
+                fact=fact,
+                value=fact.confidence,
+            )
         for field, maximum in (("fact_id", 200), ("action", 200), ("statement", 500)):
             value = getattr(fact, field)
             if not bounded(value, maximum):
@@ -161,7 +184,12 @@ def validate_facts(
                 "One original fact source required",
                 fact=fact,
             )
-        if schema_version == "refresh-candidate-v5":
+        if schema_version in {
+            "refresh-candidate-v5",
+            "refresh-candidate-v6",
+            "refresh-candidate-v7",
+            "refresh-candidate-v8",
+        }:
             if (
                 evidence[0] not in chunks
                 or len(evidence[0].quote) > snapshot.request.settings.chunk_chars
@@ -220,7 +248,9 @@ def validate_facts(
                     value=entity.surface,
                     collect=True,
                 )
-            if entity.surface not in fact.statement:
+            # 현대 marker 계약에서 statement는 요약이다. 원문 surface는 위에서 검사한다.
+            # 기존 excerpt 계약의 저장 응답은 과거 검증 규칙을 유지한다.
+            if not chunks and entity.surface not in fact.statement:
                 fail(
                     role_path + ".surface",
                     "fact.role_surface_in_statement",

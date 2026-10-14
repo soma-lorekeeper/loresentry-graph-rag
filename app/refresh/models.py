@@ -4,7 +4,9 @@ frozen 데이터 클래스와 tuple 필드로 스냅샷을 표현한다. 생성�
 권한·범위·revision_no 유효성을 검증하지 않는다. ID와 revision_no은 호출자가 전달한다.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
@@ -71,12 +73,12 @@ class SelectionSettings:
 
     relation_keys: tuple[str, ...] = ()
     max_depth: int = 1
-    max_documents: int = 20
+    max_documents: int = 40
     max_input_chars: int = 5000
     policy_version: str = "refresh-v1"
     max_changed_documents: int = 20
-    max_context_chars: int = 240000
-    max_model_calls: int = 20
+    max_context_chars: int = 480000
+    max_model_calls: int = 40
     chunk_chars: int = 1000
     separate_discovery: bool = False
     chunk_overlap_chars: int = 0
@@ -87,8 +89,8 @@ class ModelSettings:
     """호출자가 주입하며 실행 스냅샷에 보존할 모델·프롬프트 버전."""
 
     model: str = "unconfigured"
-    prompt_version: str = "refresh-prompt-v11"
-    schema_version: str = "refresh-candidate-v5"
+    prompt_version: str = "refresh-prompt-v13"
+    schema_version: str = "refresh-candidate-v7"
 
 
 @dataclass(frozen=True)
@@ -233,6 +235,19 @@ class FactEntity:
 
 
 @dataclass(frozen=True)
+class SourceAlignment:
+    """서버가 복원한 표현의 원래 출력·유사도·원문 절대 위치."""
+
+    field: str
+    original: str
+    restored: str
+    similarity: float
+    start: int
+    end: int
+    original_statement: str
+
+
+@dataclass(frozen=True)
 class SourceFact:
     """생성에 사용한 개별 사실. 구조화 자체가 원문의 의미적 함의를 보증하지 않는다."""
 
@@ -246,6 +261,9 @@ class SourceFact:
     time: Literal["CURRENT", "PAST", "FUTURE", "UNSPECIFIED"]
     statement: str
     evidence: tuple[Evidence, ...]
+    # 자기평가 메타데이터는 사실의 정체성·내용 비교에 사용하지 않는다.
+    confidence: float | None = field(default=None, compare=False)
+    source_alignments: tuple[SourceAlignment, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -332,6 +350,69 @@ class ModelCandidate:
 
 
 @dataclass(frozen=True)
+class PlannedEdit:
+    edit_id: str
+    document_id: str
+    base_revision_no: int
+    paragraph_id: str
+    operation: Literal["REPLACE", "DELETE", "APPEND"]
+    instruction: str
+    source_markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PlannedNewDocument:
+    candidate_id: str
+    folder_code: str
+    name: str
+    instruction: str
+    source_markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PlannedRelation:
+    document_id: str
+    target_document_id: str
+    source_markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ChangePlan:
+    reviewed_document_ids: tuple[str, ...]
+    edits: tuple[PlannedEdit, ...]
+    new_documents: tuple[PlannedNewDocument, ...]
+    relations: tuple[PlannedRelation, ...]
+    usage: Usage = Usage()
+
+
+@dataclass(frozen=True)
+class ParagraphEdit:
+    edit_id: str
+    text: str
+    fact_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WrittenCandidate(ModelCandidate):
+    paragraph_edits: tuple[ParagraphEdit, ...] = ()
+    source_scope_extensions: tuple[SourceScopeExtension, ...] = ()
+    paragraph_copy_removals: tuple[ParagraphCopyRemoval, ...] = ()
+
+
+@dataclass(frozen=True)
+class SourceScopeExtension:
+    plan_item_id: str
+    source_markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ParagraphCopyRemoval:
+    edit_id: str
+    paragraph_ids: tuple[str, ...]
+    original_text: str
+
+
+@dataclass(frozen=True)
 class Failure:
     """예상 가능한 실패의 코드·메시지와 재시도 가능 여부.
 
@@ -368,6 +449,7 @@ class ModelAttempt:
     new_document_proposals: int | None = None
     failure: Failure | None = None
     diagnostics: tuple[ValidationDiagnostic, ...] = ()
+    stage: Literal["GENERATE", "PLAN", "WRITE"] = "GENERATE"
 
 
 @dataclass(frozen=True)
@@ -386,6 +468,9 @@ class RefreshResult:
     candidate_schema_version: str | None = None
     attempts: tuple[ModelAttempt, ...] = ()
     diagnostics: tuple[ValidationDiagnostic, ...] = ()
+    change_plan: ChangePlan | None = None
+    source_scope_extensions: tuple[SourceScopeExtension, ...] = ()
+    paragraph_copy_removals: tuple[ParagraphCopyRemoval, ...] = ()
 
 
 @dataclass(frozen=True)

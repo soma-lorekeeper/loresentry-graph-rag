@@ -19,7 +19,15 @@ class ResponseReplay:
 
     def generate(self, model_input):
         target = "+".join(model_input.target_ids) or "relations"
-        path = self.directory / f"{self.case.name}--{target}.json"
+        stage = (
+            "--plan"
+            if model_input.schema_version == "refresh-plan-v1"
+            else "--write"
+            if model_input.schema_version
+            in {"refresh-candidate-v7", "refresh-candidate-v8"}
+            else ""
+        )
+        path = self.directory / f"{self.case.name}--{target}{stage}.json"
         try:
             envelope = json.loads(path.read_text())
         except (OSError, ValueError):

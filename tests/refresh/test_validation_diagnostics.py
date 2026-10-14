@@ -133,12 +133,6 @@ def test_legacy_v4_invalid_excerpt_has_precise_source_feedback_without_relaxing_
             "facts[0].recipient.document_id",
             "fact.entity_identity_matches",
         ),
-        (
-            "statement",
-            "방문 전달을 맡겼다.",
-            "facts[0].actor.surface",
-            "fact.role_surface_in_statement",
-        ),
     ],
 )
 def test_validation_feedback_names_typed_fact_index_canonical_id_source_and_field(
@@ -292,17 +286,15 @@ def test_safe_leaf_failures_collect_all_facts_and_roles_before_proposal_checks()
     assert [(d.path, d.rule) for d in result.diagnostics] == [
         ("facts[0].action", "fact.action_in_source"),
         ("facts[0].actor.surface", "fact.role_surface_in_source"),
-        ("facts[0].actor.surface", "fact.role_surface_in_statement"),
         ("facts[0].actor.document_id", "fact.entity_identity_matches"),
         ("facts[0].recipient.document_id", "fact.entity_identity_matches"),
         ("facts[0].object.surface", "fact.role_surface_in_source"),
-        ("facts[0].object.surface", "fact.role_surface_in_statement"),
         ("facts[1].actor.document_id", "fact.entity_reference_known"),
         ("facts[1].recipient.document_id", "fact.entity_reference_known"),
         ("facts[1].object.document_id", "fact.entity_reference_known"),
     ]
-    assert {d.fact_id for d in result.diagnostics[:7]} == {first.fact_id}
-    assert {d.fact_id for d in result.diagnostics[7:]} == {second.fact_id}
+    assert {d.fact_id for d in result.diagnostics[:5]} == {first.fact_id}
+    assert {d.fact_id for d in result.diagnostics[5:]} == {second.fact_id}
     assert {d.source_marker for d in result.diagnostics} == {
         payload["facts"][0]["source"]["marker"]
     }

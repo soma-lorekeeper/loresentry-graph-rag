@@ -51,7 +51,7 @@ class S3ArtifactSettings:
     input_bucket: str
     prefix: str = "refresh"
     input_prefix: str = "refresh"
-    max_object_bytes: int = 8 * 1024 * 1024
+    max_object_bytes: int = 16 * 1024 * 1024
 
     def __post_init__(self):
         for name in (self.bucket, self.input_bucket):
@@ -79,7 +79,7 @@ class S3ArtifactSettings:
             prefix=values.get("GRAPHRAG_S3_PREFIX", "refresh"),
             input_prefix=values.get("GRAPHRAG_S3_INPUT_PREFIX", "refresh"),
             max_object_bytes=int(
-                values.get("GRAPHRAG_S3_MAX_OBJECT_BYTES", 8 * 1024 * 1024)
+                values.get("GRAPHRAG_S3_MAX_OBJECT_BYTES", 16 * 1024 * 1024)
             ),
         )
 
@@ -351,7 +351,7 @@ def s3_artifacts(settings: S3ArtifactSettings, *, region_name=None, endpoint_url
         region_name=region_name,
         endpoint_url=endpoint_url,
         config=Config(
-            retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=30
+            retries={"total_max_attempts": 1}, connect_timeout=10, read_timeout=60
         ),
     )
     try:

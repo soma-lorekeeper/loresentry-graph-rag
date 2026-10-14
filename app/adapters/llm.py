@@ -8,6 +8,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from app.adapters.llm_schema import (
     CANDIDATE_VERSION,
+    GENERATION_VERSIONS,
     candidate_schema,
     parse_candidate,
     response_usage,
@@ -90,14 +91,14 @@ class OpenAIProposalModel:
         self.limits.validate()
         if (
             model_input.model != self.limits.model
-            or model_input.schema_version != CANDIDATE_VERSION
+            or model_input.schema_version not in GENERATION_VERSIONS
             or model_input.prompt_version not in SUPPORTED_PROMPT_VERSIONS
             or not model_input.instructions.strip()
             or not model_input.prompt.strip()
             or self.client.max_retries != 0
         ):
             fail("MODEL_REQUEST_INVALID", "Unsupported model input configuration")
-        schema = candidate_schema()
+        schema = candidate_schema(model_input.schema_version)
         # UTF-8 byte length is a conservative text token estimate, plus framing
         # allowance. It is intentionally stricter than a tokenizer, never truncates.
         estimate = (
@@ -204,4 +205,7 @@ def decode_response(
         candidate_text,
         usage,
         model_input=model_input,
+        schema_version=(
+            model_input.schema_version if model_input is not None else CANDIDATE_VERSION
+        ),
     )

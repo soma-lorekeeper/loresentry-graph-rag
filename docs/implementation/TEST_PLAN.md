@@ -164,6 +164,77 @@ action·surface는 각각 200자 한도다. v4의 500자 원문 발췌는 명시
 [갱신안 입력·결과 계약](../migration/proposal-contract.md#근거와-결과-검증)을 따른다.
 [새 생성·연결 예시](../examples/refresh/result-new-settings.json)를 참고한다.
 
+## 출처 표현 관찰 평가
+
+`scripts.evaluate_refresh`의 `--observe-sources`는 정식 결과와 별도로 검증 전 후보를
+관찰한다. 운영 rules·보완 정책·CLI 종료 판정은 그대로 유지한다. 후보가 최종 FAILED로
+폐기돼도 각 최초·보완 응답의 모든 action·nonnull 역할 surface와 인용 구간 검사를
+수집하고, 등록된 수정·생성·관계·사실·본문 기준을 검증 대상 후보에 적용한다. 서버 보존이 적용된
+보완은 `candidate`에 모델 원본, `effective_candidate`에 실제 검증 후보를 따로 기록하고,
+`raw_source_observation`에 모델 원본의 출처 검사를 추가한다.
+이 비교에는 `rules_accepted` 합격 표시를 붙이지 않으며 미검증 후보라고 명시한다.
+
+Linux 호스트의 저장소 루트에서 실행한다. 아래 첫 명령은 네트워크 없이 관찰 경로를
+검증하고, 두 번째는 실제 모델 호출을 수행한다. 출력 디렉터리는 새 경로를 사용한다.
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh \
+  --suite semantic --env-file .env.example --max-calls 16 \
+  --observe-sources --trial source-observation-offline \
+  --output .evaluation/source-observation-offline --repeat-saved
+
+.venv/bin/python -m scripts.evaluate_refresh \
+  --live --suite semantic --env-file .env --max-calls 32 \
+  --observe-sources --trial source-observation-live \
+  --output .evaluation/source-observation-live --repeat-saved
+```
+
+현행 v5에서 LLM은 `source.marker`만 반환하고 서버가 quote·위치를 복원한다.
+`source.quote_exact`는 복원한 근거와 실행 스냅샷의 무결성 검사다. 모델이 직접 선택한
+`action`·`surface`의 원문 포함 검사와 분리해 해석한다. 파싱·통신 실패는 표현 불일치
+0건이 아니라 관찰 불가로 남긴다.
+
+기존 case·attempt JSON과 `report.md` 외에 다음 관찰 산출물을 생성한다.
+
+| 산출물 | 내용 |
+|---|---|
+| `source-observation.json` | 최초·보완별 관찰 가능/불가 후보 수, 검사별 분모·불일치·영향 후보 수, 모든 불일치와 미검증 후보의 기준 비교 |
+| `source-observation.md` | 집계와 불일치 표현·사실 문장·선택 원문, 원래 후보 기록 링크 |
+
+검사 분모는 호출 수가 아니라 검사한 원문·행동·역할 표현 수다. 보완은 실패한 호출만
+대상으로 하므로 최초·보완 수치를 전체 표본의 전후 비교처럼 해석하지 않는다.
+표기 차이 가능성·다른 마커의 표현 존재·문맥 전체에서 표현 미발견은 분류 힌트다.
+정규화하거나 다른 마커로 자동 교체하지 않는다. 의미가 같은 의역인지, 사실을 잘못
+연결했는지, 단순 표기 오류인지는 원문·제안 본문을 사람이 대조해야 한다.
+불일치가 없는 후보도 역할·부정·범위·시점의 의미 정확성을 보장하지 않는다.
+
+### 소설 전체를 호출 예산 3회 이내에서 관찰
+
+기본 `novel-settings`는 신규 탐색 1회와 기존 설정 8개 수정으로 최초 9회가 필요하다.
+`--single-call`은 평가에 한해 두 변경 원고 전체·기존 설정 8개·모든 수정 대상과
+신규 생성을 한 호출에 묶는다. `separate_discovery=false`와 `call_strategy=single-call`을
+기록하며 기본 서비스의 대상별 호출 전략을 바꾸지 않는다. 보완은 같은 전체 범위로
+최대 2회이고 SDK 자동 재시도는 없다. `--max-calls`는 보완까지 포함한 전체 상한이다.
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh \
+  --live --suite novel-settings --single-call --env-file .env --max-calls 3 \
+  --observe-sources --trial source-observation-novel-single \
+  --output .evaluation/source-observation-novel-single --repeat-saved
+```
+
+이 조건은 기본 9회 전략의 처리 성능·품질을 재현하는 평가가 아니다. 모든 자료를
+유지하면서 적은 호출로 출처 표현 오류를 관찰하는 실험이며 출력 예산·불완전 응답도
+별도로 확인한다. 보완 호출은 남은 예산 안에서만 실행한다.
+
+[단일 호출 테스트](../../tests/refresh/test_single_call_evaluation.py)는 두 원고의 전량
+포함, 대상 8개와 신규 관계 소유권, 보완 범위·호출 상한, 저장 결과 재사용과 기본 전략의
+예산 검사를 확인한다.
+
+[관찰 평가 테스트](../../tests/refresh/test_source_observation.py)는 다중 불일치 수집,
+후보 무변경, 공식 FAILED 유지, 실패 후보의 품질 비교, 최초·보완 분리, 통합 후보가
+마지막 호출 기록을 덮어쓰지 않는지와 보고서 재렌더를 검증한다.
+
 ## S3 어댑터
 
 [test_s3_artifacts.py](../../tests/refresh/test_s3_artifacts.py)는 엄격 JSON·타입,
@@ -175,3 +246,113 @@ action·surface는 각각 200자 한도다. v4의 500자 원문 발췌는 명시
 
 최신 검사와 실제 OpenAI 평가 결과는 [품질 개선·검증 기록](../migration/refresh-quality.md)을 따른다.
 운영 S3·Content·Neptune·Kafka 연동은 미연결이다.
+
+
+## 부분 보완의 정보 보존 관찰
+
+`repair-v2`는 진단이 명시한 사실의 행동·역할 표현 오류에서 그 사실을 참조하지 않는
+문서 수정·신규 설정·관계 제안을 이전 후보에서 보존한다. 해당 제안의 참조 사실도
+복원하고 전체를 재검증한다. 파싱 오류·사실 ID 중복·출처 전역 오류처럼 안전하게
+범위를 특정할 수 없는 오류에는 전체 후보 보완을 유지한다. 보완 대상 본문의 다른
+정보와 최초 생성의 완전성을 서버가 의미적으로 보증하는 기능은 아니다.
+
+평가에서 파싱된 보완 응답을 검증하면 `repair-observation.json`과
+`repair-observation.md`를 생성한다. 이전 후보와 모델 원본·서버 보존 후 후보를 각각
+비교하여 삭제된 제안, 바뀐 본문, 더 이상 그대로 나타나지 않는 이전 문장·사실을 기록한다.
+재서술이나 정당한 오류 제거도 문자열 부재에 포함하므로 그 자체를 품질 실패로
+판정하지 않는다. 보완이 없으면 이 두 파일을 생성하지 않는다.
+
+각 attempt의 `instruction_fingerprint`는 실제 지시문의 SHA-256이다. 프롬프트 버전명이
+같아도 문구가 달라진 실행을 구분하는 평가 자료이며 운영 결과 계약의 새 필드는 아니다.
+
+
+## 사실별 confidence 관찰
+
+목적은 모델 자기평가 점수가 실제 관측 오류와 관련이 있는지 조사하는 것이다.
+`--confidence`가 v6 후보의 facts마다 0∼1 숫자를 요청하며 기본 실행은 v5다.
+confidence의 추가 효과를 보려면 옵션 없는 실행과 옵션 있는 실행을 각각 새 trial로
+수행하고 원문·기존 설정·모델·기본 프롬프트 버전·청크·호출 전략·토큰 예산을 맞춘다.
+출처 오류뿐 아니라 기존 누락·낡은 내용·관계 검사, 지연·토큰도 함께 비교한다.
+현재 A/B 도구는 같은 후보 스키마를 요구하므로 v5/v6 개별 실행 보고서로 비교한다.
+
+아래는 Linux 호스트의 저장소 루트에서 실행할 실제 API 명령 예시다. 2026-10-13 실제
+평가도 같은 조건에 새 trial·출력 경로를 사용했다. 이전 소설과 같은 통합 호출 조건에서
+보완 포함 상한을 3회로 지정했다.
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh \
+  --live --env-file .env --model gpt-6-luna \
+  --suite novel-settings --single-call --prompt-version refresh-prompt-v11 \
+  --confidence --observe-sources --repeat-saved \
+  --timeout 300 --max-input-tokens 120000 --max-output-tokens 32768 \
+  --context-window 152768 --max-calls 3 \
+  --trial novel-confidence-01 --output .evaluation/novel-confidence-01
+```
+
+`--confidence`는 `--live` 또는 v6 후보의 `--responses-dir` 재생에서 사용한다.
+고정 expected 후보에서 점수를 만들어 채워 넣지 않는다. 누락된 점수·파싱 실패·timeout은
+점수 0이나 오류 0으로 계산하지 않는다. 반환 사실이 없는 경우에도 빈 사실 목록을
+성능 합격으로 해석하지 않는다.
+
+| 기록 | 내용 |
+|---|---|
+| facts[].confidence | 요청에서 생성한 모델 자기평가. 기본 v5 결과에는 없음 |
+| confidence-observation.json | 최초·보완 × 모델 원본·실제 검증 후보의 사실별 점수·문자열 검사 오류·해당 사실의 엄격 진단 |
+| confidence-observation.md | 점수 구간별 사실 수·평균 점수·문자열 오류 사실 수·엄격 진단 사실 수·미검사 수 |
+
+점수 구간 `[0,0.5)`, `[0.5,0.8)`, `[0.8,0.95)`, `[0.95,1]`은 보고서 집계 구간이며
+생성·채택 임계값이 아니다. 문자열 검사는 quote 원본 일치, action·surface의 원문 포함,
+surface의 statement 포함 여부는 표현 차이로 별도 관찰하고 오류 수에 넣지 않는다. 검증 진단은 실제 보고된 오류이며
+진단이 없다는 사실로 모든 검사가 완료됐다고 주장하지 않는다. 서버 보존 후 후보와
+다른 모델 원본에는 서버 후보의 진단을 잘못 연결하지 않는다.
+
+낮은 점수의 사실도 기존 rules를 통과하면 유지하고 높은 점수도 출처 오류를 통과하지
+못한다. 누락은 출력 사실의 점수로 검사할 수 없으므로 기존 평가를 병행한다. 모든
+사실의 의미적 정답 라벨이 없어 정답률 보정·ECE·Brier 점수는 계산하지 않는다.
+반복되는 동일 사실도 후보별 관측 수로 명시하며 독립 표본으로 해석하지 않는다.
+
+구현 검증은 모의 SDK 응답과 v6 고정 응답 재생으로 파싱·저장·보완·보고서 연결을
+확인한다. 테스트의 고정 confidence 숫자는 모델의 실측 점수가 아니다. 2026-10-13에는 전체 소설 변경을 실제 API 생성·보완 2회로 평가했다. 높은 confidence
+0.98의 원문 표현 오류를 보완했고 최종 평가는 검토 필요다. 단일 비교이며 낮은 점수의
+후보가 없어 오류 감소 효과·저신뢰 오류 예측 성능은 확정하지 않는다. 상세 결과는
+[실제 평가 기록](../migration/refresh-quality.md#confidence-소설-실제-api-평가-2026-10-13)을 따른다.
+
+## 원문 표현 유사도 보정 검증
+
+`tests/refresh/test_source_alignment.py`는 공백·조사·오타·활용형의 높은 유사도 복원,
+동점 위치의 보정 거부, 높은 유사도에서도 이름·숫자·부정 변경 거부,
+다른 마커와 위조 원문 거부, summary 표현 차이 허용 및 동기화,
+관계 설명 동기화와 기존 잘못된 설명의 보존, 보정의 반복 적용,
+서비스의 추가 호출 없는 처리, 보정 기록 저장·복구와 변조 거부를 확인한다.
+
+2026-10-13 검증에서는 전체 936개 테스트가 통과했다. Ruff 검사·포맷과
+`git diff --check`도 통과했다. 외부 LLM 호출은 포함하지 않았다.
+
+5화 수정·6화 추가의 이전 실제 API 최초 응답 재생은 원문 표현 1건을 복원해
+PROPOSED가 되었으며 보완 호출은 없었다. 품질 판정은 기존 본문 표현 미확인 2건 등으로
+review_required다. [품질 기록](../migration/refresh-quality.md)의
+「원문 표현 유사도 보정과 실제 응답 재생」에 조건과 결과를 기록했다.
+
+## 계획·문단 작성 두 단계 검증
+
+`tests/refresh/test_two_stage.py`는 다중 문서의 속성 교체, 문단 밖 원문·공백 보존,
+문단 추가·삭제, 모르는 ID·revision·마커·중복 작업·계획 누락·무효 교체의 거절,
+SDK의 계획·작성 스키마, 결과·계획 저장 복구, 최초·보완의 전체 3회 상한을 검증한다.
+추가 변경 원고 마커의 사용은 기록하고, 기존 설정 마커를 새 변화의 근거로 사용하는 것은
+거절한다. 계획 단계의 facts/점수 없음은 not_applicable이며 작성 통계에 합산하지 않는다.
+
+2026-10-13 두 단계 최초 구현 후 전체 테스트는 963개 통과, Ruff·포맷·git diff --check 통과다.
+테스트는 외부 모델을 호출하지 않았다. 별도 실제 소설 평가는 총 3회 API를 사용했다.
+계획에서 재질 교체 대상 두 문서를 모두 찾고 작성 본문도 교체했지만, 최종 검증은 실패했다.
+출처 범위 규칙 수정 후 저장 응답의 재생에서도 구조화 사실 오류가 남았다.
+[품질 기록](../migration/refresh-quality.md)의 「계획·작성 두 단계 실제 소설 평가」에
+실제 API 결과와 현재 코드의 저장 응답 재생을 구분했다.
+
+추가 검증은 작성 응답의 다른 보존 문단 복사와 APPEND의 앵커 문단 복사를 제거하고,
+원문 공백·문단 끝 개행을 유지하며, 제거 전 텍스트·문단 ID를 저장·복구하는지 확인한다.
+
+문자 검사를 유사도 기반으로 확장한 뒤 전체 테스트 972개가 통과했다.
+같은 실제 API 응답을 추가 호출 없이 재검증해 Refresh는 PROPOSED가 되었으며,
+품질 평가의 강연오 경력 누락은 failed로 남았다. 요약의 문자 차이는 confidence 관찰에서도
+오류 수에 포함하지 않는다. 재검증 기록은 [품질 기록](../migration/refresh-quality.md)의
+「유사도 보정 범위 확장과 저장 응답 재검증」을 따른다.

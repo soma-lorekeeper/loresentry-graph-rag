@@ -40,12 +40,12 @@ Linux 호스트의 `loresentry-graph-rag` 저장소 루트에서 실행한다. �
 ```
 
 유효한 키·모델 설정을 `.env`에 준비한 뒤 실제 응답을 평가하려면 다음처럼 실행한다.
-신규 탐색 1회와 기존 대상 8개의 수정 호출을 분리하여 최대 9회 유료 호출을 요청한다.
-자동 재시도는 하지 않는다.
+신규 탐색 1회와 기존 대상 8개의 수정 호출을 분리한다. 아래 예시의 총 호출 상한은
+보완 포함 18회이며 후보 보완은 호출별 최대 2회다. SDK 자동 재시도는 하지 않는다.
 
 ```bash
 .venv/bin/python -m scripts.evaluate_refresh \
-  --suite novel-settings --live --env-file .env --max-calls 9 \
+  --suite novel-settings --live --env-file .env --max-calls 18 \
   --trial settings-live-1 --output .evaluation/settings-live-1
 ```
 

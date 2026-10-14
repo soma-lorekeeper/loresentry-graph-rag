@@ -9,6 +9,7 @@ from typing import Protocol
 
 from app.refresh.models import (
     ArtifactRef,
+    ChangePlan,
     Completion,
     DocumentBatch,
     ExecutionSnapshot,
@@ -104,7 +105,7 @@ class DocumentSource(Protocol):
 class ProposalModel(Protocol):
     """모델을 호출해 아직 업무 검증을 통과하지 않은 후보를 받는 계약."""
 
-    def generate(self, model_input: ModelInput) -> ModelCandidate:
+    def generate(self, model_input: ModelInput) -> ModelCandidate | ChangePlan:
         """프롬프트와 모델 설정으로 후보 및 사용량을 반환한다.
 
         호출은 외부 비용을 발생시킬 수 있다. 응답 형식 해석과 업무 유효성 검증은

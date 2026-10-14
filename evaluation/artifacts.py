@@ -4,6 +4,7 @@ import json
 import os
 import time
 from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,7 +30,16 @@ def write_json(path: Path, value) -> None:
 class AttemptRecorder:
     """시도마다 원본 응답과 파싱 결과를 즉시 저장한다. 원격 재시도는 하지 않는다."""
 
-    def __init__(self, directory: Path, case, limits, live: bool):
+    def __init__(
+        self,
+        directory: Path,
+        case,
+        limits,
+        live: bool,
+        *,
+        observe_sources=False,
+        observe_confidence=False,
+    ):
         self.directory, self.case, self.limits, self.live = (
             directory,
             case,
@@ -38,6 +48,9 @@ class AttemptRecorder:
         )
         self.records = []
         self.current = None
+        self.observe_sources = observe_sources
+        self.observe_confidence = observe_confidence
+        self.last_candidate = None
 
     def flush(self, record=None):
         record = self.current if record is None else record
@@ -55,6 +68,7 @@ class AttemptRecorder:
             self.flush(record)
 
     def generate(self, model_input, call):
+        self.last_candidate = None
         try:
             prompt = json.loads(model_input.prompt)
         except (TypeError, ValueError):
@@ -80,6 +94,15 @@ class AttemptRecorder:
             "live": self.live,
             "settings": asdict(self.limits),
             "model_input": asdict(model_input),
+            "stage": "PLAN"
+            if model_input.schema_version == "refresh-plan-v1"
+            else "WRITE"
+            if model_input.schema_version
+            in {"refresh-candidate-v7", "refresh-candidate-v8"}
+            else "GENERATE",
+            "instruction_fingerprint": sha256(
+                model_input.instructions.encode()
+            ).hexdigest(),
             "raw_response": None,
             "candidate": None,
             "failure": None,
@@ -93,6 +116,7 @@ class AttemptRecorder:
         started = time.perf_counter()
         try:
             candidate = call()
+            self.last_candidate = candidate
             record["candidate"] = asdict(candidate)
             # Offline fake token counts are not evidence of paid usage.
             return candidate
@@ -104,6 +128,19 @@ class AttemptRecorder:
             raise
         finally:
             record["elapsed_seconds"] = time.perf_counter() - started
+            if self.observe_sources and "source_observation" not in record:
+                # Business validation runs after generate; parsed candidates are
+                # observed there. Parse/transport failures remain unavailable.
+                if record["candidate"] is None:
+                    record["source_observation"] = {
+                        "status": "unavailable",
+                        "reason": (record["failure"] or {}).get("code", "no_candidate"),
+                    }
+            if self.observe_confidence and record["candidate"] is None:
+                record["confidence_observation"] = {
+                    source: {"status": "unavailable", "reason": "candidate_unparsed"}
+                    for source in ("raw", "effective")
+                }
             self.flush()
 
 

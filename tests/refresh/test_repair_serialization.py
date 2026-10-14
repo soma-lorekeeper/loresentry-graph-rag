@@ -66,6 +66,18 @@ def test_attempt_history_roundtrip_retains_failed_usage_and_diagnostics(repair_r
     assert restored == result
 
 
+def test_two_repairs_roundtrip_with_contiguous_indices_and_full_usage(repair_result):
+    request, snapshot, result = repair_result
+    second = replace(result.attempts[0], attempt_index=1, usage=Usage(1, 6, 7))
+    final = replace(result.attempts[1], attempt_index=2, usage=Usage(1, 8, 9))
+    result = replace(
+        result,
+        attempts=(result.attempts[0], second, final),
+        usage=Usage(3, 19, 22),
+    )
+    assert result_from_payload(result_to_payload(request, result, snapshot)) == result
+
+
 def test_aggregate_failure_diagnostics_roundtrip_without_extra_model_call(
     repair_result,
 ):

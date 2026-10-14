@@ -1,4 +1,4 @@
-"""One bounded repair preserves scope, atomic results, and all attempt usage."""
+"""Two bounded repairs preserve scope, atomic results, and all attempt usage."""
 
 import json
 from collections import deque
@@ -306,7 +306,7 @@ def test_parser_repair_preserves_context_scope_and_counts_failed_response_usage(
     feedback = repaired_context.pop("validation_repair")
     assert repaired_context == initial_context
     assert feedback == {
-        "version": "refresh-validation-repair-v1",
+        "version": "refresh-validation-repair-v2",
         "attempt": 1,
         "previous_candidate": (
             json.loads(candidate_text)
@@ -314,6 +314,7 @@ def test_parser_repair_preserves_context_scope_and_counts_failed_response_usage(
             else candidate_text
         ),
         "diagnostics": [asdict(error.diagnostics[0])],
+        "protected_proposal_keys": {},
     }
     for field in (
         "target_ids",
@@ -415,22 +416,27 @@ def test_actual_marker_parser_failure_carries_usage_and_diagnostics_into_repair(
     assert repair["previous_candidate"] == raw
 
 
-def test_second_validation_failure_stops_atomically_without_third_attempt():
+def test_third_validation_failure_stops_atomically_after_two_repairs():
     scenario = repair_scenario()
     first = invalid_identity(candidate_for(scenario, usage=Usage(1, 11, 13)))
     second = invalid_identity(candidate_for(scenario, usage=Usage(1, 17, 19)))
-    scenario.model.responses.extend((first, second, candidate_for(scenario)))
+    third = invalid_identity(candidate_for(scenario, usage=Usage(1, 23, 29)))
+    scenario.model.responses.extend((first, second, third, candidate_for(scenario)))
     _, result = run_saved(scenario)
     assert_atomic_failure(result, "INVALID_FACT")
-    assert len(scenario.model.inputs) == 2
+    assert len(scenario.model.inputs) == 3
     assert len(scenario.model.responses) == 1
-    assert result.usage == Usage(2, 28, 32)
-    assert [a.outcome for a in result.attempts] == [Outcome.FAILED, Outcome.FAILED]
+    assert result.usage == Usage(3, 51, 61)
+    assert [a.outcome for a in result.attempts] == [Outcome.FAILED] * 3
+    assert [a.attempt_index for a in result.attempts] == [0, 1, 2]
+    assert (
+        json.loads(scenario.model.inputs[2].prompt)["validation_repair"]["attempt"] == 2
+    )
     assert all(a.diagnostics for a in result.attempts)
 
 
 @pytest.mark.parametrize("repair_all", [True, False])
-def test_all_fact_leaf_diagnostics_are_sent_in_one_bounded_repair(repair_all):
+def test_all_fact_leaf_diagnostics_are_sent_in_bounded_repairs(repair_all):
     scenario = repair_scenario()
     valid = candidate_for(scenario)
     waiting_payload = json.loads(json.dumps(scenario.payload))
@@ -445,7 +451,7 @@ def test_all_fact_leaf_diagnostics_are_sent_in_one_bounded_repair(repair_all):
     valid = replace(
         valid, facts=(*valid.facts, waiting), document_proposals=(document,)
     )
-    missing_object = replace(waiting, statement="윤준은 기다렸다.")
+    missing_object = replace(waiting, object=FactEntity("알 수 없는 물건", None))
     wrong_action_and_identity = replace(
         valid.facts[0],
         action="넘겼다",
@@ -457,15 +463,16 @@ def test_all_fact_leaf_diagnostics_are_sent_in_one_bounded_repair(repair_all):
     )
     scenario.model.responses.extend((invalid, repaired, valid))
     _, result = run_saved(scenario)
-    assert len(scenario.model.inputs) == 2
-    assert len(scenario.model.responses) == 1
-    assert result.usage == Usage(2, 40, 60)
+    count = 2 if repair_all else 3
+    assert len(scenario.model.inputs) == count
+    assert len(scenario.model.responses) == 3 - count
+    assert result.usage == Usage(count, count * 20, count * 30)
     first = result.attempts[0]
     assert first.outcome == Outcome.FAILED
     assert {(d.path, d.rule) for d in first.diagnostics} == {
         ("facts[0].action", "fact.action_in_source"),
         ("facts[0].recipient.document_id", "fact.entity_identity_matches"),
-        ("facts[1].object.surface", "fact.role_surface_in_statement"),
+        ("facts[1].object.surface", "fact.role_surface_in_source"),
     }
     assert {d.fact_id for d in first.diagnostics} == {
         valid.facts[0].fact_id,
@@ -483,16 +490,20 @@ def test_all_fact_leaf_diagnostics_are_sent_in_one_bounded_repair(repair_all):
         for diagnostic in first.diagnostics
     ]
     assert len(feedback["previous_candidate"]["facts"]) == 2
+    assert result.outcome == Outcome.PROPOSED
+    assert result.document_proposals == valid.document_proposals
+    assert set(result.facts) == set(valid.facts)
     if repair_all:
-        assert result.outcome == Outcome.PROPOSED
-        assert result.document_proposals == valid.document_proposals
-        assert set(result.facts) == set(valid.facts)
         assert result.attempts[1].outcome == Outcome.PROPOSED
     else:
-        assert_atomic_failure(result, "INVALID_FACT")
+        assert result.attempts[1].outcome == Outcome.FAILED
+        assert result.attempts[2].outcome == Outcome.PROPOSED
         assert [(d.path, d.rule) for d in result.attempts[1].diagnostics] == [
-            ("facts[1].object.surface", "fact.role_surface_in_statement")
+            ("facts[1].object.surface", "fact.role_surface_in_source")
         ]
+        latest = json.loads(scenario.model.inputs[2].prompt)["validation_repair"]
+        assert latest["attempt"] == 2
+        assert len(latest["diagnostics"]) == 1
 
 
 @pytest.mark.parametrize("defect", ["source", "status"])
@@ -730,15 +741,18 @@ def test_saved_result_reuse_does_not_repeat_failed_or_repaired_calls(successful_
     if not successful_repair:
         second = invalid_identity(second)
     scenario.model.responses.extend((first, second))
+    if not successful_repair:
+        scenario.model.responses.append(second)
     completion, result = run_saved(scenario)
     assert completion.outcome == (
         Outcome.PROPOSED if successful_repair else Outcome.FAILED
     )
-    assert len(scenario.model.inputs) == 2
+    count = 2 if successful_repair else 3
+    assert len(scenario.model.inputs) == count
     again = scenario.service.run(scenario.request, "execution-2")
     assert again == completion
     assert scenario.artifacts.read_result(scenario.request) == result
-    assert len(scenario.model.inputs) == 2
+    assert len(scenario.model.inputs) == count
     assert len(scenario.publisher.delivered) == 1
 
 

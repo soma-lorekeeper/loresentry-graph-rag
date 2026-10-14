@@ -57,12 +57,12 @@ S3 결과용 `result_from_payload`를 모델 파서로 재사용하지 않는다
 |---|---|
 | SDK·DTO | `openai==3.24.0`, `pydantic==2.13.5` |
 | 선택 모델 | 기본 설정은 `gpt-6-luna`. `gpt-5.6-luna`도 지원하며 한도 registry에 명시된 모델만 허용 |
-| 프롬프트·후보 버전 | 기본 `refresh-prompt-v11`, 명시 선택 `refresh-prompt-v12`; 둘 다 `refresh-candidate-v5` |
+| 프롬프트·후보 버전 | 기본 요청은 v13·v7 두 단계; 작성 confidence는 v8. 기존 비교는 v11·v12 및 v5·v6 유지 |
 | 청크·겹침 | `chunk_chars` 기본 1,000자, `chunk_overlap_chars` 기본 0; `0 <= 겹침 < 청크 크기`인 정수만 허용하며 bool은 거절 |
 | S3 결과 외곽 버전 | `refresh-result-v3`; 저장된 v1/v2 읽기 호환 |
-| 예시 timeout·출력 한도 | 120초, 16,384토큰. SDK 요청 timeout이며 전체 평가 시간 제한은 아님 |
-| 예시 입력·문맥 예산 | 입력 120,000토큰, 입력+출력 136,384토큰 |
-| 전체 평가 호출 상한 | 기본 예시 9회. 기본 6사례는 7회, 확장 소설은 신규 탐색 1회 + 기존 수정 8회. 독립 semantic 6사례는 `--max-calls 16` 필요 |
+| 예시 timeout·출력 한도 | 240초, 32,768토큰. SDK 요청 timeout이며 전체 평가 시간 제한은 아님 |
+| 예시 입력·문맥 예산 | 입력 240,000토큰, 입력+출력 272,768토큰 |
+| 전체 평가 호출 상한 | 기본 예시·CLI fallback 18회. 기본 6사례는 최초 7회, 확장 소설은 신규 탐색 1회 + 기존 수정 8회. 독립 semantic 6사례는 최초 16회 필요 |
 
 [prompt_versions.py](../../app/refresh/prompt_versions.py)가 실제 생성에 허용한 v11·v12를
 정의한다. v11 지시문과 기본 선택은 유지한다. v12는 허용 대상의 사실을 먼저 구조화하고
@@ -77,11 +77,13 @@ source 원문과 대조한 뒤 본문·관계를 작성하도록 보강한다. �
 문장은 기존처럼 크기 상한에서 분할한다. 원문 위치·전체 덮기·전진을 보존하고, 겹친 원문도
 문맥 예산에 포함한다. `--chunk-chars`, `--chunk-overlap-chars`로 평가 조건을 지정한다.
 
-현행 후보의 구체적 검증 오류는 서비스가 호출 범위별 최대 한 번 보완한다.
-보완은 원래 자료와 실패 후보·진단을 함께 제공하는 `refresh-validation-repair-v1` 경로이며
-SDK 자체 재시도와 별개다. 요청의 `max_model_calls`와 평가 `--max-calls`에 추가 호출도
-포함된다. 긴 원고에서 보완 여유를 두려면 `--max-calls 18`, 독립 의미 6사례는
-`--max-calls 32`를 사용할 수 있다. 최초 호출만 허용하는 9회·16회 설정에서는 보완 여유가
+현행 후보의 구체적 검증 오류는 서비스가 호출 범위별 최대 두 번 보완한다.
+보완은 원래 자료와 실패 후보·진단을 함께 제공하는 `refresh-validation-repair-v2` 경로이며
+SDK 자체 재시도와 별개다. 특정 사실의 행동·역할 표현 오류에서는 해당 사실을 참조하지
+않는 제안·근거를 이전 후보에서 보존하고 전체를 다시 검증한다. 파싱·전역 오류는 전체
+후보를 보완한다. 요청의 `max_model_calls`와 평가 `--max-calls`에 추가 호출도
+포함된다. 긴 원고에서 보완 여유를 두려면 `--max-calls 36`, 독립 의미 6사례는
+`--max-calls 64`를 사용할 수 있다. 최초 호출만 허용하는 9회·16회 설정에서는 보완 여유가
 소진되면 실패한다. 보완 입력에도 문맥·어댑터 토큰 예산을 적용한다. 실제 결과와 한계는
 [품질 검증 기록](refresh-quality.md#검증-오류-보완-repair-v1)을 참고한다.
 
@@ -167,10 +169,10 @@ usage가 없는 API 응답은 실패시키고 시도 기록의 사용량은 null
 추가한다. 입력 자료와 평가 기준 fingerprint도 대조하여 서로 다른 조건의 결과를 섞지 않는다.
 
 ```bash
-# 실제 비교: 2조건 × 2반복 × 자식 전체 상한 32회 = 최대 128회 예약
+# 실제 비교: 2조건 × 2반복 × 자식 전체 상한 64회 = 최대 256회 예약
 .venv/bin/python -m scripts.evaluate_refresh_ab \
-  --live --env-file .env --suite semantic --repeats 2 --max-calls 32 \
-  --max-total-calls 128 --trial semantic-ab --output .evaluation/semantic-ab
+  --live --env-file .env --suite semantic --repeats 2 --max-calls 64 \
+  --max-total-calls 256 --trial semantic-ab --output .evaluation/semantic-ab
 
 # 이미 저장된 실험만 비교: 모델 호출 없음, 새 출력 디렉터리 사용
 .venv/bin/python -m scripts.evaluate_refresh_ab \
@@ -179,7 +181,7 @@ usage가 없는 API 응답은 실패시키고 시도 기록의 사용량은 null
 
 실제 호출 모드는 `--max-total-calls`가 필수이며 보완까지 포함한 각 자식 `--max-calls`의
 합계를 실행 전에 예약한다. 위 예시에 `--include-overlap --overlap-chars 200`을 추가하면
-3조건이므로 전체 상한도 최소 192회로 늘려야 한다. 겹침은 청크 크기보다 작아야 하며
+3조건이므로 전체 상한도 최소 384회로 늘려야 한다. 겹침은 청크 크기보다 작아야 하며
 `--chunk-chars`를 지정하면 모든 조건에 같은 크기를 적용한다. 실제 호출 수는 예약보다
 작을 수 있다. 인증·할당량 소진 시 나머지 실행은 중단한다.
 
@@ -256,3 +258,24 @@ S3·Content·Neptune 관계 조회·영속 상태·Kafka와 FastAPI 갱신안 �
 전체 마커 원문을 복원하며 관계 설명·근거는 fact_ids에서 조립한다.
 과거 응답과 사실이 없는 고정 기대값의 오프라인 실행은 명시적인 이전 계약 검증이며,
 현재 v5의 사실 필수 검증을 우회하는 live 모드는 제공하지 않는다.
+
+## 계획·문단 작성 두 단계 평가
+
+실제 Refresh의 새 기본 요청은 v13·v7이다. 별도 평가의 과거 기대 fixture와 기본 비교는
+한 단계 계약에 고정하며 `--two-stage`는 실제 모델 또는 저장된 두 단계 응답을 요구한다.
+`--single-call` 없이도 두 단계가 모든 대상을 함께 처리한다. 입력·출력 예산은 호출마다
+적용하고, --max-calls는 계획·작성·보완 전체에 공유한다. 보완은 두 단계 합쳐 한 번이다.
+
+```bash
+.venv/bin/python -m scripts.evaluate_refresh --live --env-file .env \
+  --model gpt-6-luna --suite novel-settings --two-stage \
+  --prompt-version refresh-prompt-v13 --confidence --observe-sources --repeat-saved \
+  --timeout 300 --max-input-tokens 120000 --max-output-tokens 32768 \
+  --context-window 152768 --max-calls 3 \
+  --trial novel-two-stage --output .evaluation/novel-two-stage
+```
+
+계획 응답은 `refresh-plan-v1`, 작성 응답은 v7 또는 v8이다. 호출별 기록에 PLAN·WRITE 단계와
+원본 응답·사용량을 보존한다. 최종 report.md는 계획, 본문 작성, 보완을 구분한다.
+계획이 지목한 기존 문단을 서버가 조립해 최종 v3 결과의 본문 전체 교체 제안으로 반환하므로,
+Content의 실제 저장·승인 계약을 바꾸지는 않는다.

@@ -3,9 +3,9 @@
 import json
 from dataclasses import asdict, replace
 from hashlib import sha256
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.refresh.errors import RefreshFailure
 from app.refresh.evidence import unique_evidence
@@ -26,7 +26,15 @@ from app.refresh.models import (
 from app.refresh.prompt_versions import PROMPT_VERSION as PROMPT_VERSION
 
 CANDIDATE_VERSION = "refresh-candidate-v5"
-MARKER_VERSIONS = {"refresh-candidate-v3", "refresh-candidate-v4", CANDIDATE_VERSION}
+CONFIDENCE_CANDIDATE_VERSION = "refresh-candidate-v6"
+GENERATION_VERSIONS = {
+    CANDIDATE_VERSION,
+    CONFIDENCE_CANDIDATE_VERSION,
+    "refresh-plan-v1",
+    "refresh-candidate-v7",
+    "refresh-candidate-v8",
+}
+MARKER_VERSIONS = {"refresh-candidate-v3", "refresh-candidate-v4", *GENERATION_VERSIONS}
 
 
 class StrictDTO(BaseModel):
@@ -188,6 +196,16 @@ class FactCandidateDTO(StrictDTO):
     new_document_proposals: list[FactNewDocumentDTO]
 
 
+class ConfidenceSourceFactDTO(MarkerSourceFactDTO):
+    """평가용 자기평가이며 실제 정답 확률로 보정된 값이 아니다."""
+
+    confidence: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+
+
+class ConfidenceCandidateDTO(FactCandidateDTO):
+    facts: list[ConfidenceSourceFactDTO]
+
+
 class ExcerptFactCandidateDTO(FactCandidateDTO):
     """과거 v4 후보의 정확한 발췌 읽기 계약."""
 
@@ -208,8 +226,20 @@ class LegacyCandidateDTO(StrictDTO):
     relation_proposals: list[LegacyRelationDTO]
 
 
-def candidate_schema() -> dict:
+def candidate_schema(schema_version=CANDIDATE_VERSION) -> dict:
     """Responses의 strict JSON schema 형식에 전달할 스키마를 만든다."""
+    if schema_version in {
+        "refresh-plan-v1",
+        "refresh-candidate-v7",
+        "refresh-candidate-v8",
+    }:
+        from app.adapters.refresh_workflow_schema import response_dto
+
+        return response_dto(schema_version).model_json_schema()
+    if schema_version == CONFIDENCE_CANDIDATE_VERSION:
+        return ConfidenceCandidateDTO.model_json_schema()
+    if schema_version != CANDIDATE_VERSION:
+        raise ValueError("Unsupported generation schema")
     return FactCandidateDTO.model_json_schema()
 
 
@@ -300,6 +330,20 @@ def parse_candidate(
 ) -> ModelCandidate:
     """JSON 후보를 불변 내부 값으로 변환하며 실패를 빈 제안으로 바꾸지 않는다."""
 
+    if schema_version in {
+        "refresh-plan-v1",
+        "refresh-candidate-v7",
+        "refresh-candidate-v8",
+    }:
+        from app.adapters.refresh_workflow_schema import parse_workflow
+
+        if model_input is None:
+            raise RefreshFailure(
+                Failure("MODEL_INVALID_RESPONSE", "Workflow context required"),
+                usage=usage,
+            )
+        return parse_workflow(text, usage, model_input)
+
     def fail(message, diagnostic=None):
         raise RefreshFailure(
             Failure("MODEL_INVALID_RESPONSE", message),
@@ -319,6 +363,8 @@ def parse_candidate(
             dto = ExcerptFactCandidateDTO.model_validate_json(text)
         elif schema_version == CANDIDATE_VERSION:
             dto = FactCandidateDTO.model_validate_json(text)
+        elif schema_version == CONFIDENCE_CANDIDATE_VERSION:
+            dto = ConfidenceCandidateDTO.model_validate_json(text)
         else:
             raise ValueError("Unsupported candidate schema")
     except ValidationError as error:
@@ -425,6 +471,8 @@ def parse_candidate(
             )
             value = asdict(fact)
             value.pop("fact_id")
+            value.pop("confidence")
+            value.pop("source_alignments")
             canonical_id = (
                 "F"
                 + sha256(

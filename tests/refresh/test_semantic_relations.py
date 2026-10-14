@@ -375,11 +375,11 @@ def test_anonymous_official_and_mother_cannot_be_assigned_to_loaded_characters(
 
 
 @pytest.mark.parametrize("field", ["actor", "recipient", "object"])
-def test_statement_must_preserve_every_annotated_role_surface(field):
+def test_summary_can_use_different_words_for_a_source_role(field):
     payload, model_input, snapshot = semantic_fixture()
     fact = payload["facts"][0]
     fact["statement"] = fact["statement"].replace(fact[field]["surface"], "그 사람")
-    assert_failed(checked(payload, model_input, snapshot), "INVALID_FACT")
+    assert checked(payload, model_input, snapshot).outcome == Outcome.PROPOSED
 
 
 @pytest.mark.parametrize("field", ["certainty", "extent", "time"])

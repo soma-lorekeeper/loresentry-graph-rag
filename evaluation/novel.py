@@ -98,7 +98,11 @@ def novel_case(
         job,
         ArtifactRef("fake-content-input", "novel/refresh-05r2-06r1/input.json"),
         tuple(d.document_id for d in source.documents),
-        model_settings=ModelSettings(model=model),
+        model_settings=ModelSettings(
+            model=model,
+            prompt_version="refresh-prompt-v11",
+            schema_version="refresh-candidate-v5",
+        ),
         changed_documents=tuple(
             ChangedDocumentRef(d.document_id, d.revision_no, d.state)
             for d in source.documents

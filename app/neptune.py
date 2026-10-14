@@ -18,7 +18,7 @@ class NeptuneStatusSource:
     """
 
     endpoint: str
-    timeout_seconds: float = 5.0
+    timeout_seconds: float = 10.0
 
     def fetch_status(self) -> object:
         """GET /status를 한 번 호출하여 JSON 해석 결과를 반환한다.
