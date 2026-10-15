@@ -6,7 +6,8 @@
 
 현재 GraphRAG는 서비스 식별·프로세스 상태·Neptune 연결 확인 API를 제공한다.
 그래프 투영 저장·refresh 원홉 조회·Content HTTP 조회는 내부 조립 경로로 구현했다.
-일반 RAG/GraphRAG 검색 API와 실제 Kafka 소비 진입점은 아직 없다.
+일반 RAG/GraphRAG 검색 API와 업무 이벤트의 Kafka 소비 진입점은 아직 없다.
+[Kafka polling worker](implementation/KAFKA_POLLING.md)는 실제 수신·commit과 fake 업무 처리를 제공한다.
 진단 유스케이스에는 순수 판단·애플리케이션 조율·HTTP 어댑터 분리를 적용했다.
 내부 갱신안 생성은 기존 설정 본문 수정, 원고에서 발견한 새 설정 문서 생성, 관계 ADD를 제안한다.
 원고 본문은 읽기 전용이며 최초 입력 보존을 평가한다. 생성 후보와 관계는 임시 ID로 연결하고

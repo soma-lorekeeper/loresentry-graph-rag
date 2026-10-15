@@ -19,7 +19,11 @@
 | 프로세스 상태 | `GET /health` | `200`, `{"status":"ok"}` | 없음 |
 | Neptune 연결 확인 | `GET /health/db` | `200`, 아래 진단 결과 | Neptune `GET /status` |
 
-`/health`는 Neptune 상태를 확인하지 않는다. DB가 응답하지 않아도 해당 라우트는 `200`을 반환한다.
+`/health`는 Neptune 상태를 확인하지 않는다. Kafka polling 비활성 시에는 DB가 응답하지 않아도
+`200`을 반환한다. polling 활성 시 worker가 실패하거나 종료되면
+`503`, `{"status":"error","error":"Kafka polling worker unavailable"}`을 반환한다.
+정상 응답은 worker 스레드의 생존 확인이며 Kafka 연결·할당·lag의 확인은 아니다.
+자동 시작과 설정은 [polling 구현](implementation/KAFKA_POLLING.md)을 따른다.
 FastAPI 기본 설정을 사용하므로 `/docs`, `/redoc`, `/openapi.json`도 비활성화하지 않은 상태다.
 
 ## Neptune 진단 성공

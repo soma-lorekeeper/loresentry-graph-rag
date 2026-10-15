@@ -93,6 +93,13 @@ the quality decision pending human review. See [A/B usage](docs/migration/openai
 
 ## Graph projection implementation
 
+The [Kafka polling worker](docs/implementation/KAFKA_POLLING.md) uses
+`confluent-kafka==2.16.0` for real polling and manual commits, with fake message
+handling and publishing. FastAPI starts and stops it automatically when
+`KAFKA_POLLING_ENABLED=true`; GitOps supplies the broker address and sandbox topic.
+The standalone `scripts.poll_kafka` CLI is also available. Business event mapping
+and live completion publishing remain pending.
+
 The [graph projection adapter](docs/implementation/GRAPH_PROJECTION.md) writes
 Content document nodes, undirected relation pairs, and completed-event Inbox
 records in one Neptune HTTPS Gremlin request. A fake consumer and fixture CLI

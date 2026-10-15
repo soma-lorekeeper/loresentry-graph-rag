@@ -8,6 +8,8 @@
 
 GraphRAG는 `RefreshCompletionPublisher` 인터페이스와 `RefreshService`의 저장·발행 조율,
 완료 payload 변환과 Neptune 완료 Inbox를 구현했다. 실제 Kafka publisher는 아직 연결하지 않았다.
+[polling sandbox](implementation/KAFKA_POLLING.md)의 `FakeProducer`는 메모리에 처리 위치만
+기록한다. `RefreshCompletionPublisher`의 실제 Kafka 구현은 아니다.
 진행 상태·lease를 저장하는 별도 작업 저장소는 두지 않는다.
 Content도 현재 `main`에는 Kafka publisher·consumer가 없다. `build.gradle`에 Kafka starter가
 없고, `application.yaml`에 Kafka 설정이 없으며, README는 이벤트 발행을 미구현으로 분류한다.

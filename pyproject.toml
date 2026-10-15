@@ -4,6 +4,7 @@ testpaths = ["tests"]
 markers = [
     "integration: real HTTP IO against a loopback server (no AWS)",
     "gremlin: requires GREMLIN_TEST_ENDPOINT pointing to a disposable test graph",
+    "kafka: requires KAFKA_TEST_BOOTSTRAP_SERVERS pointing to a disposable broker",
 ]
 
 [tool.ruff]

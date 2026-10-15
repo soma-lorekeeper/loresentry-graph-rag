@@ -1,6 +1,8 @@
 """환경 설정으로 의존성을 조립하고 상태 진단 HTTP 경로를 제공한다."""
 
+import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -11,6 +13,7 @@ from app.application import (
     GraphStatusUnavailable,
 )
 from app.graph import InvalidGraphStatus
+from app.kafka.runtime import FakePollingRuntime, FakePollingSettings
 from app.neptune import NeptuneStatusSource
 
 SERVICE = "graph-rag-api"
@@ -32,14 +35,37 @@ def create_app(source: GraphStatusSource | None = None) -> FastAPI:
         port = os.getenv("NEPTUNE_PORT", "8182")
         source = NeptuneStatusSource(endpoint=f"https://{host}:{port}")
     service = GraphHealthService(source)
-    app = FastAPI(title=SERVICE)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        settings = FakePollingSettings.from_env(os.environ)
+        runtime = FakePollingRuntime(settings) if settings is not None else None
+        app.state.kafka_polling = runtime
+        try:
+            if runtime is not None:
+                await asyncio.to_thread(runtime.start)
+            yield
+        finally:
+            if runtime is not None:
+                await asyncio.to_thread(runtime.close)
+
+    app = FastAPI(title=SERVICE, lifespan=lifespan)
 
     @app.get("/")
     def root() -> dict[str, str]:
         return {"service": SERVICE}
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    def health():
+        runtime = getattr(app.state, "kafka_polling", None)
+        if runtime is not None and not runtime.healthy:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "error": "Kafka polling worker unavailable",
+                },
+            )
         return {"status": "ok"}
 
     @app.get("/health/db")

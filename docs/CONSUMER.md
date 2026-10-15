@@ -24,7 +24,9 @@ DLQ는 평상시 업무 구독과 구분하고, 재처리 절차를 정한 별�
 
 ## 현재 구현 상태
 
-GraphRAG에는 실제 Kafka consumer가 없다. 공통 그래프 처리기·Neptune 그래프/Inbox 저장
+GraphRAG에는 `confluent-kafka` 기반 [polling worker](implementation/KAFKA_POLLING.md)가 있다.
+실제 Kafka 수신·수동 commit에 fake consumer handler·producer를 연결한 sandbox 실행 경로다.
+Content 업무 이벤트 변환과 그래프·refresh 서비스 연결은 아직 없다. 공통 그래프 처리기·Neptune 그래프/Inbox 저장
 어댑터와 fake consumer는 [그래프 투영 구현](implementation/GRAPH_PROJECTION.md)에 있다.
 fake의 수신·offset 상태는 메모리에만 있으며 실제 Kafka 연동은 아니다.
 갱신안 생성 서비스·S3 저장·완료 payload 변환과 Neptune 완료 Inbox는 구현됐지만 Kafka
@@ -80,8 +82,9 @@ consumer를 연결할 때 필요한 순서는 다음과 같다.
 `files[].file_id → changed_documents[].document_id`, `input → input_ref`의 필드 변환도 필요하다.
 입력 한도와 지원 스키마는 S3 계약을 기준으로 검증한다.
 
-모델 처리는 길어질 수 있다. Python Kafka 클라이언트·consumer group ID·poll 유지 방식·
-파티션 pause와 worker 배치·rebalance 시 작업 소유권·commit 방법은 아직 결정되지 않았다.
+모델 처리는 길어질 수 있다. 현재 sandbox runtime은 `confluent-kafka`, 작업 스레드 하나,
+처리 중 전체 할당 pause와 지속 poll, 재할당 세대 확인, 완료 레코드만 수동 commit을 사용한다.
+운영 consumer group과 파티션별 병렬 처리·재시도 정책은 업무 연결 때 확정해야 한다.
 일부 작업을 뒤에서 먼저 완료해도 미완료 offset을 넘어 commit해서는 안 된다.
 결과를 저장하기 전 단순 수신 확인만으로 offset을 commit하는 구성은 작업 유실을 만들 수 있다.
 영속 작업 큐에 안전하게 넘긴 뒤 commit하는 대안은 별도의 복구·멱등성 계약이 필요하다.
