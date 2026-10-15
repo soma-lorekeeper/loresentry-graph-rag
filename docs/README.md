@@ -5,7 +5,8 @@
 > **확인할 때:** 구현된 기능과 아직 없는 기능을 구분하거나 읽을 문서를 고를 때.
 
 현재 GraphRAG는 서비스 식별·프로세스 상태·Neptune 연결 확인 API를 제공한다.
-그래프 저장, RAG/GraphRAG 검색, Content 변경 이벤트 소비는 아직 구현하지 않았다.
+그래프 투영 저장·refresh 원홉 조회·Content HTTP 조회는 내부 조립 경로로 구현했다.
+일반 RAG/GraphRAG 검색 API와 실제 Kafka 소비 진입점은 아직 없다.
 진단 유스케이스에는 순수 판단·애플리케이션 조율·HTTP 어댑터 분리를 적용했다.
 내부 갱신안 생성은 기존 설정 본문 수정, 원고에서 발견한 새 설정 문서 생성, 관계 ADD를 제안한다.
 원고 본문은 읽기 전용이며 최초 입력 보존을 평가한다. 생성 후보와 관계는 임시 ID로 연결하고
@@ -28,8 +29,14 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 | 판단과 IO를 어떻게 분리하는가? | [판단·IO 분리 원칙](implementation/DECISION_AND_IO.md) | 순수 함수·작업 데이터·조율·주입·트랜잭션·재시도의 구현 기준 |
 | 다른 서버가 GraphRAG를 어떻게 호출하는가? | [제공 API](API.md) | 현재 HTTP 경로·응답·오류와 진단 결과의 의미 |
 | GraphRAG가 Neptune에 무엇을 요청하는가? | [호출 API](API_CALLS.md) | 주소·환경변수·타임아웃·응답 사용·실패 처리 |
+| Kafka 없이 Content 관계를 Neptune에 어떻게 저장하는가? | [그래프 투영 구현](implementation/GRAPH_PROJECTION.md) | 내부 변경 모델, fake consumer, 원자적 Inbox·그래프 저장, 설정·fixture·검증 |
+| refresh가 Neptune 원홉 관계를 어떻게 Content 조회에 사용하는가? | [refresh 원홉 조회](implementation/REFRESH_NEPTUNE.md) | 실제 관계 어댑터·서비스 조립, 프로젝트·휴지통 범위, 준비 상태·본문 조회 |
+| 선택한 문서 본문을 Content API에서 어떻게 읽는가? | [Content HTTP 조회](implementation/CONTENT_HTTP.md) | 기존 조회 API·사용자 헤더·범위 확인·본문 변환·설정·실패 처리 |
+| refresh를 작업 DB 없이 어떻게 재실행하는가? | [완료 Inbox](implementation/REFRESH_INBOX.md) | Neptune 완료 기록·S3 재사용·발행 확인·중복 및 실패 경계 |
 | 현재 코드의 어디부터 읽어야 하는가? | [코드 안내](code-guide.md) | 요청 흐름·시작 구성·테스트와 배포 파일 위치 |
 | S3에 어떤 JSON을 주고받으며 소비자는 무엇을 확인하는가? | [S3 입출력 계약](S3_IO_CONTRACT.md) | 객체 위치·입력 문서·요청·스냅샷·v3 결과·해시·불변 저장·완료 전달 |
+| Content와 GraphRAG는 어떤 이벤트를 어떻게 발행하는가? | [Kafka 발행](PUBLISHER.md) | Content Outbox 준비 상태, 완료 저장·발행 순서, 헤더·중복·미확정 사항 |
+| GraphRAG가 어떤 토픽을 소비하고 Content는 완료를 어떻게 받는가? | [Kafka 소비](CONSUMER.md) | 소비 토픽, Content Inbox 준비 상태, 요청 변환·offset·DLQ·복구 경계 |
 | S3 어댑터를 서비스에 어떻게 연결하는가? | [S3 저장소](implementation/S3_ARTIFACTS.md) | 설정·서비스 주입·타임아웃·권한·운영 검증 한계 |
 | 변경 후 무엇을 검증해야 하는가? | [검증 계획](implementation/TEST_PLAN.md) | 기존 테스트 범위·추가 테스트·운영 확인 항목 |
 | 기존 AI 기능을 어떤 순서로 이전하는가? | [마이그레이션 안내](migration/README.md) | 전체 이전 범위, 갱신안 생성 우선 계획, 후속 마이그레이션 |

@@ -10,7 +10,7 @@ from evaluation.fakes import (
     FakeDocuments as FakeDocuments,
 )
 from evaluation.fakes import (
-    FakeJobs as FakeJobs,
+    FakeInbox as FakeInbox,
 )
 from evaluation.fakes import (
     FakeJsonArtifacts as FakeJsonArtifacts,

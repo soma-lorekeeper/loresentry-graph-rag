@@ -19,7 +19,7 @@ from tests.fakes.real_rules import real_example
 from tests.fakes.refresh import (
     Calls,
     FakeDocuments,
-    FakeJobs,
+    FakeInbox,
     FakeJsonArtifacts,
     FakeModel,
     FakePublisher,
@@ -278,7 +278,7 @@ def service_scenario(*, bad_update=False, call_budget=3):
         relations=FakeRelations(related, calls),
         documents=FakeDocuments(targets, calls),
         model=model,
-        jobs=FakeJobs(calls=calls),
+        inbox=FakeInbox(calls=calls),
         publisher=FakePublisher(calls),
     )
     return request, service, artifacts, calls
@@ -286,20 +286,20 @@ def service_scenario(*, bad_update=False, call_budget=3):
 
 def test_service_aggregate_restores_update_capability_after_readonly_discovery():
     request, service, artifacts, calls = service_scenario()
-    done = service.run(request, "first")
+    done = service.run(request)
     result = artifacts.read_result(request)
     assert done.outcome == Outcome.PROPOSED
     assert len(result.document_proposals) == 2
     assert len(result.new_document_proposals) == 1
     assert len(result.relation_proposals) == 2
     assert result.usage.calls == 3
-    assert service.run(request, "repeat") == done
+    assert service.run(request) == done
     assert calls.names().count("model.generate") == 3
 
 
 def test_bad_update_after_discovery_preserves_atomic_failure():
     request, service, artifacts, calls = service_scenario(bad_update=True)
-    done = service.run(request, "first")
+    done = service.run(request)
     result = artifacts.read_result(request)
     assert done.outcome == Outcome.FAILED
     assert done.failure.code == "REVISION_MISMATCH"
@@ -314,7 +314,7 @@ def test_bad_update_after_discovery_preserves_atomic_failure():
 
 def test_service_rejects_insufficient_budget_before_discovery():
     request, service, _, calls = service_scenario(call_budget=2)
-    done = service.run(request, "first")
+    done = service.run(request)
     assert done.failure.code == "CALL_BUDGET_EXCEEDED"
     assert "model.generate" not in calls.names()
 
@@ -325,7 +325,7 @@ def test_invalid_discovery_flag_fails_before_fetch_snapshot_or_model(value):
     request = replace(
         request, settings=replace(request.settings, separate_discovery=value)
     )
-    done = service.run(request, "first")
+    done = service.run(request)
     assert done.outcome == Outcome.FAILED
     assert done.failure.code == "INVALID_POLICY"
     assert "documents.fetch_documents" not in calls.names()

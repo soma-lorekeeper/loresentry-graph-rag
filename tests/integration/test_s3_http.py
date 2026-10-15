@@ -156,7 +156,7 @@ def test_s3_service_roundtrip_and_restart_preserve_input_and_skip_model(s3_serve
     state, store = s3_server
     case, scenario = setup_case(state, store)
     original = store.read_input(case.request)
-    completion = scenario.service.run(case.request, "s3-1")
+    completion = scenario.service.run(case.request)
     assert completion.outcome == Outcome.PROPOSED
     assert completion.result_ref.bucket == "artifact-bucket"
     result = store.read_result(case.request)
@@ -176,7 +176,7 @@ def test_s3_service_roundtrip_and_restart_preserve_input_and_skip_model(s3_serve
     state["objects"].pop("artifact-bucket/" + store._ref(case.request, "context").key)
     restarted = assemble(case, None, CallBudget(1))
     restarted.service.artifacts = S3RefreshArtifacts(store.client, store.settings)
-    done = restarted.service.run(case.request, "s3-2")
+    done = restarted.service.run(case.request)
     assert done == completion
     assert not any(name == "model.generate" for name in restarted.calls.names())
     assert restarted.service.model.budget.used == 0
@@ -185,7 +185,7 @@ def test_s3_service_roundtrip_and_restart_preserve_input_and_skip_model(s3_serve
 def test_snapshot_is_immutable_and_original_input_cannot_change(s3_server):
     state, store = s3_server
     case, scenario = setup_case(state, store)
-    scenario.service.run(case.request, "s3-1")
+    scenario.service.run(case.request)
     snapshot = store.read_context(case.request)
     assert store.save_context(snapshot) == store._ref(case.request, "context")
     altered = replace(
@@ -279,18 +279,18 @@ def test_saved_result_after_lost_ack_is_recovered_without_model(s3_server):
     case, scenario = setup_case(state, store)
     state["lost_ack"].add("artifact-bucket/" + store._ref(case.request, "result").key)
     with pytest.raises(RefreshFailure) as caught:
-        scenario.service.run(case.request, "s3-1")
+        scenario.service.run(case.request)
     assert caught.value.failure.retryable
     budget = scenario.service.model.budget
     assert budget.used == 1
-    assert scenario.service.run(case.request, "s3-2").outcome == Outcome.PROPOSED
+    assert scenario.service.run(case.request).outcome == Outcome.PROPOSED
     assert budget.used == 1
 
 
 def test_same_id_with_other_settings_and_corrupt_object_are_rejected(s3_server):
     state, store = s3_server
     case, scenario = setup_case(state, store)
-    scenario.service.run(case.request, "s3-1")
+    scenario.service.run(case.request)
     with pytest.raises(RequestConflict):
         store.read_result(replace(case.request, discover_related=False))
     path = "artifact-bucket/" + store._ref(case.request, "result").key

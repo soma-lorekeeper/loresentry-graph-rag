@@ -9,7 +9,9 @@
 현재 서버는 일반 함수·불변 dataclass·Protocol·생성자 주입으로 판단과 IO를 분리한다.
 운영 진단 `GET /health/db`에는 실제 HTTP 어댑터가 연결돼 있다.
 내부 갱신안 생성에는 순수 rules·서비스와 OpenAI·[S3 어댑터](implementation/S3_ARTIFACTS.md)가 있다.
-S3는 서비스 주입으로 선택하며 기본 평가는 fake 저장소를 사용한다. 나머지 네 IO의 운영 어댑터는 미구현이다.
+S3는 서비스 주입으로 선택하며 기본 평가는 fake 저장소를 사용한다. Neptune 원홉·Content HTTP
+조회와 완료 Inbox도 실제 어댑터를 주입할 수 있다. 별도 작업 DB·lease는 두지 않으며
+실제 Kafka 완료 발행 어댑터는 미구현이다.
 
 ## 판단·조율·실행의 경계
 
@@ -73,7 +75,15 @@ Free Monad·범용 Effect Handler·명령 레지스트리는 사용하지 않는
 세 제안 목록 모두를 비운 FAILED다. 원고는 수정 대상과 생성 분류에서 제외한다.
 규칙·한도·버전은 [제안 계약](migration/proposal-contract.md)을 따른다.
 
-결과 저장 후 실패는 저장 결과로 재개하고, 저장 전 실패는 모델 재호출이 가능하다.
+[Neptune 조립 진입점](implementation/REFRESH_NEPTUNE.md)은 관계 조회 포트에 실제
+`File`·`REFERENCES` 원홉 어댑터를 주입한다. 프로젝트와 휴지통 조건을 적용한 ID만 기존
+선택 규칙으로 넘기며, 추가 본문은 [Content HTTP 어댑터](implementation/CONTENT_HTTP.md)로
+읽는다. 신뢰한 `user_id`로 활성 프로젝트를 확인하고 응답 ID를 대조한다. 입력에서 비활성인
+seed는 조회하지 않고, 없는 활성 seed나 확인 불가능한 그래프 버전 요구는 모델 호출 전에
+중단한다. refresh HTTP/Kafka 수신 진입점은 별도 구현 범위다.
+
+[완료 Inbox](implementation/REFRESH_INBOX.md)가 있으면 S3·모델·발행 없이 반환한다.
+미완료 요청의 결과 저장 후 실패는 저장 결과로 재개하고, 저장 전 실패는 모델 재호출이 가능하다.
 분산 트랜잭션이나 정확히 한 번 호출을 보장하지 않는다. 현재는 실제 rules와 fake IO,
 JSON 결과 변환과 OpenAI·boto3 SDK 로컬 HTTP·대화 작성 응답 재생을 검증했다.
 실제 모델 생성 품질·S3·Content·Neptune·Kafka 운영 연동은 남아 있다.
@@ -99,10 +109,10 @@ Kubernetes probe 설정은 이 저장소의 코드만으로 확인할 수 없다
 
 | 영역 | 현재 없는 구현 |
 |---|---|
-| 그래프 저장 | 노드·관계 모델, 그래프 쿼리·쓰기, 스키마·데이터 초기화 |
+| 그래프 저장 | 운영 Neptune 적용·검증과 재구축 절차. 내부 투영·Inbox 저장 어댑터는 구현 |
 | 검색 | RAG/GraphRAG 검색 API, 임베딩·벡터 검색, 컨텍스트 구성 |
-| 이벤트 동기화 | Content 변경 이벤트 소비, 재처리·순서·중복 처리 |
-| 데이터 접근 경계 | 실제 조회에서의 프로젝트 격리·사용자 인가. 내부 갱신안 rules의 프로젝트·상태 검사는 구현 |
-| 서비스 연동 | AI Chat에 검색 결과를 제공하는 업무 API와 Content 호출 |
+| 이벤트 동기화 | 실제 Kafka 소비 진입점·순서 처리. fake consumer와 원자적 Inbox 중복 처리는 구현 |
+| 데이터 접근 경계 | refresh 진입점의 인증된 사용자 전달과 운영 검증. Neptune 프로젝트 필터와 Content 소유권·상태 조회는 구현 |
+| 서비스 연동 | AI Chat에 검색 결과를 제공하는 업무 API와 refresh 수신 진입점 |
 
 Neptune `/status` 조회가 구현됐다는 사실은 위 업무 기능이나 그래프 읽기·쓰기 권한이 검증됐다는 뜻이 아니다.

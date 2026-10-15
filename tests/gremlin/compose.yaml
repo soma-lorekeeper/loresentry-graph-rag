@@ -1,0 +1,10 @@
+services:
+  gremlin:
+    image: tinkerpop/gremlin-server:3.7.3
+    entrypoint: ["/opt/gremlin-server/bin/gremlin-server.sh"]
+    command: [graph-test/server.yaml]
+    ports:
+      - "127.0.0.1:18182:8182"
+    volumes:
+      - .:/opt/gremlin-server/graph-test:ro
+    mem_limit: 768m

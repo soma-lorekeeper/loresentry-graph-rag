@@ -15,7 +15,7 @@ Kafka 연결은 후속 작업이다.
 | `FakeArtifacts`, `FakeJsonArtifacts` | 입력·불변 실행 스냅샷·결과 저장, JSON 왕복, 저장 실패 주입 | S3 내구성·권한·원자성 |
 | `FakeRelations`, `FakeDocuments` | 관계 반영 상태와 추가 본문·누락·삭제·다른 프로젝트 자료 | 실제 Neptune 조회·Content 인증 |
 | `FakeModel` | 고정 후보 또는 호출별 후보·예외 순서 | 실제 모델의 정확도·비용 |
-| `FakeJobs` | 요청 충돌·실행 소유권·상태 전이 | 분산 잠금·lease·프로세스 장애 복구 |
+| `FakeInbox` | 요청 완료만 기록, 입력 충돌·완료 저장 응답 유실 재현 | 영속성·진행 상태·실행 잠금. 실제 구현은 [Neptune 완료 Inbox](../implementation/REFRESH_INBOX.md) |
 | `FakePublisher` | 발행 전 실패, 전달 후 응답 유실 | Kafka 전달·offset·DLQ |
 | `ScriptedRules` | 순서·실패 전파에 집중하는 기존 골격 테스트 | 업무 규칙의 정확성 |
 

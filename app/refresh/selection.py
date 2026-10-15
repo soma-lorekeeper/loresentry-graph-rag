@@ -22,9 +22,9 @@ def validate_document(request, document):
     if (
         not document.document_id
         or type(document.revision_no) is not int
-        or document.revision_no < 1
+        or document.revision_no < 0
     ):
-        reject("INVALID_DOCUMENT", "Document ID and positive revision required")
+        reject("INVALID_DOCUMENT", "Document ID and nonnegative revision required")
     if document.folder_code not in RELATION_KEYS or document.state not in set(
         DocumentState
     ):

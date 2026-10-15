@@ -253,7 +253,7 @@ def test_related_description_tracks_corrected_fact_without_masking_bad_descripti
     assert result.failure.code == "INVALID_RELATION_FACT"
 
 
-def test_copy_correction_does_not_make_an_invalid_character_reference_valid():
+def test_loaded_document_reference_does_not_require_a_surface_name_match():
     scenario = repair_scenario()
     candidate = candidate_for(scenario)
     fact = candidate.facts[0]
@@ -267,8 +267,9 @@ def test_copy_correction_does_not_make_an_invalid_character_reference_valid():
             relation_scope=None,
         ),
     )
-    assert result.outcome == Outcome.FAILED
-    assert result.diagnostics[0].rule == "fact.entity_identity_matches"
+    assert result.outcome == Outcome.PROPOSED
+    assert result.diagnostics == ()
+    assert result.facts[0].actor.document_id == "yunjun"
 
 
 def test_repeated_noise_does_not_block_a_unique_match_but_duplicate_spans_do():

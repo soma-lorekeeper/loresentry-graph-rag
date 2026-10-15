@@ -12,7 +12,7 @@ from tests.fakes.real_rules import real_example
 from tests.fakes.refresh import (
     Calls,
     FakeDocuments,
-    FakeJobs,
+    FakeInbox,
     FakeJsonArtifacts,
     FakeModel,
     FakePublisher,
@@ -41,7 +41,7 @@ def real_scenario():
         relations=FakeRelations(related, calls),
         documents=FakeDocuments(targets, calls),
         model=FakeModel(ModelCandidate(()), calls, responses),
-        jobs=FakeJobs(calls=calls),
+        inbox=FakeInbox(calls=calls),
         publisher=FakePublisher(calls),
     )
     s.service = RefreshService(
@@ -52,7 +52,7 @@ def real_scenario():
                 "relations",
                 "documents",
                 "model",
-                "jobs",
+                "inbox",
                 "publisher",
             )
         }
@@ -62,7 +62,7 @@ def real_scenario():
 
 def test_multi_target_uses_real_rules_and_saves_before_publish():
     s = real_scenario()
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     result = s.artifacts.read_result(s.request)
     assert done.outcome == Outcome.PROPOSED
     assert result.document_proposals == s.candidate.document_proposals
@@ -72,7 +72,7 @@ def test_multi_target_uses_real_rules_and_saves_before_publish():
     names = s.calls.names()
     assert names.index("artifacts.save_context") < names.index("model.generate")
     assert names.index("artifacts.save_result") < names.index("publisher.publish")
-    assert s.service.run(s.request, "duplicate") == done
+    assert s.service.run(s.request) == done
     assert s.calls.names().count("model.generate") == 2
     assert len(s.publisher.delivered) == 1
 
@@ -82,7 +82,7 @@ def test_call_budget_fails_before_any_model_call():
     request = replace(
         s.request, settings=replace(s.request.settings, max_model_calls=1)
     )
-    done = s.service.run(request, "run1")
+    done = s.service.run(request)
     assert done.failure.code == "CALL_BUDGET_EXCEEDED"
     assert "model.generate" not in s.calls.names()
 
@@ -92,7 +92,7 @@ def test_second_call_terminal_failure_never_returns_partial_proposals():
     s.model.responses[1] = RefreshFailure(
         Failure("MODEL_BAD_RESPONSE", "invalid response")
     )
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     result = s.artifacts.read_result(s.request)
     assert done.outcome == Outcome.FAILED
     assert result.document_proposals == result.relation_proposals == ()
@@ -104,13 +104,13 @@ def test_retry_reuses_snapshot_and_repeats_calls_before_result_saved():
     original_responses = tuple(s.model.responses)
     s.model.responses[1] = RefreshFailure(Failure("TIMEOUT", "timeout", True))
     with pytest.raises(RefreshFailure):
-        s.service.run(s.request, "run1")
+        s.service.run(s.request)
     frozen = s.artifacts.read_context(s.request)
     assert s.artifacts.read_result(s.request) is None
     s.artifacts.inputs.clear()
     s.documents.documents.clear()
     s.model.responses.extend(original_responses)
-    assert s.service.run(s.request, "run2").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     assert s.artifacts.read_context(s.request) == frozen
     assert s.calls.names().count("model.generate") == 4
     assert s.calls.names().count("documents.fetch_documents") == 1
@@ -123,9 +123,9 @@ def test_saved_result_retry_does_not_recall_model(operation):
         RefreshFailure(Failure("TIMEOUT", "timeout", True))
     )
     with pytest.raises(RefreshFailure):
-        s.service.run(s.request, "run1")
+        s.service.run(s.request)
     result = s.artifacts.read_result(s.request)
-    s.service.run(s.request, "run2")
+    s.service.run(s.request)
     assert s.artifacts.read_result(s.request) == result
     assert s.calls.names().count("model.generate") == 2
 
@@ -138,7 +138,7 @@ def test_aggregate_conflicting_relation_descriptions_fails():
         relation_proposals=first.relation_proposals
         + (replace(first.relation_proposals[0], description="충돌한 설명"),),
     )
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     assert done.failure.code == "CONFLICTING_PROPOSALS"
     assert s.artifacts.read_result(s.request).document_proposals == ()
 
@@ -159,7 +159,7 @@ def test_full_service_input_boundaries(count, chars, expected):
     s.artifacts.inputs[request.input_ref] = source
     s.model.responses.clear()
     before = repr(source)
-    done = s.service.run(request, "run1")
+    done = s.service.run(request)
     if expected is None:
         assert done.outcome == Outcome.NO_CHANGE
         assert s.calls.names().count("model.generate") == 2
@@ -204,7 +204,7 @@ def test_full_service_rejects_unavailable_or_wrong_scope_data(kind, code):
                 source.documents[1],
             ),
         )
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     assert done.failure.code == code
     assert "model.generate" not in s.calls.names()
 
@@ -231,7 +231,7 @@ def test_relation_only_without_setting_targets():
             ),
         ),
     )
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     assert done.outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
     assert result.document_proposals == ()
@@ -257,7 +257,7 @@ def test_all_inactive_changes_do_not_call_model():
             for d in s.source.documents
         ),
     )
-    done = s.service.run(request, "run1")
+    done = s.service.run(request)
     assert done.outcome == Outcome.NO_CHANGE
     assert "model.generate" not in s.calls.names()
 
@@ -265,7 +265,7 @@ def test_all_inactive_changes_do_not_call_model():
 def test_wrong_target_in_first_call_fails_whole_request_and_stops():
     s = real_scenario()
     s.model.responses[0] = s.model.responses[1]
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     assert done.failure.code == "INVALID_TARGET"
     assert s.calls.names().count("model.generate") == 1
     result = s.artifacts.read_result(s.request)
@@ -278,7 +278,7 @@ def test_saved_result_storage_failure_has_no_premature_completion():
         RefreshFailure(Failure("STORAGE_TIMEOUT", "timeout", True))
     )
     with pytest.raises(RefreshFailure):
-        s.service.run(s.request, "run1")
+        s.service.run(s.request)
     assert s.publisher.delivered == []
     assert s.artifacts.json_results == {}
     assert s.artifacts.read_context(s.request) is not None
@@ -286,10 +286,15 @@ def test_saved_result_storage_failure_has_no_premature_completion():
 
 def test_corrupted_stored_json_does_not_regenerate():
     s = real_scenario()
-    s.service.run(s.request, "run1")
+    s.calls.failures["publisher.ack"].append(
+        RefreshFailure(Failure("PUBLISH_TIMEOUT", "lost ack", True))
+    )
+    with pytest.raises(RefreshFailure):
+        s.service.run(s.request)
+    assert s.inbox.find(s.request) is None
     s.artifacts.json_results[("project", "request")] = "{broken"
     with pytest.raises(RefreshFailure) as caught:
-        s.service.run(s.request, "run2")
+        s.service.run(s.request)
     assert caught.value.failure.code == "RESULT_CORRUPTED"
     assert s.calls.names().count("model.generate") == 2
     assert len(s.publisher.delivered) == 1

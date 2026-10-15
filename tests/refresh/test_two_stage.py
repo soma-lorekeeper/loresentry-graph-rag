@@ -27,7 +27,7 @@ from app.refresh.workflow import (
 from tests.fakes.refresh import (
     Calls,
     FakeDocuments,
-    FakeJobs,
+    FakeInbox,
     FakeJsonArtifacts,
     FakePublisher,
     FakeRelations,
@@ -149,7 +149,7 @@ def fixture(*, maximum=3, confidence=False):
         relations=FakeRelations(original.related, calls),
         documents=FakeDocuments((doy, item), calls),
         model=model,
-        jobs=FakeJobs(calls=calls),
+        inbox=FakeInbox(calls=calls),
         publisher=FakePublisher(calls),
         rules=rules,
     )
@@ -179,7 +179,7 @@ def get_plan(s):
 
 def test_two_calls_update_both_documents_and_preserve_unedited_bytes():
     s = fixture()
-    assert s.service.run(s.request, "first").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
     assert result.usage == Usage(2, 20, 40)
     assert [attempt.stage for attempt in result.attempts] == ["PLAN", "WRITE"]
@@ -193,7 +193,7 @@ def test_two_calls_update_both_documents_and_preserve_unedited_bytes():
         json.loads(json.dumps(result_to_payload(s.request, result, s.snapshot)))
     )
     assert restored == result
-    s.service.run(s.request, "again")
+    s.service.run(s.request)
     assert len(s.model.inputs) == 2
 
 
@@ -270,7 +270,7 @@ def test_one_repair_can_complete_missing_edit_within_three_calls():
     s = fixture()
     incomplete = {**s.written, "paragraph_edits": s.written["paragraph_edits"][:1]}
     s.model.responses = [s.plan, incomplete, s.written]
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
     assert result.usage.calls == 3
     assert [a.outcome for a in result.attempts] == [
@@ -285,7 +285,7 @@ def test_plan_repair_reserves_write_call_and_does_not_allow_fourth():
     s = fixture()
     invalid = {**s.plan, "reviewed_document_ids": []}
     s.model.responses = [invalid, s.plan, s.written]
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     assert len(s.model.inputs) == 3
     assert [a.call_index for a in s.artifacts.read_result(s.request).attempts] == [
         1,
@@ -299,13 +299,13 @@ def test_budget_rejected_before_paid_calls():
     request = replace(
         s.request, settings=replace(s.request.settings, max_model_calls=1)
     )
-    assert s.service.run(request, "one").outcome == Outcome.FAILED
+    assert s.service.run(request).outcome == Outcome.FAILED
     assert not s.model.inputs
 
 
 def test_confidence_uses_v8_and_is_stored():
     s = fixture(confidence=True)
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     assert s.artifacts.read_result(s.request).facts[0].confidence == 0.93
     assert (
         "confidence"
@@ -323,7 +323,7 @@ def test_delete_and_append_preserve_all_other_text():
     s.written["paragraph_edits"][1]["text"] = (
         "새 속성"  # 서버는 생성 텍스트를 임의로 정규화하지 않는다.
     )
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     proposals = {
         p.target_document_id: p.value
         for p in s.artifacts.read_result(s.request).document_proposals
@@ -378,7 +378,7 @@ def test_two_stages_reach_sdk_with_correct_response_schemas():
             context_window=152768,
         ),
     )
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     calls = client.responses.create.call_args_list
     assert len(calls) == 2
     assert calls[0].kwargs["text"]["format"]["schema"]["required"] == [
@@ -406,7 +406,7 @@ def test_no_fourth_call_after_plan_repair_and_invalid_write():
         s.plan,
         {**s.written, "paragraph_edits": []},
     ]
-    assert s.service.run(s.request, "one").outcome == Outcome.FAILED
+    assert s.service.run(s.request).outcome == Outcome.FAILED
     result = s.artifacts.read_result(s.request)
     assert len(s.model.inputs) == 3
     assert result.usage.calls == 3
@@ -523,7 +523,7 @@ def test_full_copies_of_preserved_paragraphs_are_removed_and_audited():
     unchanged = "파견 기한은 한 달이다.  😀"
     original_text = unchanged + "\n\n" + s.written["paragraph_edits"][0]["text"]
     s.written["paragraph_edits"][0]["text"] = original_text
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
     body = next(
         p.value for p in result.document_proposals if p.target_document_id == "doyun"
@@ -543,7 +543,7 @@ def test_append_omits_anchor_copy_but_keeps_its_new_content():
     s.plan["edits"][1]["operation"] = "APPEND"
     anchor = "검지 의지의 덮개는 황동이며 교체할 수 있다."
     s.written["paragraph_edits"][1]["text"] = anchor + "\n\n새 점검 내용이다."
-    assert s.service.run(s.request, "one").outcome == Outcome.PROPOSED
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
     body = next(
         p.value for p in result.document_proposals if p.target_document_id == "item"

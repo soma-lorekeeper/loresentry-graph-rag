@@ -1,16 +1,20 @@
 # GraphRAG가 호출하는 API
 
-> **책임:** Neptune 진단과 OpenAI 생성 호출의 설정·경계·실패 처리를 설명한다.
+> **책임:** Neptune·Content 조회와 OpenAI 생성 호출의 설정·경계·실패 처리를 설명한다.
 >
-> **호출자·대상:** GraphRAG가 Neptune의 상태 API를 호출한다.
+> **호출자·대상:** GraphRAG가 Neptune·Content·OpenAI에 요청한다.
 >
 > **확인할 때:** 연결 설정이나 DB 진단 실패를 확인할 때.
 >
 > **관련 기준:** GraphRAG가 반환하는 응답은 [제공 API](API.md)에서 관리한다.
 
 운영 HTTP 경로는 [neptune.py](../app/neptune.py)의 상태 조회를 사용한다.
-별도 평가 실행에는 OpenAI Responses 호출 어댑터가 있다. 그래프 쿼리, Content·AI Chat
-호출과 임베딩 호출은 아직 없다.
+별도 평가 실행에는 OpenAI Responses 호출 어댑터가 있다. 명시적으로 실행하는
+[그래프 fixture 경로](implementation/GRAPH_PROJECTION.md)는 Neptune `POST /gremlin`으로
+그래프와 Inbox를 저장한다. [refresh 원홉 조회](implementation/REFRESH_NEPTUNE.md)도 같은
+HTTP transport로 읽기용 Gremlin을 실행하고 Content HTTP 어댑터에 선택한 ID를 넘긴다.
+이 경로들은 FastAPI에 연결하지 않았다.
+사용자용 그래프 조회 API, AI Chat 호출과 임베딩 호출은 아직 없다.
 
 ## 요청 구성
 
@@ -43,12 +47,27 @@ HTTP·네트워크·JSON 해석 실패는 어댑터가 `GraphStatusUnavailable`�
 실제 HTTP 어댑터·라우트 연결은 로컬 HTTP 서버를 이용한 [통합 테스트](../tests/test_neptune_integration.py)로 검증한다.
 운영 Neptune의 TLS·IAM·VPC 연결은 별도 확인 대상이다.
 
-갱신안 서비스는 S3·관계·Content·모델·작업 상태·완료 발행을 Protocol로 요청한다.
+갱신안 서비스는 S3·관계·Content·모델·완료 Inbox·완료 발행을 Protocol로 요청한다.
 OpenAI 모델·S3 저장소 포트는 실제 어댑터를 선택할 수 있다. 기본 평가의 저장소와
-관계·Content·작업 상태·완료 발행은 fake다. S3는 `GetObject`·`PutObject`를 사용한다.
+관계·Content·Inbox·완료 발행은 fake다. S3는 `GetObject`·`PutObject`를 사용한다.
+실제 조립 경로는 Neptune 원홉·완료 Inbox와 Content HTTP를 사용한다.
+Inbox의 호출·복구 계약은 [완료 Inbox](implementation/REFRESH_INBOX.md)를 따른다.
 객체 위치·JSON·해시·오류·복구 규칙은 [S3 입출력 계약](S3_IO_CONTRACT.md)을,
 설정·서비스 주입·타임아웃은 [S3 저장소](implementation/S3_ARTIFACTS.md)를 따른다.
 [포트 계약](../app/refresh/ports.py)과 [이식 결과](migration/rules-implementation.md)를 참고한다.
+
+## Content 문서 조회
+
+[ContentDocumentSource](../app/adapters/content_documents.py)는 `X-User-Id`를 전달해
+`GET /projects/{project_id}`로 활성 프로젝트를 확인하고, 선택된 각 문서를
+`GET /files/{document_id}/content`로 읽는다. `CONTENT_BASE_URL`은 필수이며
+`CONTENT_TIMEOUT_SECONDS`는 기본 10초다. 응답의 프로젝트·문서 ID를 대조하고
+구조화 본문을 텍스트로 변환하며 제목·속성·관계·`revision_no`를 보존한다.
+
+`neptune_refresh_service(...)`에서 `documents`를 생략하고 신뢰한 `user_id`를 전달하면
+실제 HTTP 구현을 연결한다. 기본 평가는 명시적으로 fake를 유지한다.
+문서 없음·접근 거부·일시 실패를 구분하고 리다이렉트·자동 재시도는 하지 않는다.
+설정·변환·실패 계약과 검증 한계는 [Content HTTP 조회](implementation/CONTENT_HTTP.md)를 따른다.
 
 ## 갱신안 모델 호출
 

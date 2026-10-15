@@ -7,7 +7,7 @@ from tests.fakes.refresh import (
     Calls,
     FakeArtifacts,
     FakeDocuments,
-    FakeJobs,
+    FakeInbox,
     FakeModel,
     FakePublisher,
     FakeRelations,
@@ -26,7 +26,7 @@ class Scenario:
     relations: FakeRelations
     documents: FakeDocuments
     model: FakeModel
-    jobs: FakeJobs
+    inbox: FakeInbox
     publisher: FakePublisher
     rules: ScriptedRules
 
@@ -36,7 +36,7 @@ class Scenario:
             relations=self.relations,
             documents=self.documents,
             model=self.model,
-            jobs=self.jobs,
+            inbox=self.inbox,
             publisher=self.publisher,
             rules=self.rules if use_stub else None,
         )
@@ -55,7 +55,7 @@ def scenario():
         FakeRelations(related, calls),
         FakeDocuments(snapshot.documents[1:], calls),
         FakeModel(candidate, calls),
-        FakeJobs(calls=calls),
+        FakeInbox(calls=calls),
         FakePublisher(calls),
         ScriptedRules(
             Selection(("draft-1", "setting-1"), ("setting-1",)), snapshot, result, calls

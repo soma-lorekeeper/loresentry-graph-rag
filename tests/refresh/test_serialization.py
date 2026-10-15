@@ -54,7 +54,7 @@ def current_fact_result():
 
 def test_real_result_json_roundtrip_has_sources_evidence_and_versions():
     s = real_scenario()
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     payload = json.loads(s.artifacts.json_results[("project", "request")])
     assert result_from_payload(payload) == s.artifacts.read_result(s.request)
     assert {d["origin"] for d in payload["sources"]} == {"INPUT", "CONTENT"}
@@ -78,7 +78,7 @@ def test_real_result_json_roundtrip_has_sources_evidence_and_versions():
 @pytest.mark.parametrize("outcome", [Outcome.PROPOSED, Outcome.NO_CHANGE])
 def test_both_success_outcomes_map_to_succeeded(outcome):
     s = real_scenario()
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     assert (
         completion_to_payload(replace(done, outcome=outcome))["outcome"] == "SUCCEEDED"
     )
@@ -105,7 +105,7 @@ def test_failed_result_roundtrip_and_storage_unavailable_are_distinct():
 def test_no_change_roundtrip():
     s = real_scenario()
     s.model.responses.clear()
-    s.service.run(s.request, "run1")
+    s.service.run(s.request)
     result = s.artifacts.read_result(s.request)
     assert result.outcome == Outcome.NO_CHANGE
     assert result.document_proposals == result.relation_proposals == ()
@@ -234,7 +234,7 @@ def test_published_result_examples_are_current_and_roundtrip():
 
     root = Path(__file__).resolve().parents[2] / "docs/examples/refresh"
     s = real_scenario()
-    done = s.service.run(s.request, "run1")
+    done = s.service.run(s.request)
     proposed = json.loads((root / "result-proposed.json").read_text())
     assert proposed == json.loads(s.artifacts.json_results[("project", "request")])
     assert completion_to_payload(done) == json.loads(

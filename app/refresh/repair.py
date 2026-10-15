@@ -53,7 +53,6 @@ _LOCAL_FACT_RULES = frozenset(
         "fact.role_surface_in_source",
         "fact.role_surface_in_statement",
         "fact.entity_reference_known",
-        "fact.entity_identity_matches",
     }
 )
 _PROPOSAL_LISTS = (

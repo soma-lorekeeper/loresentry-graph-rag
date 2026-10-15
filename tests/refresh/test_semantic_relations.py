@@ -17,7 +17,6 @@ from app.refresh.models import (
     ExecutionSnapshot,
     FactEntity,
     JobKey,
-    JobRecord,
     ModelCandidate,
     ModelInput,
     ModelSettings,
@@ -318,10 +317,12 @@ def test_v4_role_surface_elsewhere_in_chunk_cannot_ground_short_excerpt(field):
 
 
 @pytest.mark.parametrize("field", ["actor", "recipient"])
-def test_named_role_cannot_point_to_another_loaded_identity(field):
+def test_loaded_role_reference_does_not_require_surface_to_match_document_name(field):
     payload, model_input, snapshot = semantic_fixture()
     payload["facts"][0][field]["document_id"] = "yunjun"
-    assert_failed(checked(payload, model_input, snapshot), "INVALID_FACT")
+    result = checked(payload, model_input, snapshot)
+    assert result.outcome == Outcome.PROPOSED
+    assert getattr(result.facts[0], field).document_id == "yunjun"
 
 
 def test_named_roles_can_use_explicit_content_aliases():
@@ -340,9 +341,7 @@ def test_named_roles_can_use_explicit_content_aliases():
 @pytest.mark.parametrize(
     "role,document_id", [("actor", "haeju"), ("recipient", "yunjun")]
 )
-def test_anonymous_official_and_mother_cannot_be_assigned_to_loaded_characters(
-    role, document_id
-):
+def test_role_reference_is_allowed_without_surface_identity_matching(role, document_id):
     payload, model_input, snapshot = semantic_fixture(ANONYMOUS_EXCERPT)
     fact = payload["facts"][0]
     fact.update(
@@ -371,7 +370,7 @@ def test_anonymous_official_and_mother_cannot_be_assigned_to_loaded_characters(
         == Outcome.PROPOSED
     )
     fact[role]["document_id"] = document_id
-    assert_failed(checked(payload, model_input, snapshot), "INVALID_FACT")
+    assert checked(payload, model_input, snapshot).outcome == Outcome.PROPOSED
 
 
 @pytest.mark.parametrize("field", ["actor", "recipient", "object"])
@@ -646,11 +645,11 @@ def test_service_aggregates_shared_fact_across_separate_update_calls_once():
         relations=object(),
         documents=object(),
         model=FixedModel(),
-        jobs=SimpleNamespace(checkpoint=lambda record: None),
+        inbox=SimpleNamespace(checkpoint=lambda record: None),
         publisher=object(),
         rules=RecordingRules(),
     )
-    result = service._compute(request, JobRecord(request, "execution"))
+    result = service._compute(request)
     assert seen == [(), ("haeju",), ("doyun",), ("yunjun",)]
     assert result.outcome == Outcome.PROPOSED
     assert len(result.facts) == 1
@@ -752,7 +751,7 @@ def test_valid_unused_fact_does_not_fail_supported_proposal_or_escape_into_resul
     "defect,code",
     [
         ("source", "INVALID_EVIDENCE"),
-        ("identity", "INVALID_FACT"),
+        ("unknown_reference", "INVALID_FACT"),
         ("type", "INVALID_FACT"),
     ],
 )
@@ -762,8 +761,8 @@ def test_invalid_unused_fact_still_fails_even_without_any_final_proposal(defect,
     fact = candidate.facts[0]
     if defect == "source":
         fact = replace(fact, evidence=(replace(fact.evidence[0], quote="변조된 원문"),))
-    elif defect == "identity":
-        fact = replace(fact, actor=FactEntity("민해주", "yunjun"))
+    elif defect == "unknown_reference":
+        fact = replace(fact, actor=FactEntity("민해주", "unknown-document"))
     else:
         fact = {"fact_id": fact.fact_id}
     assert_failed(

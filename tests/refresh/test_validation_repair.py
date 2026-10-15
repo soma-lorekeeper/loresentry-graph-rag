@@ -24,7 +24,7 @@ from app.refresh.service import RefreshService
 from tests.fakes.refresh import (
     Calls,
     FakeDocuments,
-    FakeJobs,
+    FakeInbox,
     FakeJsonArtifacts,
     FakePublisher,
     FakeRelations,
@@ -72,7 +72,7 @@ def repair_scenario(*, target_ids=("haeju",), max_model_calls=20, rules=None):
         artifacts=FakeJsonArtifacts({request.input_ref: source}, calls),
         documents=FakeDocuments(snapshot.documents[1:], calls),
         relations=FakeRelations(snapshot.related, calls),
-        jobs=FakeJobs(calls=calls),
+        inbox=FakeInbox(calls=calls),
         publisher=FakePublisher(calls),
         model=ScriptedModel(),
     )
@@ -83,7 +83,7 @@ def repair_scenario(*, target_ids=("haeju",), max_model_calls=20, rules=None):
                 "artifacts",
                 "documents",
                 "relations",
-                "jobs",
+                "inbox",
                 "publisher",
                 "model",
             )
@@ -139,7 +139,7 @@ def parser_failure(*, usage=None, candidate_text='{"facts":[]}'):
 
 def run_saved(scenario):
     scenario.artifacts.save_context(scenario.snapshot)
-    completion = scenario.service.run(scenario.request, "execution-1")
+    completion = scenario.service.run(scenario.request)
     return completion, scenario.artifacts.read_result(scenario.request)
 
 
@@ -471,7 +471,6 @@ def test_all_fact_leaf_diagnostics_are_sent_in_bounded_repairs(repair_all):
     assert first.outcome == Outcome.FAILED
     assert {(d.path, d.rule) for d in first.diagnostics} == {
         ("facts[0].action", "fact.action_in_source"),
-        ("facts[0].recipient.document_id", "fact.entity_identity_matches"),
         ("facts[1].object.surface", "fact.role_surface_in_source"),
     }
     assert {d.fact_id for d in first.diagnostics} == {
@@ -645,7 +644,7 @@ def test_transport_failure_is_left_to_delivery_without_internal_repair():
     scenario.model.responses.extend((error, candidate_for(scenario)))
     scenario.artifacts.save_context(scenario.snapshot)
     with pytest.raises(RefreshFailure) as caught:
-        scenario.service.run(scenario.request, "execution-1")
+        scenario.service.run(scenario.request)
     assert caught.value.failure.code == "MODEL_TIMEOUT"
     assert len(scenario.model.inputs) == 1
     assert scenario.artifacts.read_result(scenario.request) is None
@@ -749,7 +748,7 @@ def test_saved_result_reuse_does_not_repeat_failed_or_repaired_calls(successful_
     )
     count = 2 if successful_repair else 3
     assert len(scenario.model.inputs) == count
-    again = scenario.service.run(scenario.request, "execution-2")
+    again = scenario.service.run(scenario.request)
     assert again == completion
     assert scenario.artifacts.read_result(scenario.request) == result
     assert len(scenario.model.inputs) == count

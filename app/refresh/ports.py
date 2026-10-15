@@ -14,7 +14,6 @@ from app.refresh.models import (
     DocumentBatch,
     ExecutionSnapshot,
     InputSnapshot,
-    JobRecord,
     ModelCandidate,
     ModelInput,
     RefreshRequest,
@@ -80,6 +79,9 @@ class RelatedDocumentSource(Protocol):
         Returns:
             관련 문서 ID와 관계, 그래프 반영 준비 상태. 준비되지 않은 상태를
             관련 문서가 없는 READY 결과로 대체하지 않는다.
+
+        호출 서비스는 입력에서 비활성 seed를 제외한다. 구현이 지원하지 않는 탐색 깊이는
+        조용히 줄이지 않고 실패시키며, 확인할 수 없는 버전 요구는 UNKNOWN으로 반환한다.
         """
         ...
 
@@ -114,36 +116,18 @@ class ProposalModel(Protocol):
         ...
 
 
-class RefreshJobStore(Protocol):
-    """요청별 실행 소유권과 복구 지점을 기록하는 저장소 계약."""
+class RefreshInbox(Protocol):
+    """요청별 처리 완료만 기록한다. 진행 상태·실행 소유권은 관리하지 않는다."""
 
-    def claim(self, request: RefreshRequest, execution_id: str) -> JobRecord:
-        """실행 가능한 작업의 소유권을 원자적으로 획득한다.
-
-        Args:
-            request: 동일 요청의 입력과 설정을 확인할 요청 값.
-            execution_id: 전달 계층에서 부여한 이번 실행의 식별자.
-
-        Returns:
-            획득한 작업 기록. 완료된 작업은 소유권을 새로 얻지 않고 읽을 수 있다.
-
-        Raises:
-            JobBusy: 다른 실행이 작업을 소유한 경우.
-            RequestConflict: 같은 요청 ID의 입력 또는 설정이 다른 경우.
-
-        실행 임대 만료와 소유권 복구는 어댑터·전달 계층의 책임이다.
-        """
+    def find(self, request: RefreshRequest) -> Completion | None:
+        """같은 요청의 완료를 반환한다. 같은 ID에 다른 입력·설정은 충돌이다."""
         ...
 
-    def load(self, request: RefreshRequest) -> JobRecord | None:
-        """현재 작업 기록을 읽고, 기록이 없으면 None을 반환한다."""
-        ...
+    def complete(self, request: RefreshRequest, completion: Completion) -> None:
+        """결과 저장과 완료 발행 확인 이후에만 멱등적으로 완료를 기록한다.
 
-    def checkpoint(self, record: JobRecord) -> None:
-        """현재 소유자의 복구 지점과 상태 전이를 기록한다.
-
-        소유권을 확인한 뒤 진행 또는 해제해야 한다. 다른 실행의 변경은
-        RequestConflict로 거절한다. 결과 객체 저장과의 단일 트랜잭션은 보장하지 않는다.
+        실패하면 요청은 미완료로 재전달한다. 응답 유실 시 이미 기록됐을 수 있으므로
+        다음 실행은 find로 확인한다. Kafka offset과는 별도 트랜잭션이다.
         """
         ...
 

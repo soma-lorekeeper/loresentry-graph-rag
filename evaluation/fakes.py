@@ -4,6 +4,7 @@ from collections import defaultdict, deque
 from copy import deepcopy
 
 from app.refresh.errors import RefreshFailure, RequestConflict
+from app.refresh.inbox import validate_completion
 from app.refresh.models import (
     ArtifactRef,
     DocumentBatch,
@@ -145,77 +146,31 @@ class FakeModel:
         return deepcopy(response)
 
 
-class FakeJobs:
-    """Serial test model, not a database lock or a production lease algorithm."""
+class FakeInbox:
+    """완료 기록만 보존하는 메모리 대체 구현. 실행 잠금·진행 상태는 없다."""
 
-    def __init__(self, records=(), calls=None):
-        self.records = {identity(r.request): deepcopy(r) for r in records}
+    def __init__(self, records=None, calls=None):
+        self.records = deepcopy(records or {})
         self.calls = calls if calls is not None else Calls()
 
-    def load(self, request):
-        self.calls.record("jobs.load", request)
+    def find(self, request):
+        self.calls.record("inbox.find", request)
         record = self.records.get(identity(request))
-        if record is not None and record.request != request:
-            raise RequestConflict("request ID already has different inputs")
-        return deepcopy(record)
+        if record is None:
+            return None
+        saved_request, completion = record
+        if saved_request != request:
+            raise RequestConflict("Inbox request ID already has different inputs")
+        return deepcopy(completion)
 
-    def claim(self, request, execution_id):
-        from dataclasses import replace
-
-        from app.refresh.errors import JobBusy
-        from app.refresh.models import JobRecord, JobState
-
-        self.calls.record("jobs.claim", request, execution_id)
-        if not execution_id:
-            raise ValueError("execution_id is required")
-        previous = self.load(request)
-        if previous is not None:
-            if previous.state == JobState.COMPLETED:
-                return previous
-            if previous.state != JobState.RETRYABLE:
-                raise JobBusy("execution already owns this request")
-            record = replace(
-                previous, execution_id=execution_id, state=JobState.RUNNING
-            )
-        else:
-            record = JobRecord(request, execution_id)
-        self.records[identity(request)] = record
-        return deepcopy(record)
-
-    def checkpoint(self, record):
-        from app.refresh.errors import JobBusy
-        from app.refresh.models import JobState
-
-        self.calls.record("jobs.checkpoint", record)
-        previous = self.load(record.request)
-        if previous is None or previous.execution_id != record.execution_id:
-            raise JobBusy("checkpoint owner differs")
-        allowed = {
-            JobState.RUNNING: {
-                JobState.RUNNING,
-                JobState.RESULT_READY,
-                JobState.RETRYABLE,
-            },
-            JobState.RESULT_READY: {
-                JobState.RESULT_READY,
-                JobState.COMPLETED,
-                JobState.RETRYABLE,
-            },
-            JobState.RETRYABLE: set(),
-            JobState.COMPLETED: set(),
-        }
-        if record.state not in allowed[previous.state]:
-            raise ValueError("invalid job transition")
-        if (
-            record.state in {JobState.RESULT_READY, JobState.COMPLETED}
-            and record.result_ref is None
-        ):
-            raise ValueError("result reference required")
-        for name in ("context_ref", "result_ref"):
-            old = getattr(previous, name)
-            if old is not None and getattr(record, name) != old:
-                raise RequestConflict("checkpoint cannot change saved references")
-        self.records[identity(record.request)] = deepcopy(record)
+    def complete(self, request, completion):
+        self.calls.record("inbox.complete", request, completion)
+        validate_completion(request, completion)
+        previous = self.find(request)
+        if previous is not None and previous != completion:
+            raise RequestConflict("Inbox completion is immutable")
+        self.records[identity(request)] = deepcopy((request, completion))
+        self.calls.record("inbox.ack", request, completion)
 
 
 class FakePublisher:

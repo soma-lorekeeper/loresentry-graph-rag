@@ -1,12 +1,12 @@
 from dataclasses import replace
 
-from app.refresh.models import JobState, Outcome, Selection
+from app.refresh.models import Outcome, Selection
 from tests.fakes.scenario import scenario
 
 
 def test_normal_flow_preserves_snapshots_and_orders_io():
     s = scenario()
-    done = s.service().run(s.request, "execution-1")
+    done = s.service().run(s.request)
     assert done.outcome == Outcome.PROPOSED
     assert s.artifacts.read_input(s.request) == s.source
     assert s.artifacts.read_context(s.request) == s.snapshot
@@ -14,7 +14,7 @@ def test_normal_flow_preserves_snapshots_and_orders_io():
     assert replace(stored, attempts=()) == s.result
     assert len(stored.attempts) == 1
     assert stored.attempts[0].outcome == Outcome.PROPOSED
-    assert s.jobs.load(s.request).state == JobState.COMPLETED
+    assert s.inbox.find(s.request) == done
     assert s.publisher.delivered == [done]
     names = s.calls.names()
     assert names.index("relations.find_related") < names.index(
@@ -25,6 +25,7 @@ def test_normal_flow_preserves_snapshots_and_orders_io():
         "artifacts.save_result"
     )
     assert names.index("artifacts.save_result") < names.index("publisher.publish")
+    assert names.index("publisher.ack") < names.index("inbox.complete")
     fetched = next(
         args for name, args in s.calls.events if name == "documents.fetch_documents"
     )
@@ -45,7 +46,7 @@ def test_explicit_complete_input_skips_relations_and_content_queries():
     s.artifacts.inputs[request.input_ref] = source
     s.rules.snapshot = replace(s.snapshot, request=request)
     s.rules.selection = Selection(("draft-1", "setting-1"), ())
-    s.service().run(request, "execution-1")
+    s.service().run(request)
     assert "relations.find_related" not in s.calls.names()
     assert "documents.fetch_documents" not in s.calls.names()
 
@@ -54,7 +55,7 @@ def test_no_change_is_explicit_in_result_and_completion():
     s = scenario()
     s.model.candidate = replace(s.model.candidate, document_proposals=())
     s.rules.result = replace(s.result, outcome=Outcome.NO_CHANGE, document_proposals=())
-    completion = s.service().run(s.request, "execution-1")
+    completion = s.service().run(s.request)
     assert completion.outcome == Outcome.NO_CHANGE
     assert s.artifacts.read_result(s.request).document_proposals == ()
 
@@ -68,9 +69,9 @@ def test_default_rules_validate_and_publish_a_real_proposal():
             s.request.model_settings, schema_version="refresh-candidate-v3"
         ),
     )
-    done = s.service(use_stub=False).run(s.request, "execution-1")
+    done = s.service(use_stub=False).run(s.request)
     assert done.outcome == Outcome.PROPOSED
-    assert s.jobs.load(s.request).state == JobState.COMPLETED
+    assert s.inbox.find(s.request) == done
     assert (
         s.artifacts.read_result(s.request).document_proposals
         == s.model.candidate.document_proposals

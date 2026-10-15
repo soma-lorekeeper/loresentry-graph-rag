@@ -1,7 +1,6 @@
-"""개별 사실의 출처·명시 식별·제안 참조 검사. 역할의 의미적 정답은 보증하지 않는다."""
+"""개별 사실의 출처·문서/제안 참조 검사. 역할의 의미적 정답은 보증하지 않는다."""
 
 from math import isfinite
-from unicodedata import normalize
 
 from app.refresh.errors import RefreshFailure
 from app.refresh.evidence import make_chunks, unique_evidence
@@ -12,10 +11,6 @@ from app.refresh.models import (
     SourceFact,
     ValidationDiagnostic,
 )
-
-
-def identity(value):
-    return " ".join(normalize("NFKC", value).split()).casefold()
 
 
 def bounded(value, maximum):
@@ -42,7 +37,7 @@ def validate_facts(
     schema_version=None,
     source_markers=None,
 ):
-    """참조가 원문의 명시 표현을 넘지 않게 제한한다. 함의 검사는 별도 평가가 맡는다."""
+    """원문 표현과 알려진 문서·제안 참조를 검사한다. 함의 검사는 별도 평가가 맡는다."""
 
     diagnostics = []
     first_failure = None
@@ -96,18 +91,9 @@ def validate_facts(
         if d.state == DocumentState.ACTIVE
         and d.project_id == snapshot.request.job.project_id
     }
-    names = {
-        key: {
-            identity(value)
-            for value in [d.title]
-            + [v for k, v in d.properties if k in {"name", "title", "alias"}]
-            if isinstance(value, str) and value.strip()
-        }
-        for key, d in documents.items()
+    known_ids = set(documents) | {
+        p.candidate_id for p in candidate.new_document_proposals
     }
-    names.update(
-        {p.candidate_id: {identity(p.name)} for p in candidate.new_document_proposals}
-    )
     facts = {}
     chunks = (
         {chunk.evidence for chunk in make_chunks(snapshot)}
@@ -261,7 +247,7 @@ def validate_facts(
                 )
             if entity.document_id is not None and (
                 not isinstance(entity.document_id, str)
-                or entity.document_id not in names
+                or entity.document_id not in known_ids
             ):
                 fail(
                     role_path + ".document_id",
@@ -271,20 +257,8 @@ def validate_facts(
                     value=entity.document_id,
                     collect=True,
                 )
-            if (
-                isinstance(entity.document_id, str)
-                and entity.document_id in names
-                and role in {"actor", "recipient"}
-                and identity(entity.surface) not in names[entity.document_id]
-            ):
-                fail(
-                    role_path + ".document_id",
-                    "fact.entity_identity_matches",
-                    "Actor identity requires an explicit name or alias",
-                    fact=fact,
-                    value=entity.document_id,
-                    collect=True,
-                )
+            # 초기 구현에서는 surface와 문서 제목·이름·별칭의 일치를 차단 조건으로
+            # 사용하지 않는다. 원문 표현과 문서 ID의 존재·프로젝트 범위는 검사한다.
         facts[fact.fact_id] = fact
     if first_failure is not None:
         raise RefreshFailure(first_failure, diagnostics=tuple(diagnostics)) from None

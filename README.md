@@ -91,6 +91,33 @@ total reservation to at least 384 for this example. The private comparison summa
 contains counts and status labels, without source or proposal bodies, and leaves
 the quality decision pending human review. See [A/B usage](docs/migration/openai-adapter.md#프롬프트와-청크-겹침-반복-비교).
 
+## Graph projection implementation
+
+The [graph projection adapter](docs/implementation/GRAPH_PROJECTION.md) writes
+Content document nodes, undirected relation pairs, and completed-event Inbox
+records in one Neptune HTTPS Gremlin request. A fake consumer and fixture CLI
+exercise the shared handler without Kafka. Input batches are an internal contract;
+the Content Kafka payload schema and live consumer are still pending.
+
+Local TinkerTransactionGraph tests verify mutations, rollback, project isolation,
+duplicates, and lost commit responses. AWS Neptune deployment validation remains
+separate. The existing FastAPI app continues to expose status endpoints only.
+
+The [refresh relation adapter](docs/implementation/REFRESH_NEPTUNE.md) reads active
+one-hop neighbors from the same nodes and edges. `neptune_refresh_service(...)`
+wires it into the existing refresh flow; missing bodies still go through the
+[Content HTTP adapter](docs/implementation/CONTENT_HTTP.md) when `documents` is
+omitted and a trusted `user_id` is supplied. It calls the existing project and
+document APIs, preserves body text and revision (including zero), and checks scope.
+Query failures or missing projected seeds stop generation.
+
+Refresh recovery uses a [completion Inbox](docs/implementation/REFRESH_INBOX.md)
+in Neptune and immutable S3 artifacts. It records completion after the publisher
+acknowledges delivery; unfinished requests reuse saved results or run again.
+There is no separate job-state store or execution lease. Fact validation keeps
+source wording and known document references, while surface-to-document-name or
+alias equality no longer blocks a proposal.
+
 ## Stack
 
 | | Version | Notes |
@@ -175,6 +202,7 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 
 ## Not implemented yet
 
-- Graph queries and writes against Amazon Neptune, and the graph model itself. Neptune status checks are implemented.
-- RAG/GraphRAG retrieval.
+- User-facing graph queries against Amazon Neptune. Projection writes and Inbox
+  are implemented through the explicit fixture entry point; AWS validation remains.
+- General RAG/GraphRAG retrieval beyond refresh's one-hop relation lookup.
 - The Kafka consumer for `loresentry-content` change events. Broker availability is outside this implementation’s verification scope.

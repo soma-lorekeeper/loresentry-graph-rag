@@ -35,15 +35,6 @@ class Outcome(StrEnum):
     FAILED = "FAILED"
 
 
-class JobState(StrEnum):
-    """작업 소유권과 결과 저장·발행 진행을 복구하기 위한 상태."""
-
-    RUNNING = "RUNNING"
-    RETRYABLE = "RETRYABLE"
-    RESULT_READY = "RESULT_READY"
-    COMPLETED = "COMPLETED"
-
-
 @dataclass(frozen=True)
 class ArtifactRef:
     """저장된 입력·실행 스냅샷·결과를 찾기 위한 버킷과 객체 키."""
@@ -131,7 +122,8 @@ class Relation:
     """Content의 한 문서에서 바라본 관계 행의 내부 표현.
 
     document_id가 target_document_id를 참조하며 relation_key는 대상 분류를 뜻한다.
-    반대쪽 행의 키는 달라질 수 있다. 업무상 연결은 무방향이다."""
+    반대쪽에서 보면 키가 달라질 수 있다. Content는 무방향 문서 쌍을 한 행으로 저장하고,
+    이 값은 그 연결을 한 문서에서 바라본 표현이다."""
 
     project_id: str
     document_id: str
@@ -482,15 +474,3 @@ class Completion:
     outcome: Outcome
     failure: Failure | None = None
     prompt_version: str | None = None
-
-
-@dataclass(frozen=True)
-class JobRecord:
-    """현재 실행 소유자, 진행 상태, 재개할 객체 참조와 실패 정보를 기록하는 값."""
-
-    request: RefreshRequest
-    execution_id: str
-    state: JobState = JobState.RUNNING
-    context_ref: ArtifactRef | None = None
-    result_ref: ArtifactRef | None = None
-    failure: Failure | None = None

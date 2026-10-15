@@ -20,7 +20,7 @@
 | `test_relation_validation.py` | 두 방향 분류 키, 기존 연결·역방향 중복, 부분 오류의 전체 실패 |
 | `test_real_service.py` | 실제 rules와 여섯 fake, 다중 호출, 관계 전용·변경 없음, 입력 경계·복구 |
 | `test_serialization.py` | JSON 왕복·고정 예시, 출처·근거 참조, 완료 상태 매핑·저장 불가 실패 |
-| `test_data_fakes.py`, `test_model_fake.py`, `test_job_fakes.py` | fake 자체의 불변성·오류 주입·실행권 계약 |
+| `test_data_fakes.py`, `test_model_fake.py`, `test_inbox_fakes.py` | fake 자체의 불변성·오류 주입·완료 Inbox 계약 |
 | `test_service.py`, `test_recovery.py` | 기존 골격의 IO 순서·실패 전파·재개. 대부분 ScriptedRules 사용 |
 
 실제 규칙을 읽거나 실행할 때 다음 예시에서 시작한다.

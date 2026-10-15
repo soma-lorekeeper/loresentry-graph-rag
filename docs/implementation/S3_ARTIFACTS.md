@@ -13,7 +13,7 @@ S3로 전환되지 않으며, HTTP·Kafka 갱신안 진입점은 아직 없다.
 ## 서비스에 연결하기
 
 프로젝트 가상환경에 `requirements.txt`의 의존성을 설치한 뒤 서비스 조립 코드에서
-어댑터를 주입한다. 아래는 연결 예시이며 `request`, `execution_id`와 나머지 다섯 포트는
+어댑터를 주입한다. 아래는 연결 예시이며 `request`와 나머지 다섯 포트는
 호출자가 준비해야 한다. 설정 매핑은 호출자가 명시적으로 전달한다.
 
 ```python
@@ -29,10 +29,10 @@ with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifac
         relations=relations,
         documents=documents,
         model=model,
-        jobs=jobs,
+        inbox=inbox,
         publisher=publisher,
     )
-    completion = service.run(request, execution_id)
+    completion = service.run(request)
 ```
 
 | 설정 | 의미·기본값 |
@@ -68,7 +68,7 @@ SSE-KMS 등 버킷 정책에 따른 추가 권한은 운영 환경에서 별도 
 이 형식은 현재 GraphRAG 어댑터의 계약이며 Content 필드 매핑과 Kafka 전달의 운영 합의는 별도다.
 
 쓰기에는 `IfNoneMatch="*"`를 사용하고 기존 객체를 덮어쓰지 않는다.
-request manifest·context·result와 작업 상태·완료 발행은 하나의 트랜잭션이 아니다.
+request manifest·context·result와 [완료 Inbox](REFRESH_INBOX.md)·완료 발행은 하나의 트랜잭션이 아니다.
 상세 재사용·만료·복구 조건은 [계약의 저장·복구 규칙](../S3_IO_CONTRACT.md#저장-순서와-소비복구)을 따른다.
 
 ## 오류와 검증

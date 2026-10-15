@@ -292,10 +292,10 @@ def test_adapter_with_real_service_keeps_all_or_nothing_and_saved_recovery():
     bad = SimpleNamespace(status="incomplete", output=[], output_text="")
     client.responses.create.side_effect = [good, bad]
     s.service.model = OpenAIProposalModel(client, limits())
-    done = s.service.run(s.request, "first")
+    done = s.service.run(s.request)
     assert done.outcome == Outcome.FAILED
     assert done.failure.code == "MODEL_INCOMPLETE"
     result = s.artifacts.read_result(s.request)
     assert result.document_proposals == result.relation_proposals == ()
-    assert s.service.run(s.request, "repeat") == done
+    assert s.service.run(s.request) == done
     assert client.responses.create.call_count == 2

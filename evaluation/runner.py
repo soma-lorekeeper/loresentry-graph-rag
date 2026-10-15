@@ -21,7 +21,7 @@ from evaluation.confidence import observe_confidence
 from evaluation.fakes import (
     Calls,
     FakeDocuments,
-    FakeJobs,
+    FakeInbox,
     FakeJsonArtifacts,
     FakePublisher,
     FakeRelations,
@@ -251,7 +251,7 @@ def assemble(
         relations=FakeRelations(case.related, calls),
         documents=FakeDocuments(case.targets, calls),
         model=EvaluationModel(case, model, budget, recorder),
-        jobs=FakeJobs(calls=calls),
+        inbox=FakeInbox(calls=calls),
         publisher=FakePublisher(calls),
         rules=EvaluationRules(model, recorder, single_call=single_call),
     )
@@ -262,9 +262,9 @@ def assemble(
 
 def run_case(case, scenario, *, repeat_saved=False):
     """한 사례를 실행하고 저장된 결과 복구를 선택적으로 검증한다."""
-    completion = scenario.service.run(case.request, "evaluation-1")
+    completion = scenario.service.run(case.request)
     if repeat_saved:
-        assert scenario.service.run(case.request, "evaluation-2") == completion
+        assert scenario.service.run(case.request) == completion
     result = scenario.artifacts.read_result(case.request)
     if getattr(scenario, "recorder", None) is not None:
         scenario.recorder.reconcile(result.attempts)

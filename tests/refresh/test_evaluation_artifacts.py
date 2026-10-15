@@ -84,7 +84,7 @@ def test_preflight_failure_keeps_unknown_usage(tmp_path):
             model_settings=replace(case.request.model_settings, schema_version="old"),
         ),
     )
-    scenario.service.run(case.request, "first")
+    scenario.service.run(case.request)
     record = recorder.records[0]
     assert not record["remote_requested"]
     assert not record["usage_known"]
