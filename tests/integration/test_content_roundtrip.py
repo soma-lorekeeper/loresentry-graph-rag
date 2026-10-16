@@ -1,0 +1,126 @@
+"""실제 Content HTTP→Outbox→Kafka→GraphRAG→S3→Kafka→Content 왕복. 모델만 대체한다."""
+
+import os
+from time import monotonic, sleep
+from uuid import uuid4
+
+import boto3
+import httpx
+import pytest
+from botocore.config import Config
+from botocore.exceptions import ClientError
+
+from app.adapters.neptune_graph import NeptuneProjectionStore
+from app.adapters.neptune_refresh import neptune_refresh_service
+from app.adapters.projection_ready import ProjectionReadiness
+from app.adapters.refresh_artifacts import S3ArtifactSettings, S3RefreshArtifacts
+from app.kafka.business_runtime import BusinessPollingRuntime, BusinessSettings
+from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
+from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
+from app.projection.service import GraphProjectionHandler
+from app.refresh.models import ChangePlan, WrittenCandidate
+
+pytestmark = [pytest.mark.integration, pytest.mark.kafka, pytest.mark.gremlin]
+
+
+class NoChangeModel:
+    def generate(self, model_input):
+        if model_input.schema_version == "refresh-plan-v1":
+            return ChangePlan(model_input.target_ids, (), (), ())
+        return WrittenCandidate(())
+
+
+def test_real_content_request_and_completion_roundtrip():
+    base = os.environ.get("CONTENT_TEST_BASE_URL")
+    endpoint = os.environ.get("GREMLIN_TEST_ENDPOINT")
+    bootstrap = os.environ.get("KAFKA_TEST_BOOTSTRAP_SERVERS")
+    if not all((base, endpoint, bootstrap)):
+        pytest.skip("Set CONTENT_TEST_BASE_URL and disposable Kafka/Gremlin endpoints")
+    s3_endpoint = os.environ.get("CONTENT_TEST_S3_ENDPOINT", "http://127.0.0.1:18333")
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=s3_endpoint,
+        region_name="us-east-1",
+        aws_access_key_id="local-test-only",
+        aws_secret_access_key="local-test-only",
+        config=Config(
+            s3={"addressing_style": "path"}, retries={"total_max_attempts": 1}
+        ),
+    )
+    bucket = "refresh-fullstack-test"
+    try:
+        s3.head_bucket(Bucket=bucket)
+    except ClientError as failure:
+        if failure.response["ResponseMetadata"]["HTTPStatusCode"] != 404:
+            raise
+        s3.create_bucket(Bucket=bucket)
+    artifacts = S3RefreshArtifacts(s3, S3ArtifactSettings(bucket, bucket))
+
+    def handlers(topic, publisher, stop, stack, settings):
+        if topic == PROJECT_CHANGED:
+            store = stack.enter_context(NeptuneProjectionStore(endpoint))
+            handler = ProjectionEventHandler(GraphProjectionHandler(store))
+            return {"FileChanged": handler, "ProjectDeleted": handler}
+        ready = stack.enter_context(ProjectionReadiness(endpoint))
+
+        def run(request, user_id):
+            with neptune_refresh_service(
+                artifacts=artifacts,
+                model=NoChangeModel(),
+                publisher=publisher,
+                user_id=user_id,
+                content_base_url=base,
+                endpoint=endpoint,
+            ) as service:
+                service.run(request)
+
+        return {"GraphRefreshRequested": RefreshEventHandler(run, ready.check)}
+
+    runtime = BusinessPollingRuntime(
+        BusinessSettings(bootstrap, (PROJECT_CHANGED, REFRESH_REQUESTED)),
+        handler_factory=handlers,
+    )
+    project = None
+    with httpx.Client(
+        base_url=base, headers={"X-User-Id": str(uuid4())}, timeout=30
+    ) as client:
+        try:
+            runtime.start()
+            response = client.post(
+                "/projects", json={"name": "Kafka end to end " + uuid4().hex}
+            )
+            response.raise_for_status()
+            project = response.json()["id"]
+            response = client.post(
+                f"/projects/{project}/files",
+                json={"kind": "document", "title": "원고", "folder_code": "MANUSCRIPT"},
+            )
+            response.raise_for_status()
+            file = response.json()["id"]
+            response = client.post(
+                f"/projects/{project}/graph-refresh", json={"files": [file]}
+            )
+            response.raise_for_status()
+            request = response.json()["request_id"]
+            deadline = monotonic() + 40
+            status = None
+            while monotonic() < deadline:
+                response = client.get(f"/projects/{project}/graph-refresh/{request}")
+                response.raise_for_status()
+                status = response.json()
+                if status["status"] in {"READY", "FAILED"}:
+                    break
+                assert runtime.healthy
+                sleep(0.1)
+            assert status["status"] == "READY", status
+            assert status["result"]["schema_version"] == "refresh-result-v3"
+            assert status["result"]["outcome"] == "NO_CHANGE"
+            assert status["result"]["request_id"] == request
+            # Generation does not change Content originals.
+            assert client.get(f"/files/{file}/content").json()["revision_no"] == 0
+        finally:
+            runtime.close()
+            if project:
+                client.post(f"/projects/{project}/trash").raise_for_status()
+                client.delete(f"/projects/{project}").raise_for_status()
+            s3.close()

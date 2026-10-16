@@ -13,6 +13,7 @@ from app.application import (
     GraphStatusUnavailable,
 )
 from app.graph import InvalidGraphStatus
+from app.kafka.business_runtime import BusinessPollingRuntime
 from app.kafka.runtime import FakePollingRuntime, FakePollingSettings
 from app.neptune import NeptuneStatusSource
 
@@ -40,14 +41,22 @@ def create_app(source: GraphStatusSource | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         settings = FakePollingSettings.from_env(os.environ)
         runtime = FakePollingRuntime(settings) if settings is not None else None
+        business = BusinessPollingRuntime.from_env(os.environ)
         app.state.kafka_polling = runtime
+        app.state.kafka_business = business
         try:
             if runtime is not None:
                 await asyncio.to_thread(runtime.start)
+            if business is not None:
+                await asyncio.to_thread(business.start)
             yield
         finally:
-            if runtime is not None:
-                await asyncio.to_thread(runtime.close)
+            try:
+                if business is not None:
+                    await asyncio.to_thread(business.close)
+            finally:
+                if runtime is not None:
+                    await asyncio.to_thread(runtime.close)
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
 
@@ -58,7 +67,10 @@ def create_app(source: GraphStatusSource | None = None) -> FastAPI:
     @app.get("/health")
     def health():
         runtime = getattr(app.state, "kafka_polling", None)
-        if runtime is not None and not runtime.healthy:
+        business = getattr(app.state, "kafka_business", None)
+        if (runtime is not None and not runtime.healthy) or (
+            business is not None and not business.healthy
+        ):
             return JSONResponse(
                 status_code=503,
                 content={

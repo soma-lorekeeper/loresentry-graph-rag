@@ -37,10 +37,10 @@ Spring 소비 예시를 Python·Neptune GraphRAG에 그대로 적용하는 구�
 
 | 구분 | 남은 내용 |
 |---|---|
-| 메시지 계약 미결정 | FileChanged의 순서 값(`version`, `outbox_id`)과 `revision_no`의 관계, 관계 저장 구조. [해당 메모](message-contract.md#event) 참고 |
+| 메시지 계약 미결정 | Content는 `ce_sequence=seq`, 무방향 관계 한 행을 구현했다. payload version·관계 스냅샷 삭제·stale 판정의 연결은 [소비 계약](../implementation/KAFKA_TRANSPORT.md#content와-합친-계약) 참고 |
 | 흐름 보완 | 구간별 실패 지점과 책임 주체, 전달 보장 비교표 |
 | 네트워크·보안 설계 | 접속 주소와 리스너, TLS, 인증·인가, NetworkPolicy, 외부 접근 |
-| 긴 처리 | Python 클라이언트 선택과 LLM 작업의 pause·worker·commit·resume 전략 |
+| 긴 처리 | confluent-kafka polling·pause·세대별 commit은 구현됨. 업무별 runtime·재시도·종료 예산은 [소비 구현안](../CONSUMER.md) 참고 |
 | 운영 | lag 모니터링(Kafka Exporter 메모만 있음), DLQ 재투입 절차, replay 절차 |
 | 생태계 | Kafka Connect, Cruise Control, Kafka Streams, MirrorMaker 2, Kafka Bridge |
 | Strimzi CR | operator와 reconcile, Kafka, KafkaNodePool, KafkaTopic, KafkaUser, 그 밖의 CR |

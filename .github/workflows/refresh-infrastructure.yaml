@@ -1,0 +1,28 @@
+name: Refresh infrastructure
+on:
+  workflow_dispatch:
+    inputs:
+      content_role_name:
+        description: Existing Content IAM role name (blank discovers its Pod Identity association)
+        required: false
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: refresh-infrastructure
+  cancel-in-progress: false
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: '197179613039'
+      - name: Provision private S3 and Pod Identity
+        env:
+          CONTENT_ROLE_NAME: ${{ inputs.content_role_name }}
+        run: bash deploy/setup-refresh.sh

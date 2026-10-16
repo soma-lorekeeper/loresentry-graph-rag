@@ -56,8 +56,8 @@ The OpenAI Responses adapter and local HTTP integration are implemented. Convers
 responses verify the refresh flow. Real OpenAI calls are also evaluated against synthetic
 novel fixtures; see [refresh quality changes and validation](docs/migration/refresh-quality.md)
 for measured results and limits. A real [S3 artifact adapter](docs/implementation/S3_ARTIFACTS.md) is available through
-service injection; the evaluation CLI still uses fake stores. HTTP/Kafka refresh entry points
-are not implemented. See
+service injection; the evaluation CLI still uses fake stores. Kafka refresh entry points are connected through the business runtime;
+Content owns the request HTTP API. See
 [OpenAI migration results](docs/migration/openai-adapter.md).
 
 The Responses adapter provides no seed setting and leaves `reasoning.effort` at the
@@ -97,14 +97,17 @@ The [Kafka polling worker](docs/implementation/KAFKA_POLLING.md) uses
 `confluent-kafka==2.16.0` for real polling and manual commits, with fake message
 handling and publishing. FastAPI starts and stops it automatically when
 `KAFKA_POLLING_ENABLED=true`; GitOps supplies the broker address and sandbox topic.
-The standalone `scripts.poll_kafka` CLI is also available. Business event mapping
-and live completion publishing remain pending.
+The standalone `scripts.poll_kafka` CLI is also available.
+The [Kafka transport adapters](docs/implementation/KAFKA_TRANSPORT.md) implement
+Content envelope validation, acknowledged completion/DLQ publishing, explicit business
+handler injection, and bounded retries. Business payload mapping, ordered projection, refresh assembly, and FastAPI runtime
+wiring are implemented. Business consumers are opt-in; the sandbox retains fake processing.
 
 The [graph projection adapter](docs/implementation/GRAPH_PROJECTION.md) writes
 Content document nodes, undirected relation pairs, and completed-event Inbox
 records in one Neptune HTTPS Gremlin request. A fake consumer and fixture CLI
 exercise the shared handler without Kafka. Input batches are an internal contract;
-the Content Kafka payload schema and live consumer are still pending.
+the live Content consumer uses the sequenced snapshot path with deletion tombstones.
 
 Local TinkerTransactionGraph tests verify mutations, rollback, project isolation,
 duplicates, and lost commit responses. AWS Neptune deployment validation remains
@@ -212,4 +215,4 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 - User-facing graph queries against Amazon Neptune. Projection writes and Inbox
   are implemented through the explicit fixture entry point; AWS validation remains.
 - General RAG/GraphRAG retrieval beyond refresh's one-hop relation lookup.
-- The Kafka consumer for `loresentry-content` change events. Broker availability is outside this implementation’s verification scope.
+- Production refresh activation requires the private S3/Pod Identity infrastructure and GitOps enablement described in [deployment](deploy/README.md).

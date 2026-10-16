@@ -1,0 +1,50 @@
+# Linux-only disposable Content/S3 dependencies. Start test Kafka and Gremlin first.
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_USER: content_svc
+      POSTGRES_PASSWORD: local-content-test
+      POSTGRES_DB: content
+    ports:
+      - 127.0.0.1:15432:5432
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U content_svc -d content]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  s3:
+    image: chrislusf/seaweedfs@sha256:6523f79308a4d4600b427c8e4e997f890560f4985c357567bfffd970a61ce827
+    command: [server, -s3, -dir=/data, -ip=127.0.0.1, -ip.bind=127.0.0.1, -master.port=19333, -volume.port=19334, -filer.port=19888, -s3.port=18333, -s3.config=/etc/s3-test-identity.json, -volume.max=8, -master.volumeSizeLimitMB=64]
+    network_mode: host
+    volumes:
+      - ./s3-test-identity.json:/etc/s3-test-identity.json:ro
+    mem_limit: 512m
+  content:
+    image: eclipse-temurin:21-jdk-alpine
+    command: [java, -jar, /app/content.jar, --server.port=18002, --server.address=127.0.0.1]
+    network_mode: host
+    volumes:
+      - ../../../loresentry-content/build/libs/content-0.0.1-SNAPSHOT.jar:/app/content.jar:ro
+    environment:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '15432'
+      DB_NAME: content
+      DB_USERNAME: content_svc
+      DB_PASSWORD: local-content-test
+      KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:19092
+      KAFKA_CONSUMER_GRAPH_REFRESH_COMPLETED_ENABLED: 'true'
+      GRAPH_REFRESH_ENABLED: 'true'
+      GRAPHRAG_S3_BUCKET: refresh-fullstack-test
+      AWS_ENDPOINT_URL_S3: http://127.0.0.1:18333
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local-test-only
+      AWS_SECRET_ACCESS_KEY: local-test-only
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:18002/health/db']
+      interval: 3s
+      timeout: 3s
+      retries: 30

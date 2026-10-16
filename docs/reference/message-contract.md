@@ -1,8 +1,8 @@
 # Lore Sentry 메시지 계약 초안
 
-문서·본문·관계·revision_no의 의미는 [Content 기준 용어집](../domain-glossary.md)을 따른다. 이벤트의 FileChanged·file_id·files는 Content API 이름을 유지하지만 모두 도메인 문서를 가리킨다. 아래 payload는 구현 전 계약 초안이며 기존 배포 스키마의 변경 완료를 뜻하지 않는다.
+문서·본문·관계·revision_no의 의미는 [Content 기준 용어집](../domain-glossary.md)을 따른다. 이벤트의 FileChanged·file_id·files는 Content API 이름을 유지하지만 모두 도메인 문서를 가리킨다. 아래에는 원래 payload 초안과 설계 메모가 남아 있다. 실제 ContentEvents·GraphRAG handler의 현재 필드와 동작은 [업무 송수신 계약](../implementation/KAFKA_TRANSPORT.md)을 우선한다.
 
-이벤트·topic·키·value·header·호환성·크기·S3 Claim Check·DLQ 규약을 모은다. 원문에 적힌 설계안이며 배포된 설정을 확인한 문서는 아니다.
+이벤트·topic·키·value·header·호환성·크기·S3 Claim Check·DLQ 규약을 모은다. 원문의 payload 설계안을 유지하되 Content main `44e074e`에 구현된 헤더·관계 저장 구조를 반영했다. 배포된 설정을 확인한 문서는 아니다. 실제 코드 범위와 GraphRAG 구현안은 [발행](../PUBLISHER.md)·[소비](../CONSUMER.md)를 기준으로 한다.
 
 관련 문서: [Outbox 구현 예시](outbox.md), [Inbox 구현 예시](inbox.md), [미결정 사항](README.md#미결정과-미작성-항목).
 
@@ -19,8 +19,8 @@
 - 공통 필드 **event_id**, **event_type**, **occurred_at**는 header로 보냄(각각 ce_id, ce_type, ce_time, Headers 규약). 필드 이름은 content API와 같은 snake_case.
 - **FileChanged**
   - 변경분이 아니라 파일의 현재 상태 전체를 담음.
-  - 본문만 바뀐 저장도 발행함. search는 본문으로 색인하고, graph-rag는 changed_fields를 보고 할 일이 없으면 바로 offset commit.
-  - 관계는 업무상 무방향 연결이고 현재 Content 저장은 양방향 두 행이다. 관계 변경 시 양쪽 문서 이벤트 발행이 필요하며, 대상 분류에 따라 양쪽 relation_key가 달라진다.
+  - 본문만 바뀐 저장도 발행하는 설계다. search는 본문으로 색인한다. GraphRAG 초기 구현안은 정상 처리하며, skip 최적화는 [소비 문서](../CONSUMER.md)의 Inbox·순서 보존 조건을 먼저 충족해야 한다.
+  - 관계는 업무상 무방향 연결이며 Content V10부터 문서 쌍당 한 행으로 저장한다. 양쪽 문서에서 바라본 relation_key는 상대 분류에 따라 달라질 수 있다. 양쪽 스냅샷의 발행·삭제·순서 계약은 도메인 생산 코드에서 구현해야 한다.
   - 파일을 영구 삭제하면 관계가 있던 상대 파일들의 이벤트도 발행. 관계 행이 CASCADE로 같이 지워지므로.
   - 휴지통 이동은 graph-rag, search에서 지우지 않고 trashed_at, is_trashed로 표시만 함. 조회와 그래프 탐색에서 휴지통 파일을 거르고, 복원하면 RESTORED 스냅샷으로 덮어쓰며 표시를 지움.
   ```json
@@ -46,14 +46,11 @@
   }
   ```
 
-  - **version — 미결정**: 문서 조건부 저장에서 증가하는 `revision_no`와 별도로, 이름 변경·폴더 이동·휴지통 처리까지 포함한 파일 이벤트의 순서를 표현하려는 값이다.
-    - 원문에는 파일별 증가 컬럼을 추가하는 안과 `outbox_id`를 사용하는 메모가 함께 있다.
-    - 아래 헤더 규약은 outbox 행 id를 UUID로 정의한다. 이벤트 식별자와 순서 비교 값의 관계를 확정하기 전에는 두 안을 하나의 구현 계약으로 취급하지 않는다.
-    - `revision_no`와 관계 저장 구조도 함께 결정해야 한다.
+  - **version — payload 미확정**: 위 예시는 원래 초안이다. Content relay는 V14의 정수 `seq`를 헤더 `ce_sequence`로 보낸다. UUID `ce_id`, 본문 저장의 `revision_no`와 다른 값이며 INSERT 순서를 나타내고 DB commit 순서를 보장하지 않는다. payload version의 유지·대체 여부와 문서·관계·삭제의 stale 판정은 생산자·소비자가 합의해야 한다. [투영 계약](../implementation/KAFKA_TRANSPORT.md#content와-합친-계약)을 따른다.
   - **change_type**: CREATED, UPDATED, TRASHED, RESTORED, DELETED. TRASHED와 DELETED면 file, relations는 null.
   - **changed_fields**: TITLE, BODY, FOLDER, RELATIONS 중 바뀐 것. 소비자가 건너뛸지 판단하는 힌트라서, 무시하고 전체를 적용해도 결과가 같아야 함.
   - **body_text**: 서버가 에디터 JSON(body_json)에서 뽑은 순수 텍스트. 에디터 JSON은 싣지 않음. 상한이 100만 자라 크기 제한 섹션에서 claim check 기준을 정함.
-  - **relations**: 현재 문서에서 바라본 관계 행 목록. target_document_id는 상대 문서, relation_key는 상대 분류의 참조 키, description은 연결 자체의 설명이다. relation_id는 방향별 저장 행 ID이므로 양쪽 이벤트에서 같은 ID·키를 공유한다고 가정하지 않는다. 관계도 연결은 문서 쌍으로 중복 제거한다.
+  - **relations**: 현재 문서에서 바라본 관계 목록. target_document_id는 상대 문서, relation_key는 상대 분류의 참조 키, description은 연결 설명이다. relation_id는 무방향 저장 행 ID를 사용하며 양쪽에서 같은 ID를 유지한다. 이 배열은 초안이며 기존 투영의 low/high 쌍 및 누락 관계 제거 규칙과 연결해야 한다.
 - **ProjectDeleted**
   - 프로젝트를 영구 삭제하는 트랜잭션에서 같이 씀. 휴지통 이동은 발행하지 않음.
   - 유저 삭제도 이 이벤트로 전파됨. content가 UserDeleted를 받아 그 유저의 프로젝트를 지우면서 프로젝트마다 하나씩 발행.
@@ -130,7 +127,7 @@
   - 버전은 v1부터 시작하고, 호환이 깨지는 변경일 때만 새 버전 topic을 만듦.
   - DLQ는 `<원본 topic>.<소비자 서비스>.dlq`(DLQ 섹션). 재시도 topic은 순서를 깨므로 두지 않음.
 - **key**
-  - `content.project.changed.v1`은 project_id. 프로젝트 안의 모든 변경(파일, 관계, 삭제)이 커밋 순서대로 처리되고, 한 파일의 순서도 같이 지켜짐.
+  - `content.project.changed.v1`은 project_id. 같은 프로젝트를 같은 파티션에 모은다. Kafka에 기록된 순서를 보존하지만 DB 커밋 순서·relay 재전송·DLQ 재투입 순서는 별도 문제다. 현재 relay의 seq 정렬만으로 커밋 순서를 보장하지 않는다.
   - file_id로 하면 ProjectDeleted가 그 프로젝트의 파일 이벤트보다 먼저 처리될 수 있고, 관계 변경으로 함께 나가는 두 파일 이벤트의 순서도 섞임.
   - 대신 한 프로젝트 안에서는 병렬 처리가 안 됨. 프로젝트끼리는 partition에 나뉘어 병렬로 처리되고, 지금 트래픽에는 충분함.
   - 그래프 최신화 topic도 project_id. 프로젝트별 갱신안 요청을 직렬로 관리하므로 같은 프로젝트의 요청은 순서대로 하나씩 처리되어야 함. 요청과 결과의 짝은 key가 아니라 payload의 request_id로 맞춤.
@@ -169,6 +166,8 @@
 | `ce_id`          | event_id. outbox 행 id(UUID)이고 Inbox 키      | O    |
 | `ce_type`        | event_type. Event 섹션의 이름(FileChanged 등)  | O    |
 | `ce_source`      | 발행 서비스. `/content`, `/graph-rag`, `/auth` | O    |
+| `ce_subject`     | FileChanged는 file_id, ProjectDeleted는 project_id, refresh 요청·완료는 request_id, UserDeleted는 user_id | O |
+| `ce_sequence`    | Content Outbox의 seq. 양의 정수 UTF-8 문자열. revision_no·UUID와 다름 | 변경 토픽 필수. Content relay는 모든 이벤트에 추가 |
 | `ce_time`        | occurred_at. RFC 3339                          | O    |
 | `content-type`   | `application/json`                             | O    |
 | `traceparent`    | W3C Trace Context. 분산 추적을 붙일 때         | 선택 |
@@ -179,7 +178,7 @@
 
 ## Schema versioning
 
-- 스키마는 이벤트마다 JSON Schema 파일 하나. 위치는 docs 저장소 `events/schemas/<event>.v1.json`.
+- 스키마는 이벤트마다 JSON Schema 파일 하나를 두는 설계다. 예정 위치는 docs 저장소 `events/schemas/<event>.v1.json`이며 현재 해당 파일은 없다.
   - producer 테스트는 발행하는 payload를 스키마로 검증하고, consumer 테스트는 스키마의 예시 payload로 검증.
 - **호환 규칙**
   - 기본은 FULL. 옛 소비자가 새 메시지를, 새 소비자가 옛 메시지를 모두 읽을 수 있어야 함.
@@ -206,7 +205,7 @@
   - 한도를 넘으면 producer가 바로 예외를 냄. outbox 행을 격리하고 알림([Outbox 발행 실패 처리](outbox.md#5-발행-실패-처리-계단)).
 - **발행량과 디스크**
   - broker 3대에 replica 3이라 모든 broker가 전체 데이터를 가짐. broker당 디스크 10Gi이고 KRaft 메타데이터도 같은 볼륨을 씀.
-  - relay는 같은 파일의 아직 안 보낸 FileChanged 중 최신 하나만 보냄. 건너뛴 이벤트의 changed_fields는 합쳐서 보냄. 합치지 않으면 소비자가 건너뛰기 판단을 잘못해 변경을 놓침.
+  - 같은 파일의 미발행 FileChanged 병합은 원문의 최적화안이며 현재 Content relay에는 없다. 도입 시 changed_fields 합집합과 순서·삭제 의미를 함께 보존해야 한다.
   - `content.project.changed.v1`은 `retention.bytes` partition당 512MiB, `segment.bytes` 128MiB. 아직 닫히지 않은 segment가 partition마다 하나 더 있어 broker당 최대 약 3.75GiB.
   - 그 DLQ들은 `retention.bytes` partition당 256MiB, `segment.bytes` 64MiB(broker당 최대 약 1.9GiB). 소비자 하나가 모든 이벤트를 DLQ로 보내면 본문 topic이 통째로 복사되는데, broker 3대가 같은 데이터를 갖고 KRaft 메타데이터도 같은 디스크를 써서 클러스터 전체가 멈춤.
   - broker 디스크 사용량 알림(예: 70%).
@@ -226,7 +225,7 @@
   - Lifecycle 규칙: `refresh/`는 생성 후 3일에 만료, 끝나지 않은 multipart 업로드는 1일 뒤 정리.
   - 3일인 이유: content의 최신화 타임아웃(예: 1시간)이 지나면 객체를 다시 쓰지 않음. 장애를 들여다볼 여유만 둠.
   - S3는 만료를 다음 00:00 UTC에 맞춰 비동기로 처리하므로 실제로는 3~4일.
-  - 만료 뒤 DLQ 재처리에서 객체가 없으면(NoSuchKey) 지난 요청으로 보고 건너뜀.
+  - 만료 뒤 DLQ 재처리의 객체 미존재 skip은 원문의 제안이다. 현재 RefreshService에 그대로 적용하지 않는다. 업무 실패 완료와 DLQ·새 요청 생성의 경계는 [소비 문서](../implementation/KAFKA_TRANSPORT.md#content와-합친-계약)를 따른다.
   - 프로젝트 삭제: ProjectDeleted를 쓰는 트랜잭션이 커밋된 뒤 content가 `refresh/{project_id}/`를 지움(목록 조회 후 일괄 삭제).
   - graph-rag는 다른 topic을 읽으므로 삭제 뒤에 result를 쓸 수 있음. content는 삭제된 프로젝트의 완료 이벤트를 받으면 그 result도 지움. 나머지는 Lifecycle이 치움.
 

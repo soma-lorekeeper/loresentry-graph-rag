@@ -6,8 +6,10 @@
 
 현재 GraphRAG는 서비스 식별·프로세스 상태·Neptune 연결 확인 API를 제공한다.
 그래프 투영 저장·refresh 원홉 조회·Content HTTP 조회는 내부 조립 경로로 구현했다.
-일반 RAG/GraphRAG 검색 API와 업무 이벤트의 Kafka 소비 진입점은 아직 없다.
+일반 RAG/GraphRAG 검색 API는 아직 없다. 업무 Kafka 소비·투영·refresh 진입점은 구현했고 기본 비활성이다.
 [Kafka polling worker](implementation/KAFKA_POLLING.md)는 실제 수신·commit과 fake 업무 처리를 제공한다.
+[Kafka 송수신 기반](implementation/KAFKA_TRANSPORT.md)은 공통 wire 검증·실제 완료/DLQ 전송·
+재시도·업무 payload 변환·실제 IO 조립과 FastAPI runtime을 제공한다.
 진단 유스케이스에는 순수 판단·애플리케이션 조율·HTTP 어댑터 분리를 적용했다.
 내부 갱신안 생성은 기존 설정 본문 수정, 원고에서 발견한 새 설정 문서 생성, 관계 ADD를 제안한다.
 원고 본문은 읽기 전용이며 최초 입력 보존을 평가한다. 생성 후보와 관계는 임시 ID로 연결하고
@@ -24,6 +26,7 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 
 | 필요한 작업·질문 | 기준 문서 | 담당 내용 |
 |---|---|---|
+| 실제 Kafka 송수신 기반을 어떻게 조립하는가? | [Kafka 송수신 기반](implementation/KAFKA_TRANSPORT.md) | parser·publisher·명시적 handler·재시도·DLQ·worker 연결과 실제 broker 테스트 |
 | 제공해야 할 기능과 현재 구현 범위는 무엇인가? | [기능 요구사항 명세서](FUNCTIONAL_REQUIREMENTS.md) | 진단·갱신안·저장·복구·후속 검색 기능의 요구사항과 수용 기준 |
 | 무결성·보안·복구·성능·품질 조건은 무엇인가? | [비기능 요구사항 명세서](NON_FUNCTIONAL_REQUIREMENTS.md) | 구현된 자원 한도·품질 조건과 운영 전 확정할 목표 |
 | 서버는 어떤 구조이고 어디까지 구현됐는가? | [서버 구조](ARCHITECTURE.md) | 모듈 책임·의존 관계·실행 구성·미구현 범위 |
@@ -36,8 +39,8 @@ Content와 사용하는 말부터 맞출 때는 [Content 기준 도메인 용어
 | refresh를 작업 DB 없이 어떻게 재실행하는가? | [완료 Inbox](implementation/REFRESH_INBOX.md) | Neptune 완료 기록·S3 재사용·발행 확인·중복 및 실패 경계 |
 | 현재 코드의 어디부터 읽어야 하는가? | [코드 안내](code-guide.md) | 요청 흐름·시작 구성·테스트와 배포 파일 위치 |
 | S3에 어떤 JSON을 주고받으며 소비자는 무엇을 확인하는가? | [S3 입출력 계약](S3_IO_CONTRACT.md) | 객체 위치·입력 문서·요청·스냅샷·v3 결과·해시·불변 저장·완료 전달 |
-| Content와 GraphRAG는 어떤 이벤트를 어떻게 발행하는가? | [Kafka 발행](PUBLISHER.md) | Content Outbox 준비 상태, 완료 저장·발행 순서, 헤더·중복·미확정 사항 |
-| GraphRAG가 어떤 토픽을 소비하고 Content는 완료를 어떻게 받는가? | [Kafka 소비](CONSUMER.md) | 소비 토픽, Content Inbox 준비 상태, 요청 변환·offset·DLQ·복구 경계 |
+| Content와 GraphRAG는 어떤 이벤트를 어떻게 발행하는가? | [Kafka 발행](PUBLISHER.md) | Content main의 relay·설정, GraphRAG 완료 헤더·안정적 ID·실제 publisher 구현안 |
+| GraphRAG가 어떤 토픽을 소비하고 Content는 완료를 어떻게 받는가? | [Kafka 소비](CONSUMER.md) | Content Inbox 기반과 비활성 업무, wire 변환·투영 보완·요청 조립·재시도·DLQ·활성화 조건 |
 | S3 어댑터를 서비스에 어떻게 연결하는가? | [S3 저장소](implementation/S3_ARTIFACTS.md) | 설정·서비스 주입·타임아웃·권한·운영 검증 한계 |
 | 변경 후 무엇을 검증해야 하는가? | [검증 계획](implementation/TEST_PLAN.md) | 기존 테스트 범위·추가 테스트·운영 확인 항목 |
 | 기존 AI 기능을 어떤 순서로 이전하는가? | [마이그레이션 안내](migration/README.md) | 전체 이전 범위, 갱신안 생성 우선 계획, 후속 마이그레이션 |

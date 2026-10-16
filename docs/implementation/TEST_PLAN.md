@@ -51,7 +51,37 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 
 그래프 저장·검색·이벤트 소비가 추가되면 프로젝트 격리, 접근 권한, 휴지통 제외,
 명시적 문서 참조만의 관계 생성, 이벤트 중복·순서·재처리와 AI Chat 연동을 검증해야 한다.
-현재 갱신안 내부 판단은 구현했으며 실제 그래프 저장·검색·이벤트 소비는 미구현이다.
+현재 갱신안 내부 판단·그래프 투영 저장과 sandbox Kafka polling은 구현했다.
+공통 Kafka wire 검증·완료/DLQ publisher·재시도 기반도 구현했다.
+업무 payload 변환·서비스/runtime 연결도 구현했다. 일반 검색은 미구현이다.
+
+## Kafka 업무 연동 추가 검증
+
+다음은 [소비](../CONSUMER.md)·[발행](../PUBLISHER.md)의 전체 업무 연동 수용 기준이다.
+현재 [송수신 기반](KAFKA_TRANSPORT.md)의 단위·broker 테스트가 공통 검증·발행·재시도·DLQ·offset
+일부를 확인한다. 실제 Content HTTP·PostgreSQL·Kafka·Gremlin·S3 호환 왕복은 [전체 연동 테스트](../../tests/fullstack/README.md)로 별도 검증한다. 원격 모델·AWS·운영 rollout과 구분한다.
+
+| 검증 범위 | 필요한 시나리오와 성공 기준 |
+| --- | --- |
+| wire parser | Content 방식의 헤더·key·payload fixture 수용. 누락·중복 헤더, UTF-8/JSON 오류, UUID·subject·project 불일치, 미지 enum은 거절. 모르는 필드는 무시, 미지원 ce_type은 skip |
+| 숫자·순서 | ce_sequence의 64비트 경계·잘못된 값 거절. seq와 revision 구분. 서로 다른 문서의 늦은 작은 seq를 프로젝트 최대값만으로 폐기하지 않음 |
+| 관계 스냅샷 | 무방향 ID·low/high 보존. 관계 목록 축소·삭제·양쪽 이벤트 역전 후에도 최신 관계 유지. 타 프로젝트 변경 차단 |
+| 휴지통·삭제 | TRASHED의 file=null, 복원, 문서/프로젝트 삭제 뒤 stale 이벤트·DLQ 재투입, 늦은 refresh가 데이터를 부활시키지 않음 |
+| 투영 원자성 | 그래프+Inbox+순서/tombstone 저장 전 실패는 모두 롤백. 응답 유실 뒤 재수신은 중복 성공. 같은 ce_id에 다른 내용은 충돌 |
+| refresh 조립 | fingerprint·manifest·선택/모델 설정·신뢰한 user_id 검증. 입력/설정 충돌 거절. 재배포 후 같은 요청은 최초 설정 복원. 그래프 미준비 상태를 READY로 대체하지 않음 |
+| publisher | produce 반환만으로 성공 아님. callback 성공·실패, 큐 포화, 기한 초과·불명확한 ack를 구분. 실패 시 완료 Inbox·offset 유지 |
+| 완료 호환 | 실제 publisher 레코드가 Content InboxMessages와 같은 검증을 통과. subject=request_id, 결과/오류 조합·null·S3 위치 검증. UUIDv5 namespace 고정과 재시작 후 동일 ID |
+| refresh 복구 | 결과 저장 뒤·Kafka ack 뒤·Inbox 저장 뒤 각각 중단해 복구. 저장 결과 재사용, 완료 Inbox가 있으면 모델/발행 생략. FAILED 업무 완료는 DLQ 중복 전송 없음 |
+| 재시도·DLQ | 5회 backoff, 즉시 거절, shutdown 중 대기 중단. 원본 바이트·핵심 실패 헤더 인코딩 보존. 원본 파티션 3~5의 레코드도 3개 파티션 DLQ로 정상 전송 |
+| DLQ 장애 | ack 전 실패 시 offset 유지. ack 후 commit 전 중단의 중복 허용. 4 MiB 경계 원본에 실패 헤더를 추가해 크기 초과 시에도 유실 없음 |
+| poll·할당 | 긴 처리·재시도 중 poll 지속. revoke/lost 뒤 옛 작업 offset 미commit. commit 응답 유실 뒤 Inbox 복구. refresh가 투영 worker를 막지 않음 |
+| 수명주기 | 비활성·잘못된 설정·필수 의존성 누락·worker 실패의 health 반영. fake가 업무 토픽을 거절. SIGTERM·강제 종료·grace period 경계 검증 |
+| 실제 통합 | 일회용 broker에서 Content 형식 입력→GraphRAG 저장→완료 레코드→Content parser 왕복. Content 업무 구현 후 refresh_runs·v3 제안 수용·request_id 중복·삭제 결과 정리까지 별도 확인 |
+
+통합 테스트는 실제 Kafka 전송과 로컬 저장소 검증을 단계적으로 결합하고, 장애 지점은
+결정적으로 주입한다. Content fixture의 수기 복제만으로 호환을 판정하지 않고 실제 Java 변환·
+검증 코드와 교차 확인한다. 운영 활성화에는 별도로 토픽 선언·ACL·broker 접근·S3 권한과
+객체 보존·Neptune 원자성·종료 예산·lag/DLQ 경고·전체 재동기화 경로를 확인한다.
 
 
 ## 갱신안 rules와 fake IO

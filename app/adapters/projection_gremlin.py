@@ -89,6 +89,11 @@ def build_projection_query(change: ProjectionChange, processed_at: str) -> str:
         f"__.addV('InboxEvent').property(T.id,{literal(change.inbox_id)})"
         + _properties({**inbox_properties, "processed_at": processed_at}, vertex=True)
     )
+    if change.sequence is not None:
+        from app.adapters.ordered_projection import ordered_mutations
+
+        applied += f".sideEffect({ordered_mutations(change)}).constant('APPLIED')"
+        return f"g.V({literal(change.inbox_id)}).fold().coalesce({duplicate},{applied})"
     mutations: list[str] = []
     if change.event_type == "ProjectDeleted":
         mutations.append(
