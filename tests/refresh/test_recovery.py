@@ -83,7 +83,7 @@ def test_completed_duplicate_and_conflicting_input_do_not_generate_again():
     s.calls.events.clear()
     assert s.service().run(s.request) == first
     assert s.calls.names() == ["inbox.find"]
-    assert s.publisher.delivered == [first]
+    assert [entry.completion for entry in s.inbox.pending()] == [first]
     with pytest.raises(RequestConflict):
         s.service().run(replace(s.request, required_graph_version="changed"))
     assert s.inbox.find(s.request) == first
@@ -111,18 +111,8 @@ def test_model_retry_reuses_frozen_context_despite_source_changes():
     assert s.calls.names().count("model.generate") == 2
 
 
-@pytest.mark.parametrize(
-    "operation,delivered_before,already_completed",
-    [
-        ("publisher.publish", 0, False),
-        ("publisher.ack", 1, False),
-        ("inbox.complete", 1, False),
-        ("inbox.ack", 1, True),
-    ],
-)
-def test_saved_result_recovers_without_regeneration(
-    operation, delivered_before, already_completed
-):
+@pytest.mark.parametrize("operation", ["inbox.complete", "inbox.ack"])
+def test_saved_result_recovers_without_regeneration(operation):
     s = scenario()
     s.calls.failures[operation].append(failure())
     with pytest.raises(RefreshFailure):
@@ -130,7 +120,7 @@ def test_saved_result_recovers_without_regeneration(
     stored = s.artifacts.read_result(s.request)
     assert replace(stored, attempts=()) == s.result
     assert len(stored.attempts) == 1
-    assert len(s.publisher.delivered) == delivered_before
+    assert s.publisher.delivered == []
     s.artifacts.inputs.clear()
     s.documents.documents.clear()
     s.inbox = FakeInbox(s.inbox.records, s.calls)
@@ -138,8 +128,9 @@ def test_saved_result_recovers_without_regeneration(
     assert s.calls.names().count("model.generate") == 1
     assert s.calls.names().count("documents.fetch_documents") == 1
     assert s.inbox.find(s.request) == done
-    assert len(s.publisher.delivered) == delivered_before + (not already_completed)
-    assert all(item == done for item in s.publisher.delivered)
+    assert len(s.inbox.pending()) == 1
+    assert s.publisher.delivered == []
+    assert s.inbox.pending()[0].completion == done
 
 
 def test_result_save_failure_can_require_another_model_call():
@@ -174,7 +165,7 @@ def test_completed_inbox_skips_io_even_when_old_artifacts_are_gone():
     s.calls.events.clear()
     assert s.service().run(s.request) == first
     assert s.calls.names() == ["inbox.find"]
-    assert s.publisher.delivered == [first]
+    assert [entry.completion for entry in s.inbox.pending()] == [first]
 
 
 @pytest.mark.parametrize(

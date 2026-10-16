@@ -25,7 +25,6 @@ from evaluation.fakes import (
     FakeInbox,
     FakeJsonArtifacts,
     FakeModel,
-    FakePublisher,
     FakeRelations,
 )
 from tests.fakes.content import content_payload
@@ -83,7 +82,6 @@ def service(adapter, calls, artifacts, model, related):
         documents=adapter,
         model=model,
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
     )
 
 

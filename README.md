@@ -122,8 +122,10 @@ document APIs, preserves body text and revision (including zero), and checks sco
 Query failures or missing projected seeds stop generation.
 
 Refresh recovery uses a [completion Inbox](docs/implementation/REFRESH_INBOX.md)
-in Neptune and immutable S3 artifacts. It records completion after the publisher
-acknowledges delivery; unfinished requests reuse saved results or run again.
+in Neptune and immutable S3 artifacts. Completion and a pending Outbox event are
+recorded atomically before the request offset is committed. A separate relay
+retries Kafka delivery and marks the event sent only after acknowledgment;
+unfinished requests reuse saved results or run again.
 There is no separate job-state store or execution lease. Fact validation keeps
 source wording and known document references, while surface-to-document-name or
 alias equality no longer blocks a proposal.

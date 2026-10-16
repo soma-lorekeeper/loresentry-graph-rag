@@ -2,9 +2,10 @@
 
 from collections import defaultdict, deque
 from copy import deepcopy
+from datetime import UTC, datetime
 
 from app.refresh.errors import RefreshFailure, RequestConflict
-from app.refresh.inbox import validate_completion
+from app.refresh.inbox import PendingCompletion, validate_completion
 from app.refresh.models import (
     ArtifactRef,
     DocumentBatch,
@@ -147,7 +148,7 @@ class FakeModel:
 
 
 class FakeInbox:
-    """완료 기록만 보존하는 메모리 대체 구현. 실행 잠금·진행 상태는 없다."""
+    """완료·발행 대기를 함께 보존하는 메모리 대체 구현. 실행 잠금은 없다."""
 
     def __init__(self, records=None, calls=None):
         self.records = deepcopy(records or {})
@@ -158,7 +159,7 @@ class FakeInbox:
         record = self.records.get(identity(request))
         if record is None:
             return None
-        saved_request, completion = record
+        saved_request, completion = record[:2]
         if saved_request != request:
             raise RequestConflict("Inbox request ID already has different inputs")
         return deepcopy(completion)
@@ -169,8 +170,25 @@ class FakeInbox:
         previous = self.find(request)
         if previous is not None and previous != completion:
             raise RequestConflict("Inbox completion is immutable")
-        self.records[identity(request)] = deepcopy((request, completion))
+        if previous is None:
+            entry = PendingCompletion(
+                str(identity(request)), completion, datetime.now(UTC)
+            )
+            self.records[identity(request)] = deepcopy((request, completion, entry))
         self.calls.record("inbox.ack", request, completion)
+
+    def pending(self, limit=50):
+        return [deepcopy(record[2]) for record in self.records.values() if record[2]][
+            :limit
+        ]
+
+    def mark_sent(self, entry):
+        self.calls.record("outbox.mark_sent", entry)
+        for key, record in self.records.items():
+            if record[2] == entry:
+                self.records[key] = (*record[:2], None)
+                break
+        self.calls.record("outbox.ack", entry)
 
 
 class FakePublisher:
@@ -178,7 +196,7 @@ class FakePublisher:
         self.calls = calls if calls is not None else Calls()
         self.delivered = []
 
-    def publish(self, completion):
+    def publish(self, completion, *, occurred_at=None):
         self.calls.record("publisher.publish", completion)
         self.delivered.append(deepcopy(completion))
         self.calls.record("publisher.ack", completion)

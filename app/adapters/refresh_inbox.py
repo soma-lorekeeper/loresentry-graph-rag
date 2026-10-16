@@ -1,4 +1,4 @@
-"""Neptune writer에 refresh 완료 기록만 보관한다. 실행 잠금·진행 상태는 없다."""
+"""Neptune writer의 한 Inbox vertex에 처리 완료와 Outbox 발행 대기를 기록한다."""
 
 from datetime import UTC, datetime
 from typing import Literal
@@ -14,7 +14,12 @@ from app.adapters.neptune_client import (
 from app.adapters.projection_gremlin import literal
 from app.adapters.refresh_schema import StrictObject, json_bytes
 from app.refresh.errors import RefreshFailure, RequestConflict
-from app.refresh.inbox import CONSUMER_NAME, request_digest, validate_completion
+from app.refresh.inbox import (
+    CONSUMER_NAME,
+    PendingCompletion,
+    request_digest,
+    validate_completion,
+)
 from app.refresh.models import Completion, Failure, RefreshRequest
 
 CONFLICT = "REFRESH_INBOX_CONFLICT"
@@ -42,7 +47,7 @@ def _identity(request: RefreshRequest) -> tuple[str, str]:
 
 
 class NeptuneRefreshInbox(NeptuneGremlinClient):
-    """Inbox 존재는 결과 저장과 완료 발행 확인이 끝났다는 의미다."""
+    """Inbox 존재는 결과 저장·발행 대기 기록 완료다. Kafka ack와는 독립적이다."""
 
     def _execute(self, query):
         try:
@@ -102,6 +107,7 @@ class NeptuneRefreshInbox(NeptuneGremlinClient):
             "request_sha256": request_digest(request),
             "completion_json": encoded,
             "processed_at": datetime.now(UTC).isoformat(),
+            "outbox_pending": "true",
         }
         duplicate = (
             f"__.unfold().choose({matches}.has('completion_json',{literal(encoded)}),"
@@ -119,4 +125,51 @@ class NeptuneRefreshInbox(NeptuneGremlinClient):
             f"g.V({literal(identifier)}).fold().coalesce({duplicate},{inserted})"
         )
         if result not in (["APPLIED"], ["DUPLICATE"]):
+            self._invalid()
+
+    def pending(self, limit: int = 50) -> list[PendingCompletion]:
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("Invalid Outbox batch size")
+        rows = self._execute(
+            "g.V().hasLabel('InboxEvent')"
+            f".has('consumer_name',{literal(CONSUMER_NAME)})"
+            ".has('outbox_pending','true').order().by('processed_at')"
+            f".limit({limit}).project('identifier','receipt','created_at')"
+            ".by(id()).by('completion_json').by('processed_at')"
+        )
+        entries = []
+        for row in rows:
+            try:
+                receipt = Receipt.model_validate_json(row["receipt"])
+                completion = receipt.completion
+                expected = (
+                    f"inbox:{CONSUMER_NAME}:"
+                    f"{completion.job.project_id}:{completion.job.request_id}"
+                )
+                created_at = datetime.fromisoformat(row["created_at"])
+                if (
+                    row["identifier"] != expected
+                    or completion.result_ref is None
+                    or created_at.utcoffset() is None
+                ):
+                    self._invalid()
+                entries.append(PendingCompletion(expected, completion, created_at))
+            except (KeyError, TypeError, ValueError):
+                self._invalid()
+        return entries
+
+    def mark_sent(self, entry: PendingCompletion) -> None:
+        encoded = json_bytes(
+            Receipt(
+                schema_version="refresh-inbox-v1", completion=entry.completion
+            ).model_dump(mode="json")
+        ).decode("utf-8")
+        result = self._execute(
+            f"g.V({literal(entry.identifier)}).hasLabel('InboxEvent')"
+            f".has('consumer_name',{literal(CONSUMER_NAME)})"
+            f".has('completion_json',{literal(encoded)})"
+            f".has('processed_at',{literal(entry.created_at.isoformat())})"
+            ".property(single,'outbox_pending','false').constant('SENT')"
+        )
+        if result != ["SENT"]:
             self._invalid()

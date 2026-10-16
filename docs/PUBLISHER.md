@@ -16,11 +16,11 @@ Content에는 relay·메시지 변환·발행 확인·실패 기록·정리 작�
 완료·사용자 삭제 업무 처리도 연결했으며 listener 활성화는 별도 설정이다.
 요청 API는 입력 S3 저장 뒤 refresh_runs와 GraphRefreshRequested를 함께 commit한다.
 
-GraphRAG는 `RefreshCompletionPublisher`, `completion_to_payload`, 결과 저장·발행·완료 Inbox
+GraphRAG는 `RefreshCompletionPublisher`, `completion_to_payload`, 결과 저장·Inbox/Outbox·relay
 조율과 실제 `KafkaPublisher`의 완료·DLQ 전송을 구현했다.
 [송수신 기반](implementation/KAFKA_TRANSPORT.md)에 조립 방법과 검증 범위를 정리했다.
 기존 `FakeProducer`는 별도의 sandbox이며 완료 이벤트를 발행하지 않는다.
-업무 runtime·RefreshService 주입도 연결했다. 업무별 enabled는 기본 false이며
+업무 runtime은 완료 Outbox relay를 별도 스레드로 실행한다. 업무별 enabled는 기본 false이며
 의존성 설정과 배포 조건은 [운영 안내](../deploy/README.md)를 따른다.
 
 ## 발행 대상
@@ -68,14 +68,18 @@ relay 자체는 조회된 행의 `seq` 순서로 전송한다. ContentEvents를 
 1. 완료 Inbox가 있으면 완료 값을 반환한다. S3·모델·publisher를 호출하지 않는다.
 2. 저장 결과가 있으면 재사용하고, 없으면 계산한다. 실행 문맥과 결과는 불변 저장한다.
 3. 결과 S3 저장을 확인한다.
-4. `RefreshCompletionPublisher.publish(completion)`이 Kafka 전달 확인까지 기다린다.
-5. 성공한 경우에만 Neptune 완료 Inbox를 기록한다.
-6. 서비스 반환 후 consumer가 해당 요청 offset을 commit한다.
+4. Neptune의 같은 Inbox vertex에 완료 값과 발행 대기를 한 트랜잭션으로 저장한다.
+5. 서비스 반환 후 consumer가 해당 요청 offset을 commit한다.
+6. 별도 `RefreshOutboxRelay`가 대기 이벤트를 읽고 Kafka 전달 확인 후 발행 완료로 표시한다.
+   요청 offset과 전송은 독립적으로 진행한다.
 
-GraphRAG는 S3 결과를 재발행 근거로 사용하므로 PostgreSQL Outbox를 새로 만들지 않는다.
-S3·Kafka·Neptune·offset은 별도 트랜잭션이다. 발행 후 Inbox 저장 실패는 중복 발행을 허용하고,
-Inbox 조회 장애를 미처리로 간주하지 않는다. 동시 실행과 모델 비용 중복은
-[완료 Inbox](implementation/REFRESH_INBOX.md)의 한계를 따른다.
+Neptune Inbox가 Outbox 역할도 맡으며 PostgreSQL을 추가하지 않는다.
+이벤트 ID·payload·발생 시각은 재시도에도 유지한다. 전송 실패는 대기를 유지하고
+최대 30초 backoff로 계속 재시도한다. Kafka ack 뒤 DB 표시 전 중단은 중복 발행을 허용한다.
+Inbox가 있어도 relay는 미발행 건을 처리한다. 중복 요청은 발행 완료를 대기로 되돌리지 않는다.
+기존 pending 속성이 없는 Inbox는 이미 발행한 기록으로 유지한다.
+S3·Neptune·Kafka·offset 전체는 별도 트랜잭션이며 실행 lease는 없다.
+[완료 Inbox·Outbox](implementation/REFRESH_INBOX.md)의 복구·동시 실행 한계를 따른다.
 
 ### 완료 JSON과 헤더
 
@@ -140,9 +144,8 @@ DLQ 헤더가 추가되면 원본 크기 한도 근처에서 broker가 거절할
 이를 테스트하고, 한도 초과 시 원본 offset을 유지하며 경고한다. 본문을 잘라서 보내지 않는다.
 
 종료 시 새 작업을 막고 진행 중 작업·전송을 정해진 종료 예산 안에서 기다린다.
-현재 runtime의 15초 종료 대기는 25초 발행 대기나 긴 LLM 처리에 충분하지 않다.
-총 작업 한도·IO timeout·Pod grace period를 함께 맞추기 전에는 운영 활성화하지 않는다.
-확인되지 않은 발행 때문에 완료 Inbox나 원본 offset을 진행하지 않는다.
+업무 runtime 종료 대기는 기본 360초다. Pod grace period는 이보다 길게 설정한다.
+완료 발행이 확인되지 않으면 Outbox 대기를 유지한다. DLQ는 전달 확인 전 원본 offset을 진행하지 않는다.
 
 ## 구현 검증
 

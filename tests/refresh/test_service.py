@@ -15,7 +15,7 @@ def test_normal_flow_preserves_snapshots_and_orders_io():
     assert len(stored.attempts) == 1
     assert stored.attempts[0].outcome == Outcome.PROPOSED
     assert s.inbox.find(s.request) == done
-    assert s.publisher.delivered == [done]
+    assert [entry.completion for entry in s.inbox.pending()] == [done]
     names = s.calls.names()
     assert names.index("relations.find_related") < names.index(
         "documents.fetch_documents"
@@ -24,8 +24,7 @@ def test_normal_flow_preserves_snapshots_and_orders_io():
     assert names.index("rules.validate_candidate") < names.index(
         "artifacts.save_result"
     )
-    assert names.index("artifacts.save_result") < names.index("publisher.publish")
-    assert names.index("publisher.ack") < names.index("inbox.complete")
+    assert names.index("artifacts.save_result") < names.index("inbox.complete")
     fetched = next(
         args for name, args in s.calls.events if name == "documents.fetch_documents"
     )

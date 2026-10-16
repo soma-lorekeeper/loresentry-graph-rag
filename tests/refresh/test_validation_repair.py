@@ -84,7 +84,6 @@ def repair_scenario(*, target_ids=("haeju",), max_model_calls=20, rules=None):
                 "documents",
                 "relations",
                 "inbox",
-                "publisher",
                 "model",
             )
         },
@@ -752,7 +751,7 @@ def test_saved_result_reuse_does_not_repeat_failed_or_repaired_calls(successful_
     assert again == completion
     assert scenario.artifacts.read_result(scenario.request) == result
     assert len(scenario.model.inputs) == count
-    assert len(scenario.publisher.delivered) == 1
+    assert len(scenario.inbox.pending()) == 1
 
 
 def test_repair_can_return_valid_no_change_without_publishing_failed_proposals():

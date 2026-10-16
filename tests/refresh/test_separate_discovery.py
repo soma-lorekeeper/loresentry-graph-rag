@@ -22,7 +22,6 @@ from tests.fakes.refresh import (
     FakeInbox,
     FakeJsonArtifacts,
     FakeModel,
-    FakePublisher,
     FakeRelations,
 )
 from tests.refresh.test_context import snapshot_fixture
@@ -279,7 +278,6 @@ def service_scenario(*, bad_update=False, call_budget=3):
         documents=FakeDocuments(targets, calls),
         model=model,
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
     )
     return request, service, artifacts, calls
 

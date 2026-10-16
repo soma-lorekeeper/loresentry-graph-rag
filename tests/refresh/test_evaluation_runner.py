@@ -128,7 +128,7 @@ def test_saved_result_retry_never_repeats_model_call():
     case = cases("gpt-5.6-luna", "test")[0]
     budget = CallBudget(2)
     scenario = assemble(case, None, budget)
-    scenario.calls.failures["publisher.ack"].append(
+    scenario.calls.failures["inbox.ack"].append(
         RefreshFailure(Failure("ACK_TIMEOUT", "timeout", True))
     )
     with pytest.raises(RefreshFailure):

@@ -85,8 +85,10 @@ class KafkaPublisher:
         except Exception:
             raise DeliveryError("Kafka delivery polling failed") from None
 
-    def publish(self, completion: Completion) -> None:
-        self.send(completion_record(completion, now=datetime.now(UTC)))
+    def publish(
+        self, completion: Completion, *, occurred_at: datetime | None = None
+    ) -> None:
+        self.send(completion_record(completion, now=occurred_at or datetime.now(UTC)))
 
     def dead_letter(self, record: Record, failure: Exception) -> None:
         self.send(dead_letter_record(record, failure))

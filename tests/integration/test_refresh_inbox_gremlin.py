@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
 from uuid import uuid4
 
 import httpx
@@ -11,6 +12,7 @@ from app.adapters.refresh_inbox import NeptuneRefreshInbox
 from app.projection.models import ProjectionChange
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import ArtifactRef, Completion, Failure, Outcome
+from app.refresh.outbox import RefreshOutboxRelay
 from tests.fakes.scenario import scenario
 from tests.test_refresh_inbox import request
 
@@ -68,21 +70,24 @@ def test_refresh_resumes_saved_result_after_publish_failure_without_a_job_store(
     )
     with NeptuneRefreshInbox(store.endpoint) as inbox:
         s.inbox = inbox
+        done = s.service().run(s.request)
+        assert inbox.find(s.request) == done
+        assert not s.publisher.delivered
         with pytest.raises(RefreshFailure):
-            s.service().run(s.request)
-        assert inbox.find(s.request) is None
+            RefreshOutboxRelay(inbox, s.publisher).drain(Event())
+        assert any(entry.completion == done for entry in inbox.pending())
     s.artifacts.inputs.clear()
+    s.artifacts.results.clear()
     s.documents.documents.clear()
     with NeptuneRefreshInbox(store.endpoint) as fresh:
         s.inbox = fresh
-        done = s.service().run(s.request)
-        assert fresh.find(s.request) == done
-    assert s.calls.names().count("model.generate") == 1
-    assert s.publisher.delivered == [done, done]
-    with NeptuneRefreshInbox(store.endpoint) as fresh:
-        s.inbox = fresh
         assert s.service().run(s.request) == done
-    assert s.publisher.delivered == [done, done]
+        assert RefreshOutboxRelay(fresh, s.publisher).drain(Event()) >= 1
+        assert all(entry.completion != done for entry in fresh.pending())
+        fresh.complete(s.request, done)
+        assert all(entry.completion != done for entry in fresh.pending())
+    assert s.calls.names().count("model.generate") == 1
+    assert s.publisher.delivered.count(done) == 2
 
 
 def test_lost_inbox_commit_response_is_recovered_by_lookup(graph):
@@ -128,3 +133,31 @@ def test_concurrent_completion_keeps_one_immutable_record(graph):
     assert query(
         f"g.V().hasLabel('InboxEvent').has('project_id','{req.job.project_id}').count()"
     ) == [1]
+
+
+def test_sent_response_loss_and_legacy_inbox_are_not_republished(graph):
+    store, query, project = graph
+    req = request(project())
+    done = Completion(req.job, ArtifactRef("result", "refresh.json"), Outcome.NO_CHANGE)
+    with NeptuneRefreshInbox(store.endpoint) as inbox:
+        inbox.complete(req, done)
+        entry = next(entry for entry in inbox.pending() if entry.completion == done)
+    with httpx.Client(timeout=10) as upstream:
+
+        def lose_ack(request):
+            upstream.post(str(request.url), content=request.content).raise_for_status()
+            raise httpx.ReadTimeout("response lost", request=request)
+
+        with httpx.Client(transport=httpx.MockTransport(lose_ack)) as client:
+            with pytest.raises(RefreshFailure):
+                NeptuneRefreshInbox(store.endpoint, client=client).mark_sent(entry)
+    with NeptuneRefreshInbox(store.endpoint) as fresh:
+        assert fresh.find(req) == done
+        assert entry not in fresh.pending()
+        fresh.complete(req, done)
+        assert entry not in fresh.pending()
+        # v1 receipts before the Outbox change were already published.
+        query(f"g.V('{entry.identifier}').properties('outbox_pending').drop()")
+        assert fresh.find(req) == done
+        fresh.complete(req, done)
+        assert entry not in fresh.pending()

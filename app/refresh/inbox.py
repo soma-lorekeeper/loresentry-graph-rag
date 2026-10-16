@@ -1,13 +1,21 @@
 """refresh 완료 Inbox의 요청 식별·완료 값 검사. 외부 IO는 수행하지 않는다."""
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from hashlib import sha256
 
 from app.refresh.errors import RequestConflict
 from app.refresh.models import Completion, RefreshRequest
 
 CONSUMER_NAME = "graph-rag-refresh"
+
+
+@dataclass(frozen=True)
+class PendingCompletion:
+    identifier: str
+    completion: Completion
+    created_at: datetime
 
 
 def request_digest(request: RefreshRequest) -> str:

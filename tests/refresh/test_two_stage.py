@@ -29,7 +29,6 @@ from tests.fakes.refresh import (
     FakeDocuments,
     FakeInbox,
     FakeJsonArtifacts,
-    FakePublisher,
     FakeRelations,
 )
 from tests.refresh.test_semantic_relations import semantic_fixture
@@ -150,7 +149,6 @@ def fixture(*, maximum=3, confidence=False):
         documents=FakeDocuments((doy, item), calls),
         model=model,
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
         rules=rules,
     )
     return SimpleNamespace(

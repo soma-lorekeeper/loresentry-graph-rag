@@ -1,10 +1,10 @@
 # Refresh 갱신안 생성
 
-`RefreshService`는 여섯 외부 IO 포트와 `RefreshRules`를 생성자로 주입받는다.
+`RefreshService`는 조회·모델·저장 포트와 `RefreshRules`를 생성자로 주입받는다.
 기본 rules는 입력·선택·청킹·문맥·후보 검증을 수행한다. OpenAI 어댑터는 별도 평가
 스크립트에서 주입한다. [S3 저장소 어댑터](../../docs/implementation/S3_ARTIFACTS.md)도
 서비스에 주입할 수 있다. Neptune 원홉·완료 Inbox와 Content HTTP 어댑터도 구현했다.
-기본 평가는 fake IO를 사용하며 실제 Kafka 완료 발행과 수신 진입점은 미구현이다.
+기본 평가는 fake IO를 사용한다. 실제 Kafka 수신과 완료 Outbox relay는 업무 runtime에 연결돼 있다.
 복구는 [완료 Inbox와 S3 재사용](../../docs/implementation/REFRESH_INBOX.md)을 따르며
 별도 작업 상태 저장소·lease 없이 `run(request)`를 호출한다.
 
@@ -22,7 +22,8 @@
 | `repair.py` | 구체적 검증 진단·실패 후보를 같은 문맥에 넣는 최대 2회 보완 입력과 예산 검사 |
 | `workflow.py`, `workflow_prompts.py` | 문단 ID 계획 검증, 작성 범위, 원문 보존 조립 |
 | `serialization.py` | 결과 JSON과 완료 이벤트 값으로 순수 변환 |
-| `service.py` | IO 순서·다중 호출·저장·발행·복구 조율 |
+| `service.py` | IO 순서·다중 호출·저장·Inbox/Outbox 기록·복구 조율 |
+| `outbox.py` | 미발행 완료 전송·확인·재시도 |
 
 판단 함수는 포트를 호출하지 않는다. 추가 자료가 필요하면 ID를 반환하고 서비스가 조회한
 결과를 다시 전달한다. 시간·난수·환경변수도 순수 함수에서 조회하지 않는다.

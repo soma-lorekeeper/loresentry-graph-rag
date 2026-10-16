@@ -23,7 +23,6 @@ from evaluation.fakes import (
     FakeDocuments,
     FakeInbox,
     FakeJsonArtifacts,
-    FakePublisher,
     FakeRelations,
 )
 from evaluation.repair_observation import observe_repair
@@ -252,7 +251,6 @@ def assemble(
         documents=FakeDocuments(case.targets, calls),
         model=EvaluationModel(case, model, budget, recorder),
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
         rules=EvaluationRules(model, recorder, single_call=single_call),
     )
     return SimpleNamespace(

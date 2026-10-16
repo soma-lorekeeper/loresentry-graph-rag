@@ -53,7 +53,6 @@ def real_scenario():
                 "documents",
                 "model",
                 "inbox",
-                "publisher",
             )
         }
     )
@@ -71,10 +70,10 @@ def test_multi_target_uses_real_rules_and_saves_before_publish():
     assert result.usage.input_tokens == 200
     names = s.calls.names()
     assert names.index("artifacts.save_context") < names.index("model.generate")
-    assert names.index("artifacts.save_result") < names.index("publisher.publish")
+    assert names.index("artifacts.save_result") < names.index("inbox.complete")
     assert s.service.run(s.request) == done
     assert s.calls.names().count("model.generate") == 2
-    assert len(s.publisher.delivered) == 1
+    assert len(s.inbox.pending()) == 1
 
 
 def test_call_budget_fails_before_any_model_call():
@@ -116,7 +115,7 @@ def test_retry_reuses_snapshot_and_repeats_calls_before_result_saved():
     assert s.calls.names().count("documents.fetch_documents") == 1
 
 
-@pytest.mark.parametrize("operation", ["publisher.publish", "publisher.ack"])
+@pytest.mark.parametrize("operation", ["inbox.complete", "inbox.ack"])
 def test_saved_result_retry_does_not_recall_model(operation):
     s = real_scenario()
     s.calls.failures[operation].append(
@@ -286,7 +285,7 @@ def test_saved_result_storage_failure_has_no_premature_completion():
 
 def test_corrupted_stored_json_does_not_regenerate():
     s = real_scenario()
-    s.calls.failures["publisher.ack"].append(
+    s.calls.failures["inbox.complete"].append(
         RefreshFailure(Failure("PUBLISH_TIMEOUT", "lost ack", True))
     )
     with pytest.raises(RefreshFailure):
@@ -297,4 +296,4 @@ def test_corrupted_stored_json_does_not_regenerate():
         s.service.run(s.request)
     assert caught.value.failure.code == "RESULT_CORRUPTED"
     assert s.calls.names().count("model.generate") == 2
-    assert len(s.publisher.delivered) == 1
+    assert s.inbox.pending() == []

@@ -141,3 +141,52 @@ def test_business_transport_round_trip_and_commit(broker_topics, malformed):
     finally:
         stop.set()
         thread.join(timeout=5)
+
+
+@pytest.mark.gremlin
+def test_durable_completion_relay_republishes_same_event_after_restart(
+    broker_topics, graph
+):
+    from app.adapters.refresh_inbox import NeptuneRefreshInbox
+    from app.kafka.errors import DeliveryError
+    from app.refresh.outbox import RefreshOutboxRelay
+    from tests.test_refresh_inbox import completion, request
+
+    store, _, project = graph
+    req = request(project())
+    done = completion(req)
+    with NeptuneRefreshInbox(store.endpoint) as inbox:
+        inbox.complete(req, done)
+        pending = next(item for item in inbox.pending() if item.completion == done)
+        transport = KafkaPublisher(Producer(producer_config(broker_topics)))
+
+        class LostCommit:
+            def pending(self):
+                return [pending]
+
+            def mark_sent(self, entry):
+                raise DeliveryError("process ended before sent commit")
+
+        with pytest.raises(DeliveryError):
+            RefreshOutboxRelay(LostCommit(), transport).drain(Event())
+        assert inbox.find(req) == done
+
+    # Fresh clients recover without any incoming request or S3/model access.
+    with NeptuneRefreshInbox(store.endpoint) as fresh:
+        transport = KafkaPublisher(Producer(producer_config(broker_topics)))
+        RefreshOutboxRelay(fresh, transport).drain(Event())
+        assert pending not in fresh.pending()
+        fresh.complete(req, done)
+        assert pending not in fresh.pending()
+
+    reader = Consumer(consumer_config(broker_topics, "relay-read-" + uuid4().hex))
+    try:
+        reader.assign([TopicPartition(REFRESH_COMPLETED, i, 0) for i in range(3)])
+        messages = reader.consume(2, timeout=10)
+        assert len(messages) == 2
+        assert all(message.error() is None for message in messages)
+        assert messages[0].value() == messages[1].value()
+        assert messages[0].key() == messages[1].key() == req.job.project_id.encode()
+        assert dict(messages[0].headers()) == dict(messages[1].headers())
+    finally:
+        reader.close()

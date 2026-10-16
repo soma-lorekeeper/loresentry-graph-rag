@@ -38,7 +38,6 @@ with neptune_refresh_service(
     user_id=trusted_user_id,
     artifacts=artifacts,
     model=model,
-    publisher=publisher,
 ) as refresh:
     completion = refresh.run(request)
 ```
@@ -100,4 +99,4 @@ Content의 최초 문서는 `revision_no = 0`이다. 어댑터와 refresh 규칙
 어댑터까지 연결하며, 선택한 원홉 문서만 요청하는지 검사한다.
 Content의 Spring 애플리케이션·운영 클러스터·실제 AWS Neptune 검증과는 구분한다.
 완료 기록과 복구는 [Neptune Inbox](REFRESH_INBOX.md)를 사용한다.
-refresh HTTP/Kafka 수신 진입점과 실제 Kafka 완료 발행은 별도 구현 범위다.
+Kafka 수신과 완료 Outbox relay의 연결은 [업무 송수신](KAFKA_TRANSPORT.md)을 따른다.

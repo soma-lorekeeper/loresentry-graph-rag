@@ -30,7 +30,6 @@ with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifac
         documents=documents,
         model=model,
         inbox=inbox,
-        publisher=publisher,
     )
     completion = service.run(request)
 ```

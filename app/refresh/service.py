@@ -28,7 +28,6 @@ from app.refresh.ports import (
     DocumentSource,
     ProposalModel,
     RefreshArtifactStore,
-    RefreshCompletionPublisher,
     RefreshInbox,
     RelatedDocumentSource,
 )
@@ -46,9 +45,9 @@ from app.refresh.source_alignment import align_candidate
 
 
 class RefreshService:
-    """여섯 IO 포트와 판단 규칙을 연결하여 갱신안 생성 작업을 진행한다.
+    """조회·모델·아티팩트·Inbox 포트와 판단 규칙으로 갱신안을 생성한다.
 
-    판단은 rules에 위임하고 실행 스냅샷·결과·완료 발행·Inbox 기록을 조율한다.
+    판단은 rules에 위임하고 실행 스냅샷·결과·Inbox·Outbox 기록을 조율한다.
     문서 원문이나 관계 그래프에 갱신안을 적용하는 기능은 포함하지 않는다.
     """
 
@@ -60,7 +59,6 @@ class RefreshService:
         documents: DocumentSource,
         model: ProposalModel,
         inbox: RefreshInbox,
-        publisher: RefreshCompletionPublisher,
         rules: RefreshRules | None = None,
     ):
         """실행에 사용할 포트와 판단 규칙을 주입한다.
@@ -71,7 +69,6 @@ class RefreshService:
             documents: 추가 본문 조회 구현.
             model: 모델 후보 생성 구현.
             inbox: 완료된 요청을 재처리하지 않기 위한 Inbox.
-            publisher: 완료 메시지 발행 구현.
             rules: 순수 판단 구현. 생략하면 기본 순수 업무 규칙을 쓴다.
         """
         self.artifacts = artifacts
@@ -79,16 +76,15 @@ class RefreshService:
         self.documents = documents
         self.model = model
         self.inbox = inbox
-        self.publisher = publisher
         self.rules = rules if rules is not None else RefreshRules()
 
     def run(self, request: RefreshRequest) -> Completion:
         """완료 Inbox를 확인하고 S3 결과·문맥을 재사용하거나 새로 실행한다.
 
-        결과 저장 → 완료 발행 확인 → Inbox 기록 순서다. 반환 후에만 전달 계층이
-        offset을 커밋한다. Inbox 이전 실패는 재전달하며 실행 잠금·lease는 두지 않는다.
-        결과 저장 전 모델 호출과 Inbox 이전 완료 발행은 반복될 수 있다.
-        재시도 불가능한 계산 실패도 FAILED 결과로 저장·발행한 뒤 완료를 기록한다.
+        결과 저장 → Inbox와 발행 대기 Outbox의 원자적 기록 순서다. 반환 후에만
+        전달 계층이 offset을 커밋한다. Kafka 발행은 별도 relay가 재시도한다.
+        Inbox 이전 실패는 재전달하며 결과 저장 전 모델 호출은 반복될 수 있다.
+        재시도 불가능한 계산 실패도 FAILED 결과와 발행 대기를 기록한다.
         """
         completed = self.inbox.find(request)
         if completed is not None:
@@ -116,7 +112,6 @@ class RefreshService:
             result = saved
             result_ref = self.artifacts.save_result(request, saved)
         completion = self._completion(request, result_ref, result)
-        self.publisher.publish(completion)
         self.inbox.complete(request, completion)
         return completion
 

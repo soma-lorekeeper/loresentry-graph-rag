@@ -17,6 +17,7 @@ from app.adapters.neptune_graph import NeptuneProjectionStore
 from app.adapters.neptune_refresh import neptune_refresh_service
 from app.adapters.projection_ready import ProjectionReadiness
 from app.adapters.refresh_artifacts import S3ArtifactSettings, s3_artifacts
+from app.adapters.refresh_inbox import NeptuneRefreshInbox
 from app.kafka.consumer import business_worker
 from app.kafka.errors import ProcessingStopped
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
@@ -26,6 +27,7 @@ from app.kafka.publisher import KafkaPublisher, producer_config
 from app.projection.service import GraphProjectionHandler
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Failure
+from app.refresh.outbox import RefreshOutboxRelay
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +130,7 @@ def real_handlers(topic, publisher, stop, stack, settings):
         limits.validate()
         model = BudgetedModel(client, limits, stop, settings.task_seconds)
         with neptune_refresh_service(
-            artifacts=artifacts, model=model, publisher=publisher, user_id=user_id
+            artifacts=artifacts, model=model, user_id=user_id
         ) as service:
             service.run(request)
 
@@ -143,6 +145,7 @@ class BusinessPollingRuntime:
         handler_factory=real_handlers,
         consumer_factory=Consumer,
         producer_factory=Producer,
+        outbox_factory=NeptuneRefreshInbox.from_env,
     ):
         self.settings = settings
         self._handlers, self._consumer, self._producer = (
@@ -151,6 +154,7 @@ class BusinessPollingRuntime:
             producer_factory,
         )
         self._stop = Event()
+        self._outbox_factory = outbox_factory
         self._threads = []
         self._errors = []
 
@@ -184,9 +188,42 @@ class BusinessPollingRuntime:
                 thread.start()
                 if not ready.wait(15) or self._errors:
                     raise RuntimeError("Business Kafka runtime failed to start")
+            if REFRESH_REQUESTED in self.settings.topics:
+                ready = Event()
+                thread = Thread(
+                    target=self._relay,
+                    args=(ready,),
+                    name="refresh-outbox-relay",
+                    daemon=True,
+                )
+                self._threads.append(thread)
+                thread.start()
+                if not ready.wait(15) or self._errors:
+                    raise RuntimeError("Refresh Outbox relay failed to start")
         except BaseException:
             self.close()
             raise
+
+    def _relay(self, ready):
+        try:
+            with ExitStack() as stack:
+                store = stack.enter_context(self._outbox_factory())
+                producer = self._producer(
+                    producer_config(self.settings.bootstrap_servers)
+                )
+                stack.callback(producer.flush, 1)
+                relay = RefreshOutboxRelay(store, KafkaPublisher(producer))
+                ready.set()
+                relay.run(self._stop)
+                if not self._stop.is_set():
+                    raise RuntimeError("Refresh Outbox relay stopped unexpectedly")
+        except BaseException as failure:
+            self._errors.append(type(failure).__name__)
+            logger.error(
+                "Refresh Outbox relay failed: reason=%s", type(failure).__name__
+            )
+        finally:
+            ready.set()
 
     def _run(self, topic, ready):
         try:

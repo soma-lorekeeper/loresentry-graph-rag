@@ -5,8 +5,10 @@
 하며, 이미 저장한 값과 충돌하는 내용으로 덮어쓰지 않는다. 이 모듈 자체는 IO를 실행하지 않는다.
 """
 
+from datetime import datetime
 from typing import Protocol
 
+from app.refresh.inbox import PendingCompletion
 from app.refresh.models import (
     ArtifactRef,
     ChangePlan,
@@ -117,14 +119,16 @@ class ProposalModel(Protocol):
 
 
 class RefreshInbox(Protocol):
-    """요청별 처리 완료만 기록한다. 진행 상태·실행 소유권은 관리하지 않는다."""
+    """요청별 처리 완료와 완료 이벤트 발행 대기를 원자적으로 기록한다."""
 
     def find(self, request: RefreshRequest) -> Completion | None:
         """같은 요청의 완료를 반환한다. 같은 ID에 다른 입력·설정은 충돌이다."""
         ...
 
     def complete(self, request: RefreshRequest, completion: Completion) -> None:
-        """결과 저장과 완료 발행 확인 이후에만 멱등적으로 완료를 기록한다.
+        """결과 저장 이후 완료와 발행 대기를 같은 트랜잭션으로 기록한다.
+
+        중복 호출은 이미 전송한 이벤트를 다시 발행 대기로 바꾸지 않는다.
 
         실패하면 요청은 미완료로 재전달한다. 응답 유실 시 이미 기록됐을 수 있으므로
         다음 실행은 find로 확인한다. Kafka offset과는 별도 트랜잭션이다.
@@ -135,10 +139,22 @@ class RefreshInbox(Protocol):
 class RefreshCompletionPublisher(Protocol):
     """저장된 결과의 위치와 처리 결과를 완료 메시지로 발행하는 계약."""
 
-    def publish(self, completion: Completion) -> None:
+    def publish(
+        self, completion: Completion, *, occurred_at: datetime | None = None
+    ) -> None:
         """완료 메시지를 발행한다.
 
         수신 측에 전달된 뒤 확인 응답만 유실될 수 있다. 재실행 시 중복 발행이
         가능하므로 수신 측도 요청 식별을 기준으로 중복을 처리해야 한다.
         """
+        ...
+
+
+class RefreshOutbox(Protocol):
+    def pending(self, limit: int = 50) -> list[PendingCompletion]:
+        """미발행 완료를 오래된 순으로 읽는다. 실행 잠금·lease는 없다."""
+        ...
+
+    def mark_sent(self, entry: PendingCompletion) -> None:
+        """Kafka 전달 확인 후 같은 불변 이벤트를 발행 완료로 기록한다."""
         ...

@@ -33,7 +33,6 @@ from evaluation.fakes import (
     FakeInbox,
     FakeJsonArtifacts,
     FakeModel,
-    FakePublisher,
 )
 from tests.fakes.content import content_payload
 
@@ -185,7 +184,6 @@ def test_refresh_fetches_only_one_hop_content_body_and_preserves_input(
     artifacts = FakeJsonArtifacts(
         {req.input_ref: InputSnapshot(req.job, (original,))}, calls
     )
-    publisher = FakePublisher(calls)
     before = query(f"g.V().hasLabel('File').has('project_id','{p}').count()")
     with neptune_refresh_service(
         endpoint=store.endpoint,
@@ -193,7 +191,6 @@ def test_refresh_fetches_only_one_hop_content_body_and_preserves_input(
         user_id=user_id,
         content_base_url=content_endpoint,
         model=FakeModel(ModelCandidate(()), calls),
-        publisher=publisher,
     ) as service:
         assert isinstance(service.relations, NeptuneRelatedDocumentSource)
         assert isinstance(service.documents, ContentDocumentSource)
@@ -220,7 +217,8 @@ def test_refresh_fetches_only_one_hop_content_body_and_preserves_input(
     )
     assert snapshot.target_ids == (neighbor.id,)
     assert query(f"g.V().hasLabel('File').has('project_id','{p}').count()") == before
-    assert publisher.delivered == [completion]
+    with NeptuneRefreshInbox(store.endpoint) as inbox:
+        assert any(entry.completion == completion for entry in inbox.pending())
 
 
 def test_missing_projection_blocks_content_and_model_until_seed_is_available(graph):
@@ -243,7 +241,6 @@ def test_missing_projection_blocks_content_and_model_until_seed_is_available(gra
         documents=FakeDocuments(calls=calls),
         model=FakeModel(ModelCandidate(()), calls),
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
     ) as service:
         with pytest.raises(RefreshFailure) as caught:
             service.run(req)
@@ -271,7 +268,6 @@ def test_inactive_input_seeds_do_not_wait_for_projection(graph):
         documents=FakeDocuments(calls=calls),
         model=FakeModel(ModelCandidate(()), calls),
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
     ) as service:
         assert service.run(req).outcome == Outcome.NO_CHANGE
     assert "documents.fetch_documents" not in calls.names()
@@ -299,7 +295,6 @@ def test_retry_uses_frozen_context_even_if_graph_and_content_change(graph):
         documents=documents,
         model=model,
         inbox=FakeInbox(calls=calls),
-        publisher=FakePublisher(calls),
     ) as service:
         with pytest.raises(RefreshFailure):
             service.run(req)

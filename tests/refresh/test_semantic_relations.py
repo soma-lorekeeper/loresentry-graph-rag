@@ -646,7 +646,6 @@ def test_service_aggregates_shared_fact_across_separate_update_calls_once():
         documents=object(),
         model=FixedModel(),
         inbox=SimpleNamespace(checkpoint=lambda record: None),
-        publisher=object(),
         rules=RecordingRules(),
     )
     result = service._compute(request)

@@ -3,6 +3,7 @@
 Content의 확정 변경을 Neptune에 투영하고 최신화 요청의 승인 전 갱신안을 생성한다.
 업무 consumer는 FastAPI 수명주기로 실행하며 기본 비활성이다. 기존 fake polling은 sandbox 전용으로 유지한다.
 두 업무 토픽은 별도 Consumer·PollingWorker·작업 스레드·Producer로 처리한다.
+최신화 활성화 시 별도 Neptune 클라이언트·Producer를 가진 Outbox relay 스레드도 시작한다.
 
 ## 코드와 원자성
 
@@ -13,6 +14,7 @@ Content의 확정 변경을 Neptune에 투영하고 최신화 요청의 승인 �
 | [ordered_projection.py](../../app/adapters/ordered_projection.py) | 전체 관계 스냅샷 교체·순서 fence·문서/프로젝트 삭제 tombstone |
 | [projection_ready.py](../../app/adapters/projection_ready.py) | 요청이 의존하는 Content 이벤트의 Inbox와 프로젝트 삭제 여부 확인 |
 | [business_runtime.py](../../app/kafka/business_runtime.py) | 실제 IO 조립·토픽별 실행·종료·health·모델 시간 예산 |
+| [outbox.py](../../app/refresh/outbox.py) | 완료 Inbox의 발행 대기를 독립적으로 재시도하는 relay |
 | [publisher.py](../../app/kafka/publisher.py) | 레코드별 전송 확인·큐 포화·전달 기한, 완료/DLQ 발행 |
 | [consumer.py](../../app/kafka/consumer.py) | 명시적 업무 처리기·제한 재시도·DLQ와 기존 polling 연결 |
 
@@ -22,9 +24,11 @@ Content의 확정 변경을 Neptune에 투영하고 최신화 요청의 승인 �
 아직 도착하지 않은 관계의 상대 문서는 숨겨진 placeholder로 생성하고 자기 스냅샷이 도착하면 활성화한다.
 기존 fixture의 sequence 없는 변경 모델은 호환 경로이며 운영 Kafka handler는 항상 sequence를 제공한다.
 
-갱신안은 입력·실행 문맥·결과를 불변 S3 객체로 저장한다. 결과 저장 → Kafka ack → 완료 Inbox → offset 순서다.
+갱신안은 입력·실행 문맥·결과를 불변 S3 객체로 저장한다. S3 결과 저장 → Neptune Inbox·Outbox 원자 기록 → 요청 offset 순서다.
+별도 relay가 발행 대기를 읽어 Kafka ack 후 발행 완료로 표시한다. 요청 소비와 전송은 독립적이다.
 완료 ID는 전용 고정 UUIDv5 namespace와 project_id/request_id로 결정한다.
-완료 전 중복 실행·모델 비용·완료 재발행은 가능하며 exactly-once 실행을 보장하지 않는다.
+완료 전 중복 실행·모델 비용은 가능하다. Kafka ack 뒤 발행 완료 표시 전 장애는 중복 발행을 허용한다.
+relay는 요청 재수신 없이 미발행 건을 재시도하며, exactly-once 실행·발행을 보장하지 않는다.
 
 ## Content와 합친 계약
 
@@ -94,7 +98,9 @@ GitOps의 Pod grace period는 420초다. 강제 종료의 재전달·모델 비�
 
 InvalidEvent는 즉시 DLQ, 명시적인 RetryableProcessingError는 최초 처리 뒤 1·2·4·8·10초로
 최대 5회 재시도 후 DLQ다. DeliveryError와 분류하지 않은 설정/프로그래밍 오류는 예외를 전파한다.
-DLQ ack 이전에는 offset을 진행하지 않는다. 모델 업무 실패를 FAILED 결과로 저장·발행한 경우는 정상 완료다.
+DLQ ack 이전에는 offset을 진행하지 않는다.
+완료 Outbox의 전송 실패는 원본 요청을 DLQ로 보내지 않는다. 발행 대기를 유지하고
+1·2·4·8·16·30초(이후 30초) 간격으로 재시도한다. 빈 배치는 1초 대기한다. 모델 업무 실패를 FAILED 결과로 저장·발행한 경우는 정상 완료다.
 
 DLQ는 `<원본 topic>.graph-rag.dlq`다. 원본 key·value·ce_*를 보존하고 기존 kafka_dlt-* 진단을 교체한다.
 원본 partition/offset은 signed int32/int64 big-endian, 나머지 핵심 진단 헤더는 UTF-8이다.

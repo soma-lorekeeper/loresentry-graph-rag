@@ -301,9 +301,7 @@ def test_environment_has_only_service_config_not_user_identity(monkeypatch):
         assert adapter._timeout.read == 1.5
     assert adapter._client.is_closed
     with pytest.raises(ValueError, match="trusted user_id"):
-        with neptune_refresh_service(
-            artifacts=None, model=None, inbox=None, publisher=None
-        ):
+        with neptune_refresh_service(artifacts=None, model=None, inbox=None):
             pytest.fail("Missing identity must not produce a service")
     for value in (
         "",

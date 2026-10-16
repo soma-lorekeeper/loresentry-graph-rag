@@ -10,7 +10,7 @@ class RetryableProcessingError(RuntimeError):
 
 
 class DeliveryError(RuntimeError):
-    """Kafka 발행 성공을 확인하지 못했다. offset·완료 Inbox를 진행하지 않는다."""
+    """Kafka 발행을 확인하지 못했다. Outbox 대기 또는 DLQ 원본 offset을 유지한다."""
 
 
 class ProcessingStopped(RuntimeError):

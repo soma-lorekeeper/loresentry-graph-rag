@@ -1,5 +1,6 @@
 """업무별 runtime 수명·설정·시작 실패·종료와 FastAPI health를 확인한다."""
 
+from contextlib import nullcontext
 from threading import Event, get_ident
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.kafka.business_runtime import BusinessPollingRuntime, BusinessSettings
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
 from app.main import create_app
+from tests.fakes.refresh import FakeInbox
 
 
 def test_settings_disabled_separate_from_fake_and_require_explicit_enable():
@@ -71,15 +73,16 @@ def test_two_subscriptions_have_independent_owned_threads_and_cleanup(monkeypatc
         handler_factory=handlers,
         consumer_factory=Consumer,
         producer_factory=Producer,
+        outbox_factory=lambda: nullcontext(FakeInbox()),
     )
     runtime.start()
     assert all(flag.wait(1) for flag in running)
     assert runtime.healthy
     runtime.close()
     assert not runtime.healthy
-    assert len(set(threads)) == 2
+    assert len(set(threads)) == 3
     assert get_ident() not in threads
-    assert len(closed) == 2
+    assert len(closed) == 3
     with pytest.raises(RuntimeError):
         runtime.start()
 

@@ -69,9 +69,9 @@ DB 쓰기 트랜잭션·Kafka 전달 보장을 검증한 것은 아니다.
 | 휴지통·삭제 | TRASHED의 file=null, 복원, 문서/프로젝트 삭제 뒤 stale 이벤트·DLQ 재투입, 늦은 refresh가 데이터를 부활시키지 않음 |
 | 투영 원자성 | 그래프+Inbox+순서/tombstone 저장 전 실패는 모두 롤백. 응답 유실 뒤 재수신은 중복 성공. 같은 ce_id에 다른 내용은 충돌 |
 | refresh 조립 | fingerprint·manifest·선택/모델 설정·신뢰한 user_id 검증. 입력/설정 충돌 거절. 재배포 후 같은 요청은 최초 설정 복원. 그래프 미준비 상태를 READY로 대체하지 않음 |
-| publisher | produce 반환만으로 성공 아님. callback 성공·실패, 큐 포화, 기한 초과·불명확한 ack를 구분. 실패 시 완료 Inbox·offset 유지 |
+| publisher | produce 반환만으로 성공 아님. callback 성공·실패, 큐 포화, 기한 초과·불명확한 ack를 구분. 완료 전송 실패 시 Outbox 대기 유지, DLQ 전송 실패 시 원본 offset 유지 |
 | 완료 호환 | 실제 publisher 레코드가 Content InboxMessages와 같은 검증을 통과. subject=request_id, 결과/오류 조합·null·S3 위치 검증. UUIDv5 namespace 고정과 재시작 후 동일 ID |
-| refresh 복구 | 결과 저장 뒤·Kafka ack 뒤·Inbox 저장 뒤 각각 중단해 복구. 저장 결과 재사용, 완료 Inbox가 있으면 모델/발행 생략. FAILED 업무 완료는 DLQ 중복 전송 없음 |
+| refresh 복구 | 결과 저장 뒤·Inbox/Outbox 기록 뒤·Kafka ack 뒤 각각 중단해 복구. 저장 결과 재사용, 완료 Inbox가 있으면 모델 생략, 미발행은 relay가 계속 처리. FAILED 업무 완료는 DLQ 중복 전송 없음 |
 | 재시도·DLQ | 5회 backoff, 즉시 거절, shutdown 중 대기 중단. 원본 바이트·핵심 실패 헤더 인코딩 보존. 원본 파티션 3~5의 레코드도 3개 파티션 DLQ로 정상 전송 |
 | DLQ 장애 | ack 전 실패 시 offset 유지. ack 후 commit 전 중단의 중복 허용. 4 MiB 경계 원본에 실패 헤더를 추가해 크기 초과 시에도 유실 없음 |
 | poll·할당 | 긴 처리·재시도 중 poll 지속. revoke/lost 뒤 옛 작업 offset 미commit. commit 응답 유실 뒤 Inbox 복구. refresh가 투영 worker를 막지 않음 |

@@ -247,7 +247,7 @@ LLM의 `paragraph_edits` 응답을 S3 결과로 직접 사용하지 않는다.
 ## 저장 순서와 소비·복구
 
 정상 계산은 요청 manifest·context를 저장하고 모델 결과를 검증한 뒤 result를 저장한다.
-그 다음 완료를 발행하고 전달 확인 후 완료 Inbox에 기록한다. 입력 오류처럼 스냅샷 확보 전
+그 다음 Neptune Inbox에 완료와 발행 대기를 함께 기록하고 별도 relay가 Kafka로 발행한다. 입력 오류처럼 스냅샷 확보 전
 종료한 실패는 manifest·실패 result만 남을 수 있다.
 
 | S3 outcome | 완료 직렬화 outcome | 소비 방법 |
@@ -258,7 +258,7 @@ LLM의 `paragraph_edits` 응답을 S3 결과로 직접 사용하지 않는다.
 
 완료 payload는 request_id·project_id·outcome·result 위치·error·prompt_version을 전달하고
 본문·제안 목록을 복제하지 않는다. 완료 payload의 error는 code·message만 담는다.
-현재 완료 직렬화 함수와 내부 publisher 포트가 있으며 실제 Kafka producer는 연결하지 않았다.
+실제 Kafka producer는 Outbox relay에 연결돼 있으며 전달 확인 후 발행 완료로 표시한다.
 
 재실행은 저장된 result를 먼저 읽으며 FAILED도 재사용한다. result와 request manifest가
 있으면 입력·context가 없어져도 모델 재호출 없이 복구할 수 있다. result와 manifest는

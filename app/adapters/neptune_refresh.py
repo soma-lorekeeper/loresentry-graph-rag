@@ -10,7 +10,6 @@ from app.refresh.ports import (
     DocumentSource,
     ProposalModel,
     RefreshArtifactStore,
-    RefreshCompletionPublisher,
     RefreshInbox,
 )
 from app.refresh.rules import RefreshRules
@@ -22,7 +21,6 @@ def neptune_refresh_service(
     *,
     artifacts: RefreshArtifactStore,
     model: ProposalModel,
-    publisher: RefreshCompletionPublisher,
     inbox: RefreshInbox | None = None,
     documents: DocumentSource | None = None,
     user_id: str | None = None,
@@ -55,6 +53,5 @@ def neptune_refresh_service(
             documents=documents,
             model=model,
             inbox=inbox,
-            publisher=publisher,
             rules=rules,
         )

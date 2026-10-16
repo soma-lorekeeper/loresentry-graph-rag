@@ -1,4 +1,4 @@
-# refresh 완료 Inbox와 재실행
+# refresh 완료 Inbox·Outbox와 재실행
 
 refresh는 진행 상태나 실행 소유권을 저장하지 않는다. 완료 Inbox가 있으면 반환하고,
 없으면 S3 결과·실행 문맥을 재사용하거나 다시 실행한다. 별도 작업 DB와 lease는 두지 않는다.
@@ -9,12 +9,14 @@ refresh는 진행 상태나 실행 소유권을 저장하지 않는다. 완료 I
 2. 미완료이면 S3 결과를 읽는다. 이미 저장된 결과는 `FAILED`도 그대로 재사용한다.
 3. 결과가 없으면 저장된 실행 문맥을 사용한다. 문맥도 없으면 입력·Neptune 원홉·Content를 읽고 문맥을 저장한 뒤 모델을 호출한다.
 4. 결과를 불변 저장한다.
-5. `publisher.publish(completion)`으로 완료 이벤트를 발행하고 전달 확인을 기다린다.
-6. `RefreshInbox.complete(request, completion)`으로 완료를 기록한다.
-7. 서비스가 정상 반환한 뒤 전달 계층이 offset을 커밋한다.
+5. `RefreshInbox.complete(request, completion)`으로 같은 vertex에 완료 값과 `outbox_pending=true`를 원자적으로 기록한다.
+6. 서비스가 정상 반환한 뒤 전달 계층이 요청 offset을 커밋한다.
+7. 별도 relay가 미발행 기록을 읽고 Kafka 전달 확인 후 `outbox_pending=false`로 표시한다.
+   6과 7의 실행 순서는 독립적이다.
 
 재시도 불가능한 계산 오류는 제안 없는 `FAILED` 결과로 저장·발행하고 완료를 기록한다.
-일시 장애와 예상하지 못한 오류는 전파하며 완료를 남기지 않는다.
+Inbox 저장 이전의 일시 장애와 예상하지 못한 오류는 전파한다.
+Inbox 저장 이후의 Kafka 장애는 완료 기록을 유지하며 relay가 재시도한다.
 
 ## 구현과 연결
 
@@ -23,15 +25,15 @@ refresh는 진행 상태나 실행 소유권을 저장하지 않는다. 완료 I
 | [ports.py](../../app/refresh/ports.py) | `RefreshInbox.find`, `complete` 계약 |
 | [inbox.py](../../app/refresh/inbox.py) | 요청 전체의 결정적 SHA-256, 완료 값의 요청 식별 검사 |
 | [refresh_inbox.py](../../app/adapters/refresh_inbox.py) | 실제 Neptune 완료 Inbox 조회·원자적 삽입·충돌 검사 |
-| [service.py](../../app/refresh/service.py) | 결과 저장·발행·Inbox 순서와 S3 재사용 |
+| [service.py](../../app/refresh/service.py) | 결과 저장·Inbox/Outbox 기록과 S3 재사용 |
 | [neptune_refresh.py](../../app/adapters/neptune_refresh.py) | Neptune 원홉·완료 Inbox와 Content HTTP 조립 |
 
 `neptune_refresh_service(...)`는 `inbox`를 생략하면 기존 Neptune writer 설정으로
 `NeptuneRefreshInbox`를 만든다. `documents` 생략 시의 Content 설정은
 [Content HTTP 조회](CONTENT_HTTP.md)를 따른다. 호출 측은 `artifacts`, `model`,
-`publisher`, 신뢰한 `user_id`를 전달하고 `service.run(request)`를 호출한다.
+신뢰한 `user_id`를 전달하고 `service.run(request)`를 호출한다.
 `jobs`와 `execution_id` 인자는 제거했다. 평가 도구는 `FakeInbox`를 명시적으로 주입한다.
-환경변수 추가만으로 FastAPI나 Kafka worker가 이 서비스를 실행하지는 않는다.
+업무 runtime은 최신화 소비 활성화 시 이 서비스와 별도 Outbox relay를 함께 실행한다.
 
 ## 저장 모델
 
@@ -47,12 +49,15 @@ Kafka의 다른 이벤트 ID로 동일 요청이 재전달되어도 이 완료 �
 | `project_id`, `request_id` | 정규 UUID 문자열 |
 | `request_sha256` | 입력 위치·fingerprint·시드·대상·모델·선택 설정을 포함한 요청 전체의 해시 |
 | `completion_json` | `refresh-inbox-v1`. 결과 S3 위치·업무 결과·오류·프롬프트 버전이 있는 완료 값 |
-| `processed_at` | 이번 완료 삽입의 UTC 시각 |
+| `processed_at` | 이번 완료 삽입의 UTC 시각. 재발행에도 같은 ce_time 사용 |
+| `outbox_pending` | 새 기록은 문자열 true. Kafka ack 확인 뒤 false |
 
 본문·후보 목록·`RUNNING`·`RETRYABLE` 같은 진행 상태는 넣지 않는다.
 동일 요청의 재기록은 같은 완료 값일 때만 성공하며 처리 시각을 갱신하지 않는다.
 같은 요청 ID에 다른 입력·설정·완료를 사용하면 `RequestConflict`다.
-완료 삽입의 중복 검사와 쓰기는 Gremlin 요청 하나로 묶는다.
+완료 삽입의 중복 검사·완료 값·발행 대기 쓰기는 Gremlin 요청 하나로 묶는다.
+중복 완료는 전송 상태를 되돌리지 않는다. 기존 v1 기록에서 outbox_pending이 없으면
+이전 코드에서 이미 발행한 완료로 취급하며 자동 재발행하지 않는다.
 Neptune 조회 실패·손상된 완료 기록을 미처리로 대체하지 않는다.
 
 ## 장애와 동시 실행
@@ -61,8 +66,9 @@ Neptune 조회 실패·손상된 완료 기록을 미처리로 대체하지 않�
 |---|---|
 | 실행 문맥 저장 전 | 입력부터 재실행 가능 |
 | 문맥 저장 후, 결과 저장 전 | 문맥 재사용. 완료되지 않은 모델 호출은 반복 가능 |
-| 결과 저장 후, 완료 발행 전 | 저장 결과로 발행 재시도 |
-| 발행 성공 후 Inbox 저장 전 | 저장 결과로 완료를 다시 발행할 수 있음 |
+| 결과 저장 후, Inbox·Outbox 저장 전 | 저장 결과로 완료·발행 대기 기록 재시도 |
+| Inbox·Outbox 저장 후, Kafka 발행 전 | 요청 offset과 무관하게 relay가 재시도 |
+| 발행 성공 후 발행 완료 표시 전 | 같은 이벤트 ID·payload·ce_time으로 재발행 가능 |
 | Inbox 커밋 응답 유실 | 다음 조회에 기록이 있으면 발행 없이 반환 |
 | Inbox 저장 후 offset 커밋 전 | 재수신해도 완료 값만 반환 |
 
@@ -78,14 +84,18 @@ S3 조건부 저장은 기존 문맥·결과를 덮어쓰지 않는다. 동시 �
 
 기존 저장 결과는 검증 정책 변경으로 덮어쓰지 않는다. 변경한 정책으로 다시 평가하려면
 새 `request_id`를 사용한다. 프로젝트 삭제는 그래프의 `File`·`REFERENCES`만 제거하므로
-완료 Inbox는 보존된다. 초기에는 Inbox 자동 만료를 하지 않는다.
+완료 Inbox와 발행 대기는 보존된다. 초기에는 자동 만료를 하지 않는다.
+relay는 최대 50개를 오래된 순으로 처리하고 Kafka ack 후에만 발행 완료를 기록한다.
+전송·재시도 가능한 DB 장애는 최대 30초 backoff로 계속 재시도한다.
+실행 lease가 없으므로 여러 Pod의 relay가 같은 이벤트를 중복 발행할 수 있으며 Content Inbox가 중복을 제거한다.
+S3 결과는 3일 뒤 만료되므로 발행 지연이 보존 기간을 넘으면 Content가 결과를 수용하지 못할 수 있다.
 
 ## 검증
 
 Linux 호스트의 저장소 루트에서 프로젝트 환경으로 실행한다.
 
 ```bash
-.venv/bin/python -m pytest tests/refresh/test_recovery.py tests/test_refresh_inbox.py -q
+.venv/bin/python -m pytest tests/refresh/test_recovery.py tests/test_refresh_inbox.py tests/test_refresh_outbox.py -q
 ```
 
 [전용 Gremlin 서버](GRAPH_PROJECTION.md#검증)를 실행한 뒤 실제 저장·재시작·응답 유실과

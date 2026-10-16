@@ -37,7 +37,6 @@ class Scenario:
             documents=self.documents,
             model=self.model,
             inbox=self.inbox,
-            publisher=self.publisher,
             rules=self.rules if use_stub else None,
         )
 

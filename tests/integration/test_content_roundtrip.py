@@ -14,6 +14,7 @@ from app.adapters.neptune_graph import NeptuneProjectionStore
 from app.adapters.neptune_refresh import neptune_refresh_service
 from app.adapters.projection_ready import ProjectionReadiness
 from app.adapters.refresh_artifacts import S3ArtifactSettings, S3RefreshArtifacts
+from app.adapters.refresh_inbox import NeptuneRefreshInbox
 from app.kafka.business_runtime import BusinessPollingRuntime, BusinessSettings
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
@@ -67,7 +68,6 @@ def test_real_content_request_and_completion_roundtrip():
             with neptune_refresh_service(
                 artifacts=artifacts,
                 model=NoChangeModel(),
-                publisher=publisher,
                 user_id=user_id,
                 content_base_url=base,
                 endpoint=endpoint,
@@ -79,6 +79,7 @@ def test_real_content_request_and_completion_roundtrip():
     runtime = BusinessPollingRuntime(
         BusinessSettings(bootstrap, (PROJECT_CHANGED, REFRESH_REQUESTED)),
         handler_factory=handlers,
+        outbox_factory=lambda: NeptuneRefreshInbox(endpoint),
     )
     project = None
     with httpx.Client(

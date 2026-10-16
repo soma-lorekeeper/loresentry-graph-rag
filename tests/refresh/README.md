@@ -29,8 +29,8 @@
 from tests.refresh.test_real_service import real_scenario
 
 case = real_scenario()
-completion = case.service.run(case.request, "example-execution")
-assert completion == case.publisher.delivered[0]
+completion = case.service.run(case.request)
+assert completion == case.inbox.pending()[0].completion
 ```
 
 실패 주입 예시:
@@ -39,8 +39,8 @@ assert completion == case.publisher.delivered[0]
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Failure
 
-case.calls.failures["publisher.ack"].append(
-    RefreshFailure(Failure("PUBLISH_TIMEOUT", "acknowledgment lost", True))
+case.calls.failures["inbox.ack"].append(
+    RefreshFailure(Failure("INBOX_TIMEOUT", "commit acknowledgment lost", True))
 )
 ```
 
