@@ -19,7 +19,7 @@ Content의 확정 변경을 Neptune에 투영하고 최신화 요청의 승인 �
 | [consumer.py](../../app/kafka/consumer.py) | 명시적 업무 처리기·제한 재시도·DLQ와 기존 polling 연결 |
 
 그래프 변경·Inbox·순서/삭제 기록은 Gremlin 요청 하나로 확정한다.
-문서별 순서 fence와 관계 양쪽 문서의 마지막 스냅샷 순서를 검사해 오래된 관계를 재생성하지 않는다.
+문서별 순서 fence로 같은 문서의 오래된 스냅샷을 버린다. 서로 다른 문서의 seq는 비교하지 않는다.
 삭제 tombstone은 UUID를 영구 폐기하는 계약이며 이후 더 큰 seq의 이벤트도 문서를 부활시키지 않는다.
 아직 도착하지 않은 관계의 상대 문서는 숨겨진 placeholder로 생성하고 자기 스냅샷이 도착하면 활성화한다.
 기존 fixture의 sequence 없는 변경 모델은 호환 경로이며 운영 Kafka handler는 항상 sequence를 제공한다.
@@ -32,15 +32,18 @@ relay는 요청 재수신 없이 미발행 건을 재시도하며, exactly-once 
 
 ## Content와 합친 계약
 
-Content의 [ContentEvents](../../../loresentry-content/src/main/java/com/loresentry/content/outbox/ContentEvents.java)는
-사용자별 트랜잭션 advisory lock을 쓰고 문서·관계 변경과 Outbox를 함께 commit한다.
-같은 프로젝트의 seq는 이 경로에서 commit 순서와 일치한다. DB 직접 수정은 이 경로를 우회하므로
-운영 원본 변경에 사용하지 않는다. relay의 비동기 실패나 DLQ 재투입은 여전히 순서를 바꿀 수 있다.
+변경 이벤트 계약의 원본은 Content의
+[content.project.changed.v1](../../../loresentry-content/docs/events/content-project-changed-v1.md)이다.
+Content는 문서 id 단위 advisory lock 안에서 스냅샷을 읽고 seq를 받으므로 같은 문서의 seq는 commit 순서와 일치한다.
+서로 다른 문서의 seq는 비교하지 않는다. relay가 실패 행을 건너뛰거나 DLQ를 재투입하면
+같은 문서 안에서도 도착 순서가 바뀔 수 있어 문서별 fence로 거른다. DB 직접 수정은 이 경로를 우회하므로
+운영 원본 변경에 사용하지 않는다.
 
-`FileChanged`는 `project_id`, `file_id`, `revision_no`, `change_type`, `changed_fields`,
-`file`, `relations`를 보낸다. file에는 title·folder_code·description·body_text,
-관계에는 무방향 저장 행의 relation_id·target_document_id·description이 있다.
-휴지통·영구 삭제는 file/relations=null이며 상태 변경·tombstone으로 처리한다.
+`FileChanged`는 `project_id`, `file_id`, `change_type`, `changed_fields`, `file`, `relations`를 보낸다.
+DELETED만 file/relations가 null인 tombstone이다. 나머지(TRASHED 포함)는 그 문서의 전체 스냅샷이다.
+노드의 trashed는 `file.state`로, 설명은 `file.properties`에서 key가 description인 첫 값으로 정한다.
+관계는 low 문서(owner)의 이벤트에만 실려 target_document_id는 항상 high 문서다. 스냅샷은 그 문서가
+owner인 edge(low→high로 저장한 outE)만 교체하며, owner가 아닌 관계가 실리면 계약 위반으로 DLQ한다.
 기존 `version` payload 초안은 사용하지 않고 ce_sequence를 순서 기준으로 쓴다.
 
 `GraphRefreshRequested`는 다음을 포함한다.

@@ -82,31 +82,24 @@ class ProjectionChange(ProjectionModel):
     deleted_relation_ids: tuple[Identifier, ...] = ()
     sequence: Annotated[StrictInt, Field(gt=0, le=2**63 - 1)] | None = None
     snapshot_file_id: Identifier | None = None
-    trashed_file_ids: tuple[Identifier, ...] = ()
 
     @model_validator(mode="after")
     def consistent_batch(self) -> Self:
-        if self.sequence is None and (self.snapshot_file_id or self.trashed_file_ids):
+        if self.sequence is None and self.snapshot_file_id:
             raise ValueError("Snapshot state requires a sequence")
         if self.event_type == "ProjectDeleted" and self.snapshot_file_id is not None:
             raise ValueError("Project deletion has no document subject")
         if self.sequence is not None and self.event_type == "FileChanged":
             if self.snapshot_file_id is None:
                 raise ValueError("A sequenced snapshot requires a subject")
-            targets = (
-                [file.id for file in self.files]
-                + list(self.deleted_file_ids)
-                + list(self.trashed_file_ids)
-            )
+            targets = [file.id for file in self.files] + list(self.deleted_file_ids)
             if targets != [self.snapshot_file_id] or self.deleted_relation_ids:
                 raise ValueError("A sequenced event changes exactly one document")
             if not self.files and self.relations:
-                raise ValueError("Inactive snapshots do not carry relation upserts")
-            if any(
-                self.snapshot_file_id not in (r.low_document_id, r.high_document_id)
-                for r in self.relations
-            ):
-                raise ValueError("Snapshot relations must touch the subject")
+                raise ValueError("Deleted snapshots do not carry relation upserts")
+            # 관계는 low 문서(owner)의 스냅샷에만 실린다. high 쪽 스냅샷은 관계를 모른다.
+            if any(r.low_document_id != self.snapshot_file_id for r in self.relations):
+                raise ValueError("Snapshot relations must be owned by the subject")
         file_ids = [file.id for file in self.files]
         relation_ids = [relation.id for relation in self.relations]
         pairs = [
@@ -135,7 +128,6 @@ class ProjectionChange(ProjectionModel):
                 self.relations,
                 self.deleted_file_ids,
                 self.deleted_relation_ids,
-                self.trashed_file_ids,
             )
         ):
             raise ValueError("ProjectDeleted carries only project and event metadata")
@@ -149,7 +141,7 @@ class ProjectionChange(ProjectionModel):
     def payload_sha256(self) -> str:
         payload = self.model_dump(mode="json")
         if self.sequence is None:
-            for field in ("sequence", "snapshot_file_id", "trashed_file_ids"):
+            for field in ("sequence", "snapshot_file_id"):
                 payload.pop(field)
         normalized = json.dumps(
             payload,

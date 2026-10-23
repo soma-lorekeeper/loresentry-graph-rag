@@ -96,6 +96,14 @@ def test_internal_models_reject_ambiguous_mutations():
         FileState(id=low, title="x", folder_code="CHARACTER", trashed="false")
     with pytest.raises(ValidationError):
         change(source="/auth")
+    # 순서가 있는 스냅샷의 관계는 subject가 low(owner)인 것만 실을 수 있다.
+    owner = FileState(id=low, title="x", folder_code="CHARACTER")
+    target = FileState(id=high, title="y", folder_code="CHARACTER")
+    change(sequence=1, snapshot_file_id=low, files=(owner,), relations=(relation,))
+    with pytest.raises(ValidationError):
+        change(
+            sequence=1, snapshot_file_id=high, files=(target,), relations=(relation,)
+        )
 
 
 def test_payload_fingerprint_is_stable_for_defaults_and_changes_with_content():

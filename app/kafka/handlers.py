@@ -31,10 +31,18 @@ class WireModel(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
 
+class WireProperty(WireModel):
+    key: StrictStr
+    value: StrictStr
+
+
 class WireFile(WireModel):
+    """FileChanged의 문서 상태. episode_id·body_text는 그래프에 쓰지 않아 무시한다."""
+
     title: StrictStr
     folder_code: StrictStr
-    description: StrictStr = ""
+    state: Literal["ACTIVE", "TRASHED"]
+    properties: list[WireProperty]
 
 
 class WireRelation(WireModel):
@@ -95,26 +103,32 @@ def projection_change(event: IncomingEvent) -> ProjectionChange:
         base["snapshot_file_id"] = wire.file_id
         if wire.change_type == "DELETED":
             return ProjectionChange(**base, deleted_file_ids=(wire.file_id,))
-        if wire.change_type == "TRASHED":
-            return ProjectionChange(**base, trashed_file_ids=(wire.file_id,))
+        # DELETED가 아니면 change_type과 무관하게 문서의 전체 스냅샷이다(TRASHED 포함).
         if wire.file is None or wire.relations is None:
             raise InvalidEvent("missing:file-snapshot")
-        relations = []
-        for relation in wire.relations:
-            low, high = sorted((wire.file_id, relation.target_document_id))
-            relations.append(
-                RelationState(
-                    id=relation.relation_id,
-                    low_document_id=low,
-                    high_document_id=high,
-                    description=relation.description,
-                )
+        # Content는 관계를 low 문서의 이벤트에만 싣는다. 대상이 low인 관계는
+        # RelationState의 low < high 검증에서 거절되어 DLQ로 간다.
+        relations = tuple(
+            RelationState(
+                id=relation.relation_id,
+                low_document_id=wire.file_id,
+                high_document_id=relation.target_document_id,
+                description=relation.description,
             )
-        return ProjectionChange(
-            **base,
-            files=(FileState(id=wire.file_id, **wire.file.model_dump()),),
-            relations=tuple(relations),
+            for relation in wire.relations
         )
+        file = FileState(
+            id=wire.file_id,
+            title=wire.file.title,
+            folder_code=wire.file.folder_code,
+            # 설명은 별도 필드가 아니라 key가 description인 첫 속성이다.
+            description=next(
+                (p.value for p in wire.file.properties if p.key == "description"),
+                "",
+            ),
+            trashed=wire.file.state == "TRASHED",
+        )
+        return ProjectionChange(**base, files=(file,), relations=relations)
     except (ValidationError, ValueError):
         raise InvalidEvent("invalid:projection-payload") from None
 
