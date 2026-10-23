@@ -44,8 +44,8 @@ Content 역할과 같이 EKS Pod Identity만 허용하고, 어떤 service accoun
 
 ## 런타임 설정과 Secret
 
-GitOps는 graph-rag 전용 `graph-rag-openai` Secret의 OPENAI_API_KEY를 참조한다. 챗과 비용을 따로 보도록
-`ai-chat-openai`와 나누며, Deployment보다 먼저 만든다. 값을 Git에 추가하지 않는다.
+GitOps는 ai-chat과 같은 `ai-chat-openai` Secret의 OPENAI_API_KEY를 참조한다. OpenAI rate limit은 키가 아니라
+조직·프로젝트 단위로 집계되어 챗과 한도를 함께 쓴다. 값을 Git에 추가하지 않는다.
 요청 버킷(`GRAPH_REFRESH_REQUEST_BUCKET`)과 결과 버킷(`GRAPH_REFRESH_COMPLETED_BUCKET`)은 Content와 GraphRAG 모두
 같은 `refresh` ConfigMap에서 공급한다.
 CONTENT_BASE_URL은 http://content-api이며 신뢰한 user_id는 요청마다 Content 이벤트에서 공급한다.
