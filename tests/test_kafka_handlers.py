@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.kafka.errors import InvalidEvent, RetryableProcessingError
+from app.kafka.errors import InvalidEvent, NotReady, RetryableProcessingError
 from app.kafka.handlers import (
     ProjectionEventHandler,
     RefreshEventHandler,
@@ -14,7 +14,8 @@ from app.kafka.handlers import (
 )
 from app.kafka.messages import parse_event
 from app.projection.models import ProjectionUnavailable
-from app.refresh.models import DocumentState, ModelSettings
+from app.refresh.errors import RefreshFailure, RequestConflict
+from app.refresh.models import DocumentState, Failure, ModelSettings
 from tests.test_kafka_messages import EVENT, PROJECT, REQUEST, content_record
 
 LOW = "11111111-1111-4111-8111-1111111111aa"
@@ -170,3 +171,45 @@ def test_refresh_checks_readiness_before_generation():
         RefreshEventHandler(
             lambda *args: pytest.fail("ran early"), not_ready, SETTINGS
         )(request_event())
+
+
+def test_graph_not_ready_waits_and_exhaustion_records_a_failed_completion():
+    def graph_waiting(request, user):
+        raise RefreshFailure(Failure("GRAPH_NOT_READY", "waiting", True))
+
+    failed = []
+    handler = RefreshEventHandler(
+        graph_waiting,
+        lambda project, ids: None,
+        SETTINGS,
+        lambda request, user, failure: failed.append((request, user, failure)),
+    )
+    # seed가 그래프에 아직 없는 것도 투영 대기로 분류한다.
+    with pytest.raises(NotReady) as caught:
+        handler(request_event())
+    assert caught.value.code == "GRAPH_NOT_READY"
+    handler.exhausted(request_event(), caught.value)
+    ((request, user, failure),) = failed
+    assert request.job.request_id == REQUEST and user == REQUEST
+    assert failure == Failure("GRAPH_NOT_READY", "Relationship projection not ready")
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        (
+            RefreshFailure(Failure("S3_UNAVAILABLE", "retry", True)),
+            RetryableProcessingError,
+        ),
+        (RequestConflict("different request"), InvalidEvent),
+    ],
+)
+def test_failed_completion_errors_are_classified_for_the_consumer(failure, expected):
+    def fail(*args):
+        raise failure
+
+    handler = RefreshEventHandler(lambda *a: None, lambda *a: None, SETTINGS, fail)
+    with pytest.raises(expected):
+        handler.exhausted(
+            request_event(), NotReady("PROJECTION_NOT_READY", "Projection waiting")
+        )

@@ -9,6 +9,7 @@ from app.kafka.consumer import BusinessConsumerHandler
 from app.kafka.errors import (
     DeliveryError,
     InvalidEvent,
+    NotReady,
     ProcessingStopped,
     RetryableProcessingError,
 )
@@ -87,6 +88,58 @@ def test_retry_exhaustion_dead_letters_once_with_safe_logs(caplog):
     assert len(calls) == 3
     assert len(dead_letters.sent) == 1
     assert "secret manuscript" not in caplog.text
+
+
+class WaitingWork:
+    """투영 대기로 늘 실패하는 처리기. exhausted가 있으면 소진 뒤 그것을 부른다."""
+
+    def __init__(self, hook_failure=None):
+        self.calls, self.exhausted_calls = [], []
+        self.hook_failure = hook_failure
+
+    def __call__(self, event):
+        self.calls.append(event)
+        raise NotReady("PROJECTION_NOT_READY", "waiting")
+
+    def exhausted(self, event, failure):
+        self.exhausted_calls.append((event, failure.code))
+        if self.hook_failure is not None:
+            raise self.hook_failure
+
+
+def test_projection_wait_exhaustion_is_handled_by_the_business_handler():
+    dead_letters = DeadLetters()
+    work = WaitingWork()
+    handler(work, dead_letters)(content_record())
+    assert len(work.calls) == 3
+    assert [code for _, code in work.exhausted_calls] == ["PROJECTION_NOT_READY"]
+    assert not dead_letters.sent
+
+
+@pytest.mark.parametrize(
+    "hook_failure",
+    [RetryableProcessingError("store down"), InvalidEvent("conflict:refresh")],
+)
+def test_failed_exhaustion_handling_goes_to_dlq(hook_failure):
+    dead_letters = DeadLetters()
+    work = WaitingWork(hook_failure)
+    handler(work, dead_letters)(content_record())
+    assert len(work.exhausted_calls) == 1
+    assert [failure for _, failure in dead_letters.sent] == [hook_failure]
+
+
+def test_other_retryable_failures_still_go_to_dlq_after_retries():
+    dead_letters = DeadLetters()
+    work = WaitingWork()
+
+    def unavailable(event):
+        work.calls.append(event)
+        raise RetryableProcessingError("model down")
+
+    unavailable.exhausted = work.exhausted
+    handler(unavailable, dead_letters)(content_record())
+    assert work.exhausted_calls == []
+    assert len(dead_letters.sent) == 1
 
 
 @pytest.mark.parametrize(

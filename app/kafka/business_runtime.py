@@ -142,18 +142,27 @@ def real_handlers(topic, publisher, stop, stack, settings):
     plan_budget = limits.input_budget - 2 * limits.max_output_tokens - PLAN_RESERVE
     model = BudgetedModel(client, limits, stop)
 
-    def run(request, user_id):
-        with neptune_refresh_service(
+    def service(user_id):
+        return neptune_refresh_service(
             artifacts=artifacts,
             model=model,
             user_id=user_id,
             tokens=model,
             plan_budget=plan_budget,
-        ) as service:
-            service.run(request)
+        )
+
+    def run(request, user_id):
+        with service(user_id) as refresh:
+            refresh.run(request)
+
+    def fail(request, user_id, failure):
+        with service(user_id) as refresh:
+            refresh.fail(request, failure)
 
     return {
-        "GraphRefreshRequested": RefreshEventHandler(run, ready.check, model_settings)
+        "GraphRefreshRequested": RefreshEventHandler(
+            run, ready.check, model_settings, fail
+        )
     }
 
 

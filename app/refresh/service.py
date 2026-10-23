@@ -109,6 +109,28 @@ class RefreshService:
                 result = RefreshResult(
                     request.job, Outcome.FAILED, failure=error.failure
                 )
+        return self._finish(request, result)
+
+    def fail(self, request: RefreshRequest, failure: Failure) -> Completion:
+        """실행하지 못한 요청(투영 대기 소진 등)을 FAILED로 끝내 완료를 한 번 기록한다.
+
+        이미 완료됐거나 저장된 결과가 있으면 그것을 그대로 쓴다. 완료 이벤트 ID는 요청으로
+        정해지고 결과는 한 번만 저장되므로 동시 실행과 경합해도 완료는 하나다.
+        """
+        completed = self.inbox.find(request)
+        if completed is not None:
+            validate_completion(request, completed)
+            return completed
+        result = self.artifacts.read_result(request) or RefreshResult(
+            request.job,
+            Outcome.FAILED,
+            failure=failure,
+            prompt_version=request.model_settings.prompt_version,
+        )
+        return self._finish(request, result)
+
+    def _finish(self, request, result):
+        """결과 저장 → Inbox와 발행 대기 기록. 먼저 저장된 결과가 있으면 그것을 쓴다."""
         if result.job != request.job:
             raise RequestConflict("result identity differs")
         try:

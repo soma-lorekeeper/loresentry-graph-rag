@@ -104,7 +104,11 @@ GitOps의 Pod grace period는 420초다. 강제 종료의 재전달·모델 비�
 ## 실패와 DLQ
 
 InvalidEvent는 즉시 DLQ, 명시적인 RetryableProcessingError는 최초 처리 뒤 1·2·4·8·10초로
-최대 5회 재시도 후 DLQ다. DeliveryError와 분류하지 않은 설정/프로그래밍 오류는 예외를 전파한다.
+최대 5회 재시도 후 DLQ다. 예외는 투영 대기(`NotReady`)다. 최신화 요청의 required_events가 Inbox에
+없거나 seed가 그래프에 아직 없어 재시도를 다 쓰면 업무 처리기가 `PROJECTION_NOT_READY`·`GRAPH_NOT_READY`
+FAILED 결과를 저장하고 완료를 한 번 발행한 뒤 offset을 진행한다. 이 기록이 실패하면 DLQ다.
+재시도 창이 약 25초라 투영이 그보다 늦으면 FAILED가 나며, Content는 같은 문서를 다음 요청에 다시 싣는다.
+DeliveryError와 분류하지 않은 설정/프로그래밍 오류는 예외를 전파한다.
 DLQ ack 이전에는 offset을 진행하지 않는다.
 완료 Outbox의 전송 실패는 원본 요청을 DLQ로 보내지 않는다. 발행 대기를 유지하고
 1·2·4·8·16·30초(이후 30초) 간격으로 재시도한다. 빈 배치는 1초 대기한다. 모델 업무 실패를 FAILED 결과로 저장·발행한 경우는 정상 완료다.

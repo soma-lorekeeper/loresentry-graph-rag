@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from app.refresh.models import Outcome, Selection
+from app.refresh.models import Failure, Outcome, Selection
 from tests.fakes.scenario import scenario
 
 
@@ -75,3 +75,23 @@ def test_default_rules_validate_and_publish_a_real_proposal():
         s.artifacts.read_result(s.request).document_proposals
         == s.model.candidate.document_proposals
     )
+
+
+def test_unprojected_request_fails_once_without_running():
+    s = scenario()
+    failure = Failure("PROJECTION_NOT_READY", "Projection has not caught up")
+    done = s.service().fail(s.request, failure)
+    assert done.outcome == Outcome.FAILED and done.failure == failure
+    assert done.prompt_version == s.request.model_settings.prompt_version
+    assert "model.generate" not in s.calls.names()
+    assert "artifacts.read_input" not in s.calls.names()
+    # 재전달되어 다시 실패시켜도 같은 완료 하나만 남는다.
+    assert s.service().fail(s.request, failure) == done
+    assert [entry.completion for entry in s.inbox.pending()] == [done]
+
+
+def test_failing_an_already_saved_request_reuses_its_result():
+    s = scenario()
+    finished = s.service().run(s.request)
+    late = s.service().fail(s.request, Failure("PROJECTION_NOT_READY", "late"))
+    assert late == finished and late.outcome == Outcome.PROPOSED

@@ -1,11 +1,12 @@
 """Content 업무 payload를 내부 투영·refresh 모델로 변환하고 유스케이스를 호출한다."""
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError
 
-from app.kafka.errors import InvalidEvent, RetryableProcessingError
+from app.kafka.errors import InvalidEvent, NotReady, RetryableProcessingError
 from app.kafka.messages import IncomingEvent
 from app.projection.models import (
     FileState,
@@ -20,6 +21,7 @@ from app.refresh.models import (
     ArtifactRef,
     ChangedDocumentRef,
     DocumentState,
+    Failure,
     JobKey,
     ModelSettings,
     RefreshRequest,
@@ -167,21 +169,59 @@ class ProjectionEventHandler:
 
 
 class RefreshEventHandler:
-    def __init__(self, run: Callable, ready: Callable, model_settings: ModelSettings):
+    """최신화 요청을 실행한다. 투영이 끝내 따라오지 않으면 FAILED 완료로 요청을 끝낸다.
+
+    Args:
+        run: (request, user_id)로 갱신안을 만들고 완료를 기록한다.
+        ready: (project_id, required_events)로 투영 준비를 확인한다.
+        model_settings: 기동 때 정한 모델·프롬프트·스키마 버전.
+        fail: (request, user_id, failure)로 실행하지 않은 요청의 FAILED 완료를 기록한다.
+    """
+
+    def __init__(
+        self,
+        run: Callable,
+        ready: Callable,
+        model_settings: ModelSettings,
+        fail: Callable | None = None,
+    ):
         self._run = run
         self._ready = ready
         self._model_settings = model_settings
+        self._fail = fail
 
     def __call__(self, event: IncomingEvent) -> None:
         request, user_id, required_events = refresh_request(event, self._model_settings)
-        try:
+        with _classified():
             self._ready(request.job.project_id, required_events)
             self._run(request, user_id)
-        except RequestConflict:
-            raise InvalidEvent("conflict:refresh-request") from None
-        except RefreshFailure as failure:
-            if failure.failure.retryable:
-                raise RetryableProcessingError(
-                    "Refresh dependency unavailable"
-                ) from None
-            raise InvalidEvent("invalid:refresh-dependency") from None
+
+    def exhausted(self, event: IncomingEvent, failure: NotReady) -> None:
+        """재시도를 다 쓰도록 투영이 준비되지 않은 요청을 FAILED 완료로 끝낸다.
+
+        DLQ로 보내면 완료가 없어 Content의 요청이 진행 중으로 남는다. FAILED면 Content가
+        같은 문서를 다음 요청에 다시 싣는다. 기록에 실패하면 예외를 소비자가 DLQ로 보낸다.
+        """
+        if self._fail is None:
+            raise failure
+        request, user_id, _ = refresh_request(event, self._model_settings)
+        with _classified():
+            self._fail(request, user_id, Failure(failure.code, str(failure)))
+
+
+@contextmanager
+def _classified():
+    """refresh 실패를 소비자의 거절·재시도·투영 대기로 나눈다."""
+    try:
+        yield
+    except RequestConflict:
+        raise InvalidEvent("conflict:refresh-request") from None
+    except RefreshFailure as failure:
+        # seed가 그래프에 아직 없으면 투영 대기와 같다. 재시도를 다 쓰면 FAILED로 끝낸다.
+        if failure.failure.code == "GRAPH_NOT_READY":
+            raise NotReady(
+                "GRAPH_NOT_READY", "Relationship projection not ready"
+            ) from None
+        if failure.failure.retryable:
+            raise RetryableProcessingError("Refresh dependency unavailable") from None
+        raise InvalidEvent("invalid:refresh-dependency") from None

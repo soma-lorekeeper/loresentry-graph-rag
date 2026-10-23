@@ -2,7 +2,7 @@
 
 from app.adapters.neptune_client import NeptuneGremlinClient, NeptuneUnavailable
 from app.adapters.projection_gremlin import literal
-from app.kafka.errors import InvalidEvent, RetryableProcessingError
+from app.kafka.errors import InvalidEvent, NotReady, RetryableProcessingError
 from app.projection.models import CONSUMER_NAME
 
 
@@ -30,4 +30,4 @@ class ProjectionReadiness(NeptuneGremlinClient):
         if result[0].get("deleted") == 1:
             raise InvalidEvent("deleted:project")
         if result[0].get("count") != len(set(event_ids)):
-            raise RetryableProcessingError("Projection has not caught up")
+            raise NotReady("PROJECTION_NOT_READY", "Projection has not caught up")
