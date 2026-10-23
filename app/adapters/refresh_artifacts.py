@@ -75,8 +75,8 @@ class S3ArtifactSettings:
     def from_environment(cls, values):
         """명시적으로 전달받은 설정만 사용하며 프로세스 환경을 직접 읽지 않는다."""
         return cls(
-            bucket=values.get("GRAPH_REFRESH_BUCKET", ""),
-            input_bucket=values.get("GRAPH_REFRESH_INPUT_BUCKET", ""),
+            bucket=values.get("GRAPH_REFRESH_COMPLETED_BUCKET", ""),
+            input_bucket=values.get("GRAPH_REFRESH_REQUEST_BUCKET", ""),
             prefix=values.get("GRAPH_REFRESH_PREFIX", "refresh"),
             input_prefix=values.get("GRAPH_REFRESH_INPUT_PREFIX", "refresh"),
             max_object_bytes=int(

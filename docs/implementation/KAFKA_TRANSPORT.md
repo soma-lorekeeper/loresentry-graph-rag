@@ -83,7 +83,7 @@ commit되지 않는다. 남은 입력은 lifecycle로 정리한다. Content의 �
 | KAFKA_SHUTDOWN_SECONDS | 360. 전체 업무 worker 종료 대기 예산 |
 | KAFKA_POLLING_ENABLED | false. sandbox와 업무 실행 동시 활성화 금지 |
 | NEPTUNE_ENDPOINT·NEPTUNE_PORT | writer hostname·8182. 테스트는 명시적 endpoint 주입 |
-| GRAPH_REFRESH_BUCKET·GRAPH_REFRESH_INPUT_BUCKET | refresh 활성화 시 필수. 비공개 버킷 |
+| GRAPH_REFRESH_COMPLETED_BUCKET·GRAPH_REFRESH_REQUEST_BUCKET | refresh 활성화 시 필수. 비공개 버킷 |
 | CONTENT_BASE_URL·OPENAI_API_KEY·OPENAI_MODEL | refresh 활성화 시 필수. 모델과 토큰 예산은 기동 때 검증 |
 | OPENAI_MAX_INPUT_TOKENS·OPENAI_CONTEXT_WINDOW | 922,000·1,050,000. 호출당 입력은 최대 입력의 80%이며 OpenAI 계수 API로 센다 |
 | OPENAI_TIMEOUT_SECONDS | 240. 호출마다의 timeout. 요청 전체 기한은 없다 |

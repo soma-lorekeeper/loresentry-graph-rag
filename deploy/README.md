@@ -11,7 +11,7 @@ Argo CD가 Deployment를 반영한다. AWS 자격증명을 앱 코드나 Git에 
    버킷과 content 권한을, 이어서 이 저장소의 `deploy/setup-refresh.sh`로 graph-rag 역할과 Pod Identity를 만든다.
 3. 성공 후 GitOps의 `workload/base/refresh` ConfigMap(버킷·리전)과 graph-rag Deployment의
    `graph-rag-api` service account·refresh env(`KAFKA_REFRESH_REQUESTED_ENABLED=true` 포함),
-   content Deployment의 `GRAPH_REFRESH_BUCKET`을 반영한다.
+   content Deployment의 `GRAPH_REFRESH_REQUEST_BUCKET`·`GRAPH_REFRESH_COMPLETED_BUCKET`을 반영한다.
 4. Content/GraphRAG Pod 준비 상태와 로그, 실제 프로젝트의 요청 → S3 `result.json`을 확인한다.
    Content의 완료 처리(READY/FAILED 갱신)는 아직 없어 Content 쪽 상태는 바뀌지 않는다.
 
@@ -46,7 +46,8 @@ Content 역할과 같이 EKS Pod Identity만 허용하고, 어떤 service accoun
 
 GitOps는 graph-rag 전용 `graph-rag-openai` Secret의 OPENAI_API_KEY를 참조한다. 챗과 비용을 따로 보도록
 `ai-chat-openai`와 나누며, Deployment보다 먼저 만든다. 값을 Git에 추가하지 않는다.
-Content의 GRAPH_REFRESH_BUCKET과 GraphRAG의 입력/출력 버킷은 같은 `refresh` ConfigMap에서 공급한다.
+요청 버킷(`GRAPH_REFRESH_REQUEST_BUCKET`)과 결과 버킷(`GRAPH_REFRESH_COMPLETED_BUCKET`)은 Content와 GraphRAG 모두
+같은 `refresh` ConfigMap에서 공급한다.
 CONTENT_BASE_URL은 http://content-api이며 신뢰한 user_id는 요청마다 Content 이벤트에서 공급한다.
 
 GraphRAG Pod grace period는 420초, runtime join 예산은 360초다.

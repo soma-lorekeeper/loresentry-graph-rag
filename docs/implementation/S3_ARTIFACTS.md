@@ -36,8 +36,8 @@ with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifac
 
 | 설정 | 의미·기본값 |
 |---|---|
-| `GRAPH_REFRESH_BUCKET` | 실행 스냅샷·결과 버킷. 필수 |
-| `GRAPH_REFRESH_INPUT_BUCKET` | 허용할 입력 버킷. 필수. 출력 버킷과 같아도 됨 |
+| `GRAPH_REFRESH_COMPLETED_BUCKET` | 실행 스냅샷·결과 버킷. 필수 |
+| `GRAPH_REFRESH_REQUEST_BUCKET` | 허용할 입력 버킷. 필수. 출력 버킷과 같아도 됨 |
 | `GRAPH_REFRESH_PREFIX` | 출력 prefix. 기본 `refresh` |
 | `GRAPH_REFRESH_INPUT_PREFIX` | 입력 key가 속해야 하는 prefix. 기본 `refresh` |
 | `GRAPH_REFRESH_MAX_OBJECT_BYTES` | 객체별 읽기·쓰기 한도. 기본 `16777216`바이트 |
