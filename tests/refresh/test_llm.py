@@ -8,7 +8,8 @@ import pytest
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Evidence, ModelInput, ModelSettings, Usage
+from app.refresh.models import Evidence, Failure, ModelInput, ModelSettings, Usage
+from tests.fakes.refresh import count_input_tokens
 from tests.refresh.test_llm_schema import source_fact
 
 
@@ -44,7 +45,11 @@ def client_fixture():
     )
     return SimpleNamespace(
         max_retries=0,
-        responses=SimpleNamespace(create=Mock(return_value=response)),
+        responses=SimpleNamespace(
+            create=Mock(return_value=response),
+            # 생성 전 토큰 계수. 글자 수 합을 토큰 수로 돌려주는 결정적 대체 구현이다.
+            input_tokens=SimpleNamespace(count=Mock(side_effect=count_input_tokens)),
+        ),
         close=Mock(),
     )
 
@@ -81,7 +86,6 @@ def test_single_structured_request_separates_roles_and_preserves_client_ownershi
         {"prompt_version": "refresh-prompt-v3"},
         {"prompt_version": "refresh-prompt-v10"},
         {"instructions": ""},
-        {"prompt": "x" * 50000},
     ],
 )
 def test_invalid_input_never_calls_remote(changes):
@@ -90,6 +94,57 @@ def test_invalid_input_never_calls_remote(changes):
         OpenAIProposalModel(client, limits()).generate(
             replace(model_input(), **changes)
         )
+    assert caught.value.usage == Usage()
+    client.responses.input_tokens.count.assert_not_called()
+    client.responses.create.assert_not_called()
+
+
+def test_token_count_sends_exactly_the_create_request_input():
+    """토큰 계수는 생성과 같은 model·instructions·input·text만 보내고 생성 전용 인자는 뺀다."""
+    client = client_fixture()
+    OpenAIProposalModel(client, limits()).generate(model_input())
+    client.responses.input_tokens.count.assert_called_once()
+    counted = dict(client.responses.input_tokens.count.call_args.kwargs)
+    created = client.responses.create.call_args.kwargs
+    assert counted.pop("timeout") == 10
+    assert counted == {
+        key: created[key] for key in ("model", "instructions", "input", "text")
+    }
+
+
+def test_input_over_token_budget_fails_before_create_without_usage():
+    """계수 결과가 max_input_tokens의 80%를 넘을 때만 생성 요청 없이 실패한다."""
+    client = client_fixture()
+    model = OpenAIProposalModel(client, limits())
+    # limits()의 max_input_tokens=40000이므로 호출 하나의 예산은 32000 토큰이다.
+    assert model.limits.input_budget == 32000
+    # 대체 계수는 글자 수 합이므로 지시문 길이로 예산에 꼭 맞는 입력을 만든다.
+    fitted = replace(
+        model_input(), instructions="t" * (32000 - len(model_input().prompt))
+    )
+    assert model.generate(fitted).usage == Usage(1, 10, 20)
+    client.responses.create.assert_called_once()
+    with pytest.raises(RefreshFailure) as caught:
+        model.generate(replace(fitted, instructions=fitted.instructions + "t"))
+    assert caught.value.failure == Failure(
+        "MODEL_REQUEST_INVALID", "Model input token budget exceeded"
+    )
+    assert caught.value.usage == Usage()
+    assert client.responses.input_tokens.count.call_count == 2
+    client.responses.create.assert_called_once()
+
+
+@pytest.mark.parametrize("tokens", [None, -1, 1.5, "10", True])
+def test_invalid_token_count_fails_before_create(tokens):
+    """정수가 아니거나 음수인 계수 결과는 잘못된 응답이다. 생성 요청을 보내지 않는다."""
+    client = client_fixture()
+    count = client.responses.input_tokens.count
+    count.side_effect = None
+    count.return_value = SimpleNamespace(input_tokens=tokens)
+    with pytest.raises(RefreshFailure) as caught:
+        OpenAIProposalModel(client, limits()).generate(model_input())
+    assert caught.value.failure.code == "MODEL_INVALID_RESPONSE"
+    assert not caught.value.failure.retryable
     assert caught.value.usage == Usage()
     client.responses.create.assert_not_called()
 
@@ -239,25 +294,36 @@ def test_non_candidates_never_become_no_change(status, output, text, code):
         (500, {}, "MODEL_UNAVAILABLE", True),
     ],
 )
-def test_status_classification_is_safe_and_never_retries(status, body, code, retryable):
+# 토큰 계수(count)와 생성(create)의 같은 오류는 같은 실패로 분류한다.
+@pytest.mark.parametrize("stage", ["count", "create"])
+def test_status_classification_is_safe_and_never_retries(
+    stage, status, body, code, retryable
+):
     import httpx2
     from openai import APIStatusError
 
     client = client_fixture()
+    failing = {
+        "count": client.responses.input_tokens.count,
+        "create": client.responses.create,
+    }[stage]
     response = httpx2.Response(status, request=httpx2.Request("POST", "http://test"))
-    client.responses.create.side_effect = APIStatusError(
+    failing.side_effect = APIStatusError(
         "SECRET DOCUMENT AND KEY", response=response, body=body
     )
     with pytest.raises(RefreshFailure) as caught:
         OpenAIProposalModel(client, limits()).generate(model_input())
     assert caught.value.failure.code == code
     assert caught.value.failure.retryable == retryable
-    assert caught.value.usage == Usage(calls=1)
+    # 계수 실패는 생성 요청 전이라 사용량이 없고, 생성 실패는 한 호출로 센다.
+    assert caught.value.usage == (Usage() if stage == "count" else Usage(calls=1))
     assert "SECRET" not in str(caught.value)
-    client.responses.create.assert_called_once()
+    failing.assert_called_once()
+    assert client.responses.create.call_count == (1 if stage == "create" else 0)
 
 
-def test_timeout_connection_and_programming_error_are_distinct():
+@pytest.mark.parametrize("stage", ["count", "create"])
+def test_timeout_connection_and_programming_error_are_distinct(stage):
     import httpx2
     from openai import APIConnectionError, APITimeoutError
 
@@ -267,13 +333,18 @@ def test_timeout_connection_and_programming_error_are_distinct():
         (APIConnectionError(request=request), "MODEL_CONNECTION_FAILED"),
     ]:
         client = client_fixture()
-        client.responses.create.side_effect = error
+        failing = {
+            "count": client.responses.input_tokens.count,
+            "create": client.responses.create,
+        }[stage]
+        failing.side_effect = error
         with pytest.raises(RefreshFailure) as caught:
             OpenAIProposalModel(client, limits()).generate(model_input())
         assert caught.value.failure.code == code
         assert caught.value.failure.retryable
-        client.responses.create.assert_called_once()
-    client.responses.create.side_effect = TypeError("programming defect")
+        failing.assert_called_once()
+        assert client.responses.create.call_count == (1 if stage == "create" else 0)
+    failing.side_effect = TypeError("programming defect")
     with pytest.raises(TypeError):
         OpenAIProposalModel(client, limits()).generate(model_input())
 

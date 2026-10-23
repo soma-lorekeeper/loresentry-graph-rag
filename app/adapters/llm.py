@@ -1,6 +1,5 @@
 """동기 Responses 호출 경계. 클라이언트 소유·종료는 조립 지점의 책임이다."""
 
-import json
 import math
 from dataclasses import dataclass
 
@@ -23,6 +22,9 @@ MODEL_CAPABILITIES = {
     "gpt-6-luna": (922000, 128000, 1050000),
 }
 
+# 호출 하나의 입력은 모델 최대 입력의 이 비율까지만 쓴다. 문서 수·본문 길이 대신 이 예산이 상한이다.
+INPUT_BUDGET_RATIO = 0.8
+
 
 @dataclass(frozen=True)
 class ModelLimits:
@@ -33,6 +35,11 @@ class ModelLimits:
     max_input_tokens: int
     max_output_tokens: int
     context_window: int
+
+    @property
+    def input_budget(self) -> int:
+        """호출 하나에 보낼 수 있는 입력 토큰. OpenAI 계수 API가 센 값과 비교한다."""
+        return int(self.max_input_tokens * INPUT_BUDGET_RATIO)
 
     def validate(self) -> None:
         """잘못된 예산을 네트워크 호출 전에 거절한다."""
@@ -98,35 +105,12 @@ class OpenAIProposalModel:
             or self.client.max_retries != 0
         ):
             fail("MODEL_REQUEST_INVALID", "Unsupported model input configuration")
-        schema = candidate_schema(model_input.schema_version)
-        # UTF-8 byte length is a conservative text token estimate, plus framing
-        # allowance. It is intentionally stricter than a tokenizer, never truncates.
-        estimate = (
-            sum(
-                len(s.encode("utf-8"))
-                for s in (
-                    model_input.instructions,
-                    model_input.prompt,
-                    json.dumps(schema),
-                )
-            )
-            + 4096
-        )
-        if estimate > self.limits.max_input_tokens:
+        # 모델이 실제로 받을 토큰을 세어 예산을 넘으면 생성 요청을 보내지 않는다. 원문은 자르지 않는다.
+        if self.count(model_input) > self.limits.input_budget:
             fail("MODEL_REQUEST_INVALID", "Model input token budget exceeded")
         try:
             response = self.client.responses.create(
-                model=model_input.model,
-                instructions=model_input.instructions,
-                input=[{"role": "user", "content": model_input.prompt}],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "refresh_candidate",
-                        "strict": True,
-                        "schema": schema,
-                    }
-                },
+                **request_arguments(model_input),
                 max_output_tokens=self.limits.max_output_tokens,
                 timeout=self.limits.timeout_seconds,
                 store=False,
@@ -139,6 +123,46 @@ class OpenAIProposalModel:
         except APIStatusError as error:
             raise RefreshFailure(status_failure(error), usage=Usage(calls=1)) from None
         return decode_response(response, model_input=model_input)
+
+    def count(self, model_input: ModelInput) -> int:
+        """생성과 같은 인자로 OpenAI input_tokens 계수 API를 불러 입력 토큰을 센다.
+
+        역할·경계 같은 형식 토큰까지 모델이 받는 정확한 수다. 생성 호출이 아니므로 사용량에 넣지 않는다.
+
+        Raises:
+            RefreshFailure: 통신 실패는 재시도 가능, 거절·잘못된 응답은 재시도 불가로 분류한다.
+        """
+        try:
+            response = self.client.responses.input_tokens.count(
+                **request_arguments(model_input), timeout=self.limits.timeout_seconds
+            )
+        except APITimeoutError:
+            fail("MODEL_TIMEOUT", "Model token count timed out", True)
+        except APIConnectionError:
+            fail("MODEL_CONNECTION_FAILED", "Model connection failed", True)
+        except APIStatusError as error:
+            raise RefreshFailure(status_failure(error)) from None
+        tokens = getattr(response, "input_tokens", None)
+        if type(tokens) is not int or tokens < 0:
+            fail("MODEL_INVALID_RESPONSE", "Model token count is invalid")
+        return tokens
+
+
+def request_arguments(model_input: ModelInput) -> dict:
+    """생성과 토큰 계수가 같은 입력을 보도록 공유하는 Responses 인자."""
+    return {
+        "model": model_input.model,
+        "instructions": model_input.instructions,
+        "input": [{"role": "user", "content": model_input.prompt}],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "refresh_candidate",
+                "strict": True,
+                "schema": candidate_schema(model_input.schema_version),
+            }
+        },
+    }
 
 
 def status_failure(error: APIStatusError) -> Failure:

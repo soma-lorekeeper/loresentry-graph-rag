@@ -156,6 +156,7 @@ def test_live_auth_failure_stops_suite_and_records_unknown_cost(tmp_path, monkey
     from openai import AuthenticationError
 
     import scripts.evaluate_refresh as cli
+    from tests.fakes.refresh import count_input_tokens
 
     create = Mock(
         side_effect=AuthenticationError(
@@ -169,7 +170,13 @@ def test_live_auth_failure_stops_suite_and_records_unknown_cost(tmp_path, monkey
 
     @contextmanager
     def fake_client(**kwargs):
-        yield SimpleNamespace(max_retries=0, responses=SimpleNamespace(create=create))
+        yield SimpleNamespace(
+            max_retries=0,
+            responses=SimpleNamespace(
+                create=create,
+                input_tokens=SimpleNamespace(count=count_input_tokens),
+            ),
+        )
 
     monkeypatch.setattr(cli, "OpenAI", fake_client)
     monkeypatch.setenv("OPENAI_API_KEY", "local-test-value")

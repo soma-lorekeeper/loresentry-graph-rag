@@ -20,7 +20,7 @@ from app.adapters.refresh_schema import (
     json_bytes,
 )
 from app.refresh.errors import RefreshFailure, RequestConflict
-from app.refresh.models import Outcome
+from app.refresh.models import Outcome, RefreshResult
 from evaluation.cases import new_setting_cases
 from evaluation.runner import CallBudget, assemble
 
@@ -272,6 +272,20 @@ def test_write_race_is_idempotent_or_conflict_and_409_is_retryable(s3_server):
     with pytest.raises(RefreshFailure) as caught:
         store._put(ref, body)
     assert caught.value.failure.retryable
+
+
+def test_batch_results_are_created_once_and_read_back(s3_server):
+    state, store = s3_server
+    case, _ = setup_case(state, store)
+    result = RefreshResult(case.request.job, Outcome.NO_CHANGE)
+    assert store.read_batch(case.request, 1) is None
+    ref = store.save_batch(case.request, 1, ("m1",), result)
+    assert ref.key.endswith("/batch-0001.json")
+    assert store.read_batch(case.request, 1) == (("m1",), result)
+    # 같은 내용의 재저장은 재사용하고 다른 내용은 덮어쓰지 않는다.
+    assert store.save_batch(case.request, 1, ("m1",), result) == ref
+    with pytest.raises(RequestConflict):
+        store.save_batch(case.request, 1, ("m2",), result)
 
 
 def test_saved_result_after_lost_ack_is_recovered_without_model(s3_server):

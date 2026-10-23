@@ -149,7 +149,10 @@ class RecordingClient:
 
     def __init__(self, client, recorder: AttemptRecorder):
         self.client, self.recorder = client, recorder
-        self.responses = SimpleNamespace(create=self.create)
+        # 토큰 계수는 생성이 아니라 기록하지 않고 그대로 넘긴다.
+        self.responses = SimpleNamespace(
+            create=self.create, input_tokens=client.responses.input_tokens
+        )
 
     @property
     def max_retries(self):

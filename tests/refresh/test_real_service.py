@@ -142,15 +142,9 @@ def test_aggregate_conflicting_relation_descriptions_fails():
     assert s.artifacts.read_result(s.request).document_proposals == ()
 
 
-@pytest.mark.parametrize(
-    "count,chars,expected",
-    [
-        (20, 5000, None),
-        (21, 5000, "TOO_MANY_CHANGED_DOCUMENTS"),
-        (20, 5001, "BODY_TOO_LARGE"),
-    ],
-)
-def test_full_service_input_boundaries(count, chars, expected):
+# 옛 한도(20개·5,000자)를 넘는 입력도 거절하지 않고 대상마다 모델을 호출한다.
+@pytest.mark.parametrize("count,chars", [(20, 5000), (21, 5000), (20, 5001)])
+def test_full_service_accepts_inputs_beyond_old_count_and_body_limits(count, chars):
     from tests.fakes.real_rules import changed_documents
 
     s = real_scenario()
@@ -159,12 +153,8 @@ def test_full_service_input_boundaries(count, chars, expected):
     s.model.responses.clear()
     before = repr(source)
     done = s.service.run(request)
-    if expected is None:
-        assert done.outcome == Outcome.NO_CHANGE
-        assert s.calls.names().count("model.generate") == 2
-    else:
-        assert done.failure.code == expected
-        assert "model.generate" not in s.calls.names()
+    assert done.outcome == Outcome.NO_CHANGE
+    assert s.calls.names().count("model.generate") == 2
     assert repr(source) == before
 
 

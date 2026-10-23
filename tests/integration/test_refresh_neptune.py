@@ -106,7 +106,7 @@ def test_both_edge_directions_one_hop_and_category_filter(graph):
         )
         assert filtered.document_ids == (left.id,)
     # Neptune과 같은 ANTLR 엔진에서도 읽기 traversal을 실행한다.
-    value = query(build_one_hop_query(p, req.seed_ids, (), 60), language="gremlin-lang")
+    value = query(build_one_hop_query(p, req.seed_ids, ()), language="gremlin-lang")
     assert len(value[0]["relations"]) == 2
 
 

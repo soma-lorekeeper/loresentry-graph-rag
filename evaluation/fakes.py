@@ -46,6 +46,7 @@ class FakeArtifacts:
         self.inputs = deepcopy(inputs or {})
         self.contexts = {}
         self.results = {}
+        self.batches = {}
         self.requests = {}
 
     def _check(self, request):
@@ -94,6 +95,19 @@ class FakeArtifacts:
         self.requests[key] = request
         self.results[key] = deepcopy(result)
         return self._ref(request, "result")
+
+    def read_batch(self, request: RefreshRequest, index: int):
+        self.calls.record("artifacts.read_batch", request, index)
+        return deepcopy(self.batches.get((self._check(request), index)))
+
+    def save_batch(self, request: RefreshRequest, index: int, seed_ids, result):
+        self.calls.record("artifacts.save_batch", request, index)
+        key = (self._check(request), index)
+        if key in self.batches and self.batches[key] != (seed_ids, result):
+            raise RequestConflict("saved batch is immutable")
+        self.requests[key[0]] = request
+        self.batches[key] = deepcopy((seed_ids, result))
+        return self._ref(request, f"batch-{index:04d}")
 
     @staticmethod
     def _ref(request, kind):

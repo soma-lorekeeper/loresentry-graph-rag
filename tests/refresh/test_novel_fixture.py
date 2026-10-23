@@ -88,7 +88,8 @@ def test_novel_replay_runs_without_api(tmp_path, monkeypatch):
     assert not report["live"]
 
 
-def test_json_body_change_changes_identity_and_enforces_input_limit(tmp_path):
+def test_json_body_change_changes_identity_without_body_length_limit(tmp_path):
+    """옛 본문 한도(5,000자)를 넘는 입력도 거절하지 않고 모델 호출까지 진행한다."""
     directory = tmp_path / "fixture"
     copytree(FIXTURE_ROOT, directory)
     original = novel_case("gpt-5.6-luna", "test", directory)
@@ -102,8 +103,9 @@ def test_json_body_change_changes_identity_and_enforces_input_limit(tmp_path):
     )
     budget = CallBudget(3)
     result, _ = run_case(changed, assemble(changed, None, budget))
-    assert result.failure.code == "BODY_TOO_LARGE"
-    assert budget.used == 0
+    # 고정 응답은 바뀌기 전 본문을 인용하므로 길이가 아니라 출처 검증에서 실패한다.
+    assert result.failure.code == "INVALID_EVIDENCE"
+    assert budget.used >= 1
 
 
 def test_json_revision_is_not_coerced(tmp_path):

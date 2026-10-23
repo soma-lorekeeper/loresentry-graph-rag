@@ -66,8 +66,9 @@ record-and-consent case with four calls, including one successful repair. Its fi
 result was `PROPOSED` with human semantic review pending. Repeated semantic A/B
 trials did not establish a v12 advantage, so v11 remains the default. Long-input
 trials reached the earlier output limit; the example and local output budget now
-allow 32,768 output tokens, 240,000 input tokens, a 272,768-token context budget,
-and a 240-second request timeout. This budget change is separate from prompt quality.
+allow 32,768 output tokens, 922,000 input tokens (each call may use 80% of it, counted
+with the OpenAI input token count API), a 1,050,000-token context budget, and a
+240-second request timeout. This budget change is separate from prompt quality.
 
 Each evaluation run also writes `report.md` with proposal diffs,
 check results, latency, and known token usage. To render existing evaluation JSON

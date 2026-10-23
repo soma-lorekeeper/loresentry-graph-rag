@@ -71,6 +71,25 @@ class RefreshArtifactStore(Protocol):
         """
         ...
 
+    def read_batch(
+        self, request: RefreshRequest, index: int
+    ) -> tuple[tuple[str, ...], RefreshResult] | None:
+        """index번째(1부터) 묶음의 seed와 검증된 결과를 읽고, 없으면 None을 반환한다."""
+        ...
+
+    def save_batch(
+        self,
+        request: RefreshRequest,
+        index: int,
+        seed_ids: tuple[str, ...],
+        result: RefreshResult,
+    ) -> ArtifactRef:
+        """끝난 묶음을 멱등적으로 저장한다. 재전달된 요청은 다음 묶음부터 이어 간다.
+
+        같은 index에 다른 내용은 RequestConflict로 거절한다.
+        """
+        ...
+
 
 class RelatedDocumentSource(Protocol):
     """관계 그래프에서 관련 문서와 반영 준비 상태를 조회하는 계약."""
@@ -114,6 +133,18 @@ class ProposalModel(Protocol):
 
         호출은 외부 비용을 발생시킬 수 있다. 응답 형식 해석과 업무 유효성 검증은
         구분하며, 후보의 최종 검증은 RefreshRules.validate_candidate가 담당한다.
+        """
+        ...
+
+
+class TokenCounter(Protocol):
+    """모델이 실제로 받을 입력 토큰 수를 세는 계약. 묶음 크기를 정할 때 쓴다."""
+
+    def count(self, model_input: ModelInput) -> int:
+        """생성과 같은 입력의 토큰 수를 반환한다. 생성 비용은 들지 않는다.
+
+        Raises:
+            RefreshFailure: 계수 요청이 실패한 경우. 통신 실패는 재시도 가능으로 분류한다.
         """
         ...
 

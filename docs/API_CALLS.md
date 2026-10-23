@@ -73,7 +73,13 @@ Content가 활성 프로젝트 소유자만 통과시키고 휴지통·없는 �
 
 [OpenAIProposalModel](../app/adapters/llm.py)은 동기 SDK의 `responses.create`로
 OpenAI `POST /v1/responses`를 호출한다. FastAPI 라우트에는 연결하지 않았으며
-평가 도구의 `--live` 모드에서 선택한다. 대화 응답 재생은 네트워크 호출을 하지 않는다.
+Kafka refresh와 평가 도구의 `--live` 모드에서 쓴다. 대화 응답 재생은 네트워크 호출을 하지 않는다.
+
+생성 전에는 같은 인자(모델·instructions·input·구조화 출력 형식)로
+`POST /v1/responses/input_tokens`(`responses.input_tokens.count`)를 불러 모델이 받을 입력 토큰을
+정확히 센다. 최대 입력 토큰의 80%를 넘으면 생성 요청을 보내지 않고 `MODEL_REQUEST_INVALID`로
+거절한다. 계수 호출은 생성 비용이 없으며 사용량에 넣지 않는다. Kafka refresh는 같은 계수로
+묶음 크기도 정한다.
 
 키·모델·timeout·토큰 예산·클라이언트 종료는 실행 스크립트가 담당한다. SDK와 어댑터 모두
 자동 재시도가 없다. 구조화 출력·오류 코드·스냅샷 버전·사용량 정책과 실행 명령은

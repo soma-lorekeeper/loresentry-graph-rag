@@ -123,7 +123,6 @@ def test_instruction_examples_pass_live_candidate_and_source_validation(
         changed_ids=tuple(context["changed_ids"]),
     )
     context["model_settings"] = asdict(settings)
-    context["max_context_chars"] = request.settings.max_context_chars
     model_input = build_prompt(json.dumps(context, ensure_ascii=False))
     candidate = parse_candidate(output, Usage(), model_input=model_input)
     result = RefreshRules().validate_candidate(snapshot, candidate, model_input)

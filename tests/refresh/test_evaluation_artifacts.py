@@ -14,6 +14,7 @@ from app.refresh.rules import RefreshRules
 from evaluation.artifacts import AttemptRecorder, RecordingClient
 from evaluation.cases import cases
 from evaluation.runner import CallBudget, assemble, evaluation_snapshot, run_case
+from tests.fakes.refresh import count_input_tokens
 
 
 def setup(tmp_path, text):
@@ -37,7 +38,11 @@ def setup(tmp_path, text):
     response = Response.model_validate(data)
     response._request_id = "req_test"
     client = SimpleNamespace(
-        max_retries=0, responses=SimpleNamespace(create=Mock(return_value=response))
+        max_retries=0,
+        responses=SimpleNamespace(
+            create=Mock(return_value=response),
+            input_tokens=SimpleNamespace(count=count_input_tokens),
+        ),
     )
     model = OpenAIProposalModel(RecordingClient(client, recorder), limits)
     return case, assemble(case, model, CallBudget(3), recorder), recorder

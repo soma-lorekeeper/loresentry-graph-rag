@@ -20,6 +20,7 @@ S3 결과는 승인 전 제안이다. 결과 생성·저장만으로 Content 문
 | `request.json` | GraphRAG | `refresh-request-v1` | 출력 버킷. 같은 요청 ID의 입력·설정이 바뀌지 않았는지 확인하는 manifest |
 | `context.json` | GraphRAG | `refresh-context-v1` | 출력 버킷. 최초 입력과 추가 조회 문서를 고정한 실행 스냅샷 |
 | `result.json` | GraphRAG | `refresh-result-v3` | 출력 버킷. 제안 있음·변경 없음·실패 결과 |
+| `batch-NNNN.json` | GraphRAG | `refresh-batch-v1` | 출력 버킷. 모델 입력 예산을 넘어 묶음으로 나눈 요청에서 끝난 묶음의 seed와 검증된 결과(1부터) |
 
 입력은 설정된 `input_bucket`의 `input_prefix/` 아래에 있어야 한다. 파일명은 공급자가
 정하며 `input.json`으로 고정하지 않는다. 같은 요청의 출력 세 객체를 입력으로 지정할 수 없다.
@@ -29,7 +30,11 @@ S3 결과는 승인 전 제안이다. 결과 생성·저장만으로 Content 문
 {prefix}/{encoded_project_id}/{encoded_request_id}/request.json
 {prefix}/{encoded_project_id}/{encoded_request_id}/context.json
 {prefix}/{encoded_project_id}/{encoded_request_id}/result.json
+{prefix}/{encoded_project_id}/{encoded_request_id}/batch-0001.json
 ```
+
+묶음 객체는 결과 객체와 같은 create-once·sha256 규칙으로 쓴다. 재전달된 요청은 저장된 묶음을 모델 호출 없이
+다시 접고 다음 묶음부터 실행한다. 모든 묶음이 끝나면 누적 결과를 한 번 검증해 `result.json` 하나만 저장한다.
 
 이 표기는 경로 규칙이다. 각 ID에 `urllib.parse.quote(value, safe="")`를 적용한다.
 예를 들어 프로젝트 ID `project/a`, 요청 ID `update 1`, prefix `refresh`의 결과 key는
@@ -96,9 +101,8 @@ Content의 `event/RefreshInput`이 만드는 형식이다. 요청 식별(project
 | `relations` | 관계 배열 | 필수. 각 항목은 아래의 관계 필드 사용 |
 
 분류는 `MANUSCRIPT`, `WORLDVIEW`, `CHARACTER`, `LOCATION`, `ORGANIZATION`, `ITEM`,
-`EVENT`다. 변경 입력 개수는 기본·지원 상한 20개이며 비활성 문서도 센다.
-ACTIVE 본문은 문서별 기본·지원 상한 5,000 Unicode 코드 포인트다.
-요청의 `max_changed_documents`·`max_input_chars`로 더 낮은 한도를 지정할 수 있다.
+`EVENT`다. 변경 입력 개수와 본문 길이에는 상한이 없다. 모델 호출 하나의 입력이 예산
+(최대 입력 토큰의 80%)을 넘으면 GraphRAG가 변경 문서를 묶음으로 나눠 처리한다.
 
 본문은 Content의 구조화 body JSON이 아닌 분석용 `body_text`다.
 공급자가 구조화 본문을 문자열로 변환해 전달하며, 이후 공백·줄바꿈·표기·이모지는
@@ -239,7 +243,7 @@ LLM의 `paragraph_edits` 응답을 S3 결과로 직접 사용하지 않는다.
 | 객체 크기 | 설정 한도 적용 | 같은 설정 한도로 읽기·쓰기 제한 |
 
 객체 한도는 기본 16,777,216바이트이며 헤더와 실제 읽은 바이트 모두 확인한다.
-본문의 5,000 코드 포인트 한도와 객체의 바이트 한도는 별개다.
+본문 길이 상한은 없으므로 이 바이트 한도가 입력·실행 스냅샷 크기의 실제 상한이다.
 출력 JSON 바이트는 키 정렬·공백 없는 구분자·비ASCII 문자 유지로 생성하며 NaN은 허용하지 않는다.
 수동으로 출력 JSON을 업로드해도 sha256 메타데이터가 없으면 이 어댑터는 읽지 않는다.
 

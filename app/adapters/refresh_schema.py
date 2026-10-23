@@ -51,6 +51,14 @@ class TypedResult(StrictObject):
     result: RefreshResult
 
 
+class BatchObject(StrictObject):
+    """예산을 넘는 요청에서 끝난 한 묶음의 seed와 검증된 결과. 재전달 때 이어 가는 데 쓴다."""
+
+    schema_version: Literal["refresh-batch-v1"]
+    seed_ids: tuple[str, ...]
+    result: RefreshResult
+
+
 def json_bytes(value) -> bytes:
     """본문을 정규화하지 않고 결정적 UTF-8 JSON 바이트를 만든다."""
     return json.dumps(

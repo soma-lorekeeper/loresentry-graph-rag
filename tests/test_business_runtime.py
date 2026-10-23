@@ -132,6 +132,22 @@ def test_startup_failure_closes_resources_and_app_health_tracks_runtime(monkeypa
     assert live.closed
 
 
+def test_stopping_runtime_starts_no_new_generation_or_token_count():
+    from app.adapters.llm import ModelLimits
+    from app.kafka.business_runtime import BudgetedModel
+
+    stop = Event()
+    stop.set()
+    model = BudgetedModel(
+        object(), ModelLimits("gpt-6-luna", 240, 922000, 32768, 1050000), stop
+    )
+    for call in (model.generate, model.count):
+        with pytest.raises(RefreshFailure) as caught:
+            call(None)
+        assert caught.value.failure.code == "REFRESH_INTERRUPTED"
+        assert caught.value.failure.retryable
+
+
 def test_refresh_handlers_take_the_model_from_environment(monkeypatch):
     for key, value in {
         "GRAPHRAG_S3_BUCKET": "artifacts",

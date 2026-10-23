@@ -21,7 +21,7 @@ from app.refresh.models import (
     Usage,
     ValidationDiagnostic,
 )
-from app.refresh.policy import ALLOWED_FIELDS, RELATION_KEYS
+from app.refresh.policy import ALLOWED_FIELDS, MAX_PROPOSAL_CHARS, RELATION_KEYS
 from app.refresh.selection import reject
 from app.refresh.source_alignment import align_candidate
 
@@ -168,7 +168,7 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
         if (
             proposal.field not in ALLOWED_FIELDS
             or not isinstance(proposal.value, str)
-            or len(proposal.value) > snapshot.request.settings.max_input_chars
+            or len(proposal.value) > MAX_PROPOSAL_CHARS
         ):
             reject("INVALID_FIELD", "Only bounded body_text replacement is allowed")
         evidence = validate_evidence(
@@ -186,10 +186,12 @@ def validate_document_proposals(snapshot, proposals, allowed_targets=None):
             evidence = unique_evidence(previous.evidence + evidence)
             fact_ids = tuple(dict.fromkeys(previous.fact_ids + fact_ids))
         merged[key] = replace(proposal, evidence=evidence, fact_ids=fact_ids)
+    # 묶음 실행에서는 앞 묶음이 바꾼 seed 본문이 현재 본문이다.
+    working = dict(getattr(snapshot, "working_bodies", ()))
     return tuple(
         merged[key]
         for key in sorted(merged)
-        if merged[key].value != documents[key[0]].body_text
+        if merged[key].value != working.get(key[0], documents[key[0]].body_text)
     )
 
 
@@ -205,7 +207,8 @@ def existing_setting_names(snapshot):
     다른 설정의 본문에 등장한 이름도 독립 문서의 이름으로 취급하지 않는다.
     """
     names = set()
-    for document in snapshot.documents:
+    # 묶음 실행에서는 묶음 밖 설정과 앞 묶음의 새 설정도 이미 있는 이름이다.
+    for document in snapshot.documents + getattr(snapshot, "known_settings", ()):
         if (
             document.project_id != snapshot.request.job.project_id
             or document.state != DocumentState.ACTIVE
@@ -226,8 +229,11 @@ def existing_setting_names(snapshot):
     return names
 
 
-def validate_new_document_proposals(snapshot, proposals):
-    """원고에 근거한 새 설정, 임시 참조, 중복·충돌과 생성 개수 한도를 검사한다."""
+def validate_new_document_proposals(snapshot, proposals, *, aggregate=False):
+    """원고에 근거한 새 설정, 임시 참조, 중복·충돌과 생성 개수 한도를 검사한다.
+
+    개수 한도는 호출 하나의 한도다. 여러 호출·묶음을 합친 집계에는 적용하지 않는다.
+    """
     if not isinstance(proposals, tuple):
         reject("INVALID_NEW_DOCUMENT", "New setting proposal tuple required")
     documents = {d.document_id: d for d in snapshot.documents}
@@ -245,7 +251,7 @@ def validate_new_document_proposals(snapshot, proposals):
             or len(proposal.name) > 200
             or not isinstance(proposal.body_text, str)
             or not proposal.body_text.strip()
-            or len(proposal.body_text) > snapshot.request.settings.max_input_chars
+            or len(proposal.body_text) > MAX_PROPOSAL_CHARS
             or not isinstance(proposal.candidate_id, str)
             or proposal.candidate_id != f"new:{proposal.folder_code}:{proposal.name}"
             or proposal.candidate_id in documents
@@ -290,7 +296,7 @@ def validate_new_document_proposals(snapshot, proposals):
         merged[proposal.candidate_id] = replace(
             proposal, evidence=evidence, fact_ids=fact_ids
         )
-        if len(merged) > 20:
+        if not aggregate and len(merged) > 20:
             reject("INVALID_NEW_DOCUMENT", "At most 20 new settings per request")
     return tuple(merged[key] for key in sorted(merged))
 
@@ -396,7 +402,7 @@ def validate_relation_proposals(
         if (
             not isinstance(proposal.description, str)
             or not proposal.description.strip()
-            or len(proposal.description) > snapshot.request.settings.max_input_chars
+            or len(proposal.description) > MAX_PROPOSAL_CHARS
         ):
             reject(
                 "INVALID_RELATION_DESCRIPTION",
@@ -493,7 +499,7 @@ def validate_candidate(snapshot, candidate, model_input):
             snapshot, candidate.document_proposals, allowed
         )
         new_documents = validate_new_document_proposals(
-            snapshot, candidate.new_document_proposals
+            snapshot, candidate.new_document_proposals, aggregate=scope is None
         )
         if not isinstance(candidate.relation_proposals, tuple):
             reject("INVALID_RELATION_PROPOSAL", "Relation proposal tuple required")
@@ -513,7 +519,8 @@ def validate_candidate(snapshot, candidate, model_input):
             aggregate=model_input.relation_scope is None,
             source_markers=source_markers(model_input),
         )
-        if model_input.schema_version in {
+        # 묶음 결과의 집계(scope 없음)에는 단일 계획이 없다. 문단 조립은 묶음마다 검증했다.
+        if scope is not None and model_input.schema_version in {
             "refresh-candidate-v7",
             "refresh-candidate-v8",
         }:

@@ -25,22 +25,11 @@ def test_selection_is_deterministic_preserves_revision_and_multi_targets():
     assert repr((request, source, related, targets)) == before
 
 
-@pytest.mark.parametrize(
-    "count,chars,code",
-    [
-        (20, 5000, None),
-        (21, 5000, "TOO_MANY_CHANGED_DOCUMENTS"),
-        (20, 5001, "BODY_TOO_LARGE"),
-    ],
-)
-def test_input_boundaries(count, chars, code):
+# 옛 한도(20개·5,000자)를 넘어도 문서 수·본문 길이로 거절하지 않는다.
+@pytest.mark.parametrize("count,chars", [(20, 5000), (21, 5000), (20, 5001)])
+def test_input_count_and_body_length_are_not_rejected(count, chars):
     request, source = changed_documents(count, chars)
-    if code is None:
-        RefreshRules().validate_input(request, source)
-    else:
-        with pytest.raises(RefreshFailure) as caught:
-            RefreshRules().validate_input(request, source)
-        assert caught.value.failure.code == code
+    RefreshRules().validate_input(request, source)
 
 
 @pytest.mark.parametrize(
@@ -89,12 +78,20 @@ def test_cycle_duplicate_and_unconnected_ids_do_not_expand_unbounded():
         + (Relation("project", "c1", "m1", "related_manuscript"),),
     )
     assert RefreshRules().select(request, source, related).missing_ids == ("c1", "i1")
-    with pytest.raises(RefreshFailure, match="budget"):
-        RefreshRules().select(
-            replace(request, settings=replace(request.settings, max_documents=1)),
-            source,
-            related,
-        )
+
+
+def test_additional_documents_are_not_capped_by_count():
+    """관계로 닿은 추가 문서는 옛 기본 예산(40개)을 넘어도 모두 선택한다."""
+    request, source, related, _, _ = real_example()
+    ids = tuple(f"c{i:02d}" for i in range(41))
+    related = replace(
+        related,
+        document_ids=ids,
+        relations=tuple(
+            Relation("project", "m1", target, "related_character") for target in ids
+        ),
+    )
+    assert RefreshRules().select(request, source, related).missing_ids == ids
 
 
 @pytest.mark.parametrize("kind", ["missing", "deleted", "overwrites_input"])

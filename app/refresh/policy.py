@@ -10,5 +10,6 @@ RELATION_KEYS = {
     "EVENT": "related_event",
 }
 ALLOWED_FIELDS = frozenset({"body_text"})
-MAX_CHANGED_DOCUMENTS = 20
-MAX_BODY_CHARS = 5000
+# 제안 본문·관계 설명의 상한. 승인되면 Content 본문이 되므로 Content가 저장할 수 있는
+# 최대 길이(DocumentService.BODY_MAX)와 같다. 입력 쪽 한도는 모델 호출의 토큰 예산이다.
+MAX_PROPOSAL_CHARS = 1_000_000

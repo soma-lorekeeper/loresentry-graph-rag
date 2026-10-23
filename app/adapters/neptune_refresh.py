@@ -11,6 +11,7 @@ from app.refresh.ports import (
     ProposalModel,
     RefreshArtifactStore,
     RefreshInbox,
+    TokenCounter,
 )
 from app.refresh.rules import RefreshRules
 from app.refresh.service import RefreshService
@@ -27,11 +28,14 @@ def neptune_refresh_service(
     content_base_url: str | None = None,
     rules: RefreshRules | None = None,
     endpoint: str | None = None,
+    tokens: TokenCounter | None = None,
+    plan_budget: int | None = None,
 ) -> Iterator[RefreshService]:
     """writer 설정을 재사용하고 종료 시 소유한 HTTP 클라이언트를 닫는다.
 
     documents를 생략하면 신뢰한 호출자의 user_id로 실제 Content API를 사용한다.
     사용자 식별은 환경변수나 문서 입력에서 추측하지 않는다. 나머지 포트는 주입한다.
+    tokens·plan_budget을 주면 예산을 넘는 요청을 seed 묶음으로 나눠 실행한다.
     """
     with ExitStack() as stack:
         if documents is None:
@@ -54,4 +58,6 @@ def neptune_refresh_service(
             model=model,
             inbox=inbox,
             rules=rules,
+            tokens=tokens,
+            plan_budget=plan_budget,
         )

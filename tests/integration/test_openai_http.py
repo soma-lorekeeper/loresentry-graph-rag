@@ -13,6 +13,7 @@ from app.adapters.llm import ModelLimits, OpenAIProposalModel
 from app.adapters.llm_schema import CANDIDATE_VERSION, PROMPT_VERSION
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Evidence, ModelInput, Usage
+from tests.fakes.refresh import count_input_tokens
 from tests.refresh.test_llm_schema import source_fact
 
 pytestmark = pytest.mark.integration
@@ -68,22 +69,35 @@ def response_payload():
 
 @pytest.fixture
 def server():
-    state = {"status": 200, "payload": response_payload(), "delay": 0, "requests": []}
+    # requests는 생성 요청만, counts는 토큰 계수 요청 본문만 기록한다.
+    state = {
+        "status": 200,
+        "payload": response_payload(),
+        "delay": 0,
+        "requests": [],
+        "counts": [],
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_POST(self):
-            state["requests"].append(
-                (
-                    self.path,
-                    json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
-                )
-            )
-            time.sleep(state["delay"])
-            body = json.dumps(state["payload"]).encode()
-            self.send_response(state["status"])
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/v1/responses/input_tokens":
+                # 생성 전 토큰 계수는 지연·오류 주입 없이 글자 수 합으로 답한다.
+                state["counts"].append(request)
+                status = 200
+                payload = {
+                    "object": "response.input_tokens",
+                    "input_tokens": count_input_tokens(**request).input_tokens,
+                }
+            else:
+                state["requests"].append((self.path, request))
+                time.sleep(state["delay"])
+                status, payload = state["status"], state["payload"]
+            body = json.dumps(payload).encode()
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("x-request-id", "local-request")
@@ -140,6 +154,10 @@ def test_sdk_wire_format_usage_and_lifecycle(server):
     assert payload["text"]["format"]["strict"] is True
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
     assert payload["store"] is False
+    # 토큰 계수는 생성 전용 인자를 뺀 같은 입력을 생성보다 먼저 한 번 보낸다.
+    assert state["counts"] == [
+        {key: payload[key] for key in ("model", "instructions", "input", "text")}
+    ]
 
 
 @pytest.mark.parametrize("marker", ["C0001", "C9999"])

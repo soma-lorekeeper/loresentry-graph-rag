@@ -81,19 +81,24 @@ commit되지 않는다. 남은 입력은 lifecycle로 정리한다. Content의 �
 | KAFKA_REFRESH_REQUESTED_ENABLED | false. 갱신안 생성 처리 |
 | KAFKA_BOOTSTRAP_SERVERS | 활성화 시 필수 |
 | KAFKA_SHUTDOWN_SECONDS | 360. 전체 업무 worker 종료 대기 예산 |
-| KAFKA_REFRESH_TASK_SECONDS | 600. 요청별 모델 작업 예산 |
 | KAFKA_POLLING_ENABLED | false. sandbox와 업무 실행 동시 활성화 금지 |
 | NEPTUNE_ENDPOINT·NEPTUNE_PORT | writer hostname·8182. 테스트는 명시적 endpoint 주입 |
 | GRAPHRAG_S3_BUCKET·GRAPHRAG_S3_INPUT_BUCKET | refresh 활성화 시 필수. 비공개 버킷 |
 | CONTENT_BASE_URL·OPENAI_API_KEY·OPENAI_MODEL | refresh 활성화 시 필수. 모델과 토큰 예산은 기동 때 검증 |
-| OPENAI_TIMEOUT_SECONDS | 240. 작업 잔여 예산보다 길게 호출하지 않음 |
+| OPENAI_MAX_INPUT_TOKENS·OPENAI_CONTEXT_WINDOW | 922,000·1,050,000. 호출당 입력은 최대 입력의 80%이며 OpenAI 계수 API로 센다 |
+| OPENAI_TIMEOUT_SECONDS | 240. 호출마다의 timeout. 요청 전체 기한은 없다 |
+
+모델 입력 예산을 넘는 요청은 변경 문서를 묶음으로 나눠 차례로 실행하고, 끝난 묶음은 S3에 저장한다.
+완료 이벤트는 모든 묶음을 합쳐 검증한 뒤 한 번만 발행한다. 묶음 수만큼 호출·비용·처리 시간이 늘고
+그동안 같은 partition의 다른 요청은 기다린다.
 
 고정 group은 `graph-rag.project-changed`, `graph-rag.graph-refresh-requested`다.
 현재 projection Inbox 논리 이름과 refresh Inbox 이름은 유지한다. 운영자가 group을 바꿔 중복 제어를 초기화하지 않는다.
 실행 중 worker 실패는 /health를 503으로 만든다. 연결·할당·lag의 실시간 증명은 아니다.
 
 SIGTERM 때 새 업무를 중단하고 poll을 유지한다. 모델 호출 중이면 현재 호출의 timeout을 기다리며
-다음 호출은 시작하지 않는다. 중단된 요청은 offset을 진행하지 않고 저장 문맥으로 재실행한다.
+다음 호출은 시작하지 않는다. 중단된 요청은 offset을 진행하지 않고 저장 문맥으로 재실행하며,
+저장된 묶음은 다시 실행하지 않는다.
 GitOps의 Pod grace period는 420초다. 강제 종료의 재전달·모델 비용 중복은 남는다.
 
 ## 실패와 DLQ
