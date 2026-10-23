@@ -324,48 +324,31 @@ class RefreshService:
         return self.rules.model_inputs(batch, self.rules.chunk(batch))[0]
 
     def _pack(self, snapshot, state, remaining):
-        """계획 입력이 예산에 드는 가장 긴 seed 앞부분을 count API로 확인해 고른다.
+        """계획 입력이 예산에 드는 가장 긴 seed 앞부분을 count API 이분 탐색으로 고른다.
 
-        문맥은 문서 수에 비례해 늘지 않으므로(관계 쌍 목록 등) 실제 계획 입력을 만들어
-        글자 수로 범위를 좁히고, 마지막 판정은 실측 토큰으로 한다. 글자당 1토큰에서 시작해
-        실측 비율로 고친다. seed 하나와 그 이웃만으로도 넘으면 이웃을 빼지 않고 실패시킨다.
+        문맥은 문서 수에 비례해 늘지 않으므로(관계 쌍 목록 등) 앞부분마다 실제 계획 입력을
+        만들어 센다. 남은 seed가 전부 들면 count 한 번으로 끝나고, 아니면 묶음마다
+        log2(남은 seed 수)번쯤 더 센다. seed 하나와 그 이웃만으로도 넘으면 이웃을 빼지 않고
+        실패시킨다.
         """
         from app.refresh.batching import batch_snapshot
         from app.refresh.workflow import build_plan_input
 
-        inputs, sizes = {}, {}
+        def tokens(count):
+            # 앞에서 count개 seed로 묶음을 만들었을 때 계획 입력의 실제 토큰 수
+            batch = batch_snapshot(snapshot, state, remaining[:count])
+            return self.tokens.count(build_plan_input(batch, self._batch_input(batch)))
 
-        def plan_input(count):
-            if count not in inputs:
-                batch = batch_snapshot(snapshot, state, remaining[:count])
-                inputs[count] = build_plan_input(batch, self._batch_input(batch))
-                sizes[count] = len(inputs[count].instructions) + len(
-                    inputs[count].prompt
-                )
-            return inputs[count]
-
-        def size(count):
-            plan_input(count)
-            return sizes[count]
-
-        fits, too_big, ratio = 0, len(remaining) + 1, 1.0
-        while fits + 1 < too_big:
-            if fits and size(fits + 1) * ratio > self.plan_budget:
-                break
-            # 지금 비율로 예산에 드는 가장 긴 앞부분을 찾는다. 하나도 안 들면 한 개를 센다.
-            low, high, guess = fits + 1, too_big - 1, fits + 1
-            while low <= high:
-                middle = (low + high) // 2
-                if size(middle) * ratio <= self.plan_budget:
-                    guess, low = middle, middle + 1
-                else:
-                    high = middle - 1
-            tokens = self.tokens.count(plan_input(guess))
-            ratio = tokens / size(guess)
-            if tokens <= self.plan_budget:
-                fits = guess
+        if tokens(len(remaining)) <= self.plan_budget:
+            return remaining
+        # fits개는 예산에 들고 too_big개는 넘는다는 것을 유지하며 범위를 좁힌다.
+        fits, too_big = 0, len(remaining)
+        while too_big - fits > 1:
+            middle = (fits + too_big) // 2
+            if tokens(middle) <= self.plan_budget:
+                fits = middle
             else:
-                too_big = guess
+                too_big = middle
         if not fits:
             raise RefreshFailure(
                 Failure(

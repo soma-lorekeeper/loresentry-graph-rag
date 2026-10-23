@@ -258,6 +258,19 @@ def test_two_batches_carry_the_edited_body_and_validate_once():
     assert restored == result
 
 
+def test_packing_counts_the_whole_queue_then_bisects():
+    request = scenario()[0]
+    tokens = FakeTokens()
+    refresh = service(ScriptedModel(), budget=split_budget(), tokens=tokens)
+    assert refresh.run(request).outcome == Outcome.PROPOSED
+    # 첫 묶음은 전체를 센 뒤 절반을 세고, 둘째 묶음은 남은 전체를 한 번 센다.
+    assert [json.loads(i.prompt)["changed_ids"] for i in tokens.counted] == [
+        ["chapter-a", "chapter-b"],
+        ["chapter-a"],
+        ["chapter-b"],
+    ]
+
+
 def test_redelivery_resumes_after_the_saved_batch():
     request = scenario()[0]
     # 둘째 묶음의 작성 호출이 재시도 가능하게 실패해 요청이 재전달되는 경우다.
