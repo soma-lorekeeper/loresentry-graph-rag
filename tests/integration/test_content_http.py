@@ -27,9 +27,13 @@ from evaluation.fakes import (
     FakeModel,
     FakeRelations,
 )
-from tests.fakes.content import content_payload
+from tests.fakes.content import content_document, contents_payload
 
 pytestmark = pytest.mark.integration
+
+
+def contents_path(project):
+    return f"/projects/{project}/files/content"
 
 
 def setup_refresh(content_server):
@@ -49,13 +53,9 @@ def setup_refresh(content_server):
         {req.input_ref: InputSnapshot(req.job, (original,))}, calls
     )
     model = FakeModel(ModelCandidate(()), calls)
-    state["responses"][f"/projects/{project}"] = (
+    state["responses"][contents_path(project)] = (
         200,
-        {"id": project, "trashed_at": None},
-    )
-    state["responses"][f"/files/{neighbor}/content"] = (
-        200,
-        content_payload(project, neighbor, revision_no=0),
+        contents_payload(project, [content_document(neighbor, revision_no=0)]),
     )
     related = RelatedDocuments(
         (neighbor,),
@@ -108,20 +108,22 @@ def test_real_http_fetch_and_frozen_context_after_model_failure(content_server):
         fetched = next(doc for doc in frozen.documents if doc.document_id == neighbor)
         assert (fetched.body_text, fetched.revision_no) == ("Content 원문", 0)
         assert fetched.properties == (("aliases", "별칭  "),)
-        assert len(state["requests"]) == 2
+        assert [path for path, _ in state["requests"]] == [
+            f"{contents_path(req.job.project_id)}?ids={neighbor}"
+        ]
         assert all(headers["X-User-Id"] == user for _, headers in state["requests"])
         state["responses"].clear()
         completion = refresh.run(req)
         assert completion.outcome == Outcome.NO_CHANGE
         assert artifacts.read_context(req) == frozen
-        assert len(state["requests"]) == 2
+        assert len(state["requests"]) == 1
     assert adapter._client.is_closed
 
 
 @pytest.mark.parametrize(
     "status,payload,code,retryable",
     [
-        (404, {"code": "FILE_NOT_FOUND"}, "DOCUMENT_MISSING", False),
+        (200, "missing", "DOCUMENT_MISSING", False),
         (403, {"code": "FORBIDDEN"}, "CONTENT_ACCESS_DENIED", False),
         (503, {"code": "INTERNAL_ERROR"}, "CONTENT_UNAVAILABLE", True),
         (200, {"id": "wrong-body"}, "CONTENT_RESPONSE_INVALID", False),
@@ -133,7 +135,9 @@ def test_content_failure_stops_generation(
     state, endpoint, user, req, _, neighbor, calls, artifacts, model, related = (
         setup_refresh(content_server)
     )
-    state["responses"][f"/files/{neighbor}/content"] = (status, payload)
+    if payload == "missing":
+        payload = contents_payload(req.job.project_id, missing=[neighbor])
+    state["responses"][contents_path(req.job.project_id)] = (status, payload)
     with ContentDocumentSource(endpoint, user_id=user) as adapter:
         refresh = service(adapter, calls, artifacts, model, related)
         if retryable:
@@ -148,11 +152,11 @@ def test_content_failure_stops_generation(
     assert artifacts.read_context(req) is None
 
 
-def test_project_rejection_blocks_all_body_requests(content_server):
-    state, endpoint, user, req, _, _, calls, artifacts, model, related = setup_refresh(
-        content_server
+def test_project_rejection_fails_the_request(content_server):
+    state, endpoint, user, req, _, neighbor, calls, artifacts, model, related = (
+        setup_refresh(content_server)
     )
-    state["responses"][f"/projects/{req.job.project_id}"] = (
+    state["responses"][contents_path(req.job.project_id)] = (
         404,
         {"code": "PROJECT_NOT_FOUND"},
     )
@@ -161,6 +165,6 @@ def test_project_rejection_blocks_all_body_requests(content_server):
     assert completion.outcome == Outcome.FAILED
     assert artifacts.read_result(req).failure.code == "CONTENT_PROJECT_UNAVAILABLE"
     assert [path for path, _ in state["requests"]] == [
-        f"/projects/{req.job.project_id}"
+        f"{contents_path(req.job.project_id)}?ids={neighbor}"
     ]
     assert "model.generate" not in calls.names()

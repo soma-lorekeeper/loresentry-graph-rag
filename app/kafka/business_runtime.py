@@ -26,7 +26,7 @@ from app.kafka.polling import consumer_config
 from app.kafka.publisher import KafkaPublisher, producer_config
 from app.projection.service import GraphProjectionHandler
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Failure
+from app.refresh.models import Failure, ModelSettings
 from app.refresh.outbox import RefreshOutboxRelay
 
 logger = logging.getLogger(__name__)
@@ -111,30 +111,37 @@ def real_handlers(topic, publisher, stop, stack, settings):
         s3_artifacts(artifact_settings, region_name=os.environ.get("AWS_REGION"))
     )
     ready = stack.enter_context(ProjectionReadiness.from_env())
-    # Profile comes from the immutable Content event, while operator limits remain local.
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         raise ValueError("OPENAI_API_KEY is required for refresh processing")
     client = stack.enter_context(OpenAI(api_key=api_key, max_retries=0))
     if not os.environ.get("CONTENT_BASE_URL", "").strip():
         raise ValueError("CONTENT_BASE_URL is required for refresh processing")
+    # Content 이벤트는 모델을 모른다. 모델은 운영 env가, 프롬프트·스키마 버전은
+    # ModelSettings 기본값이 정한다. 잘못된 설정은 요청을 받기 전에 기동을 실패시킨다.
+    model_name = os.environ.get("OPENAI_MODEL", "").strip()
+    if not model_name:
+        raise ValueError("OPENAI_MODEL is required for refresh processing")
+    model_settings = ModelSettings(model=model_name)
+    limits = ModelLimits(
+        model=model_settings.model,
+        timeout_seconds=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "240")),
+        max_input_tokens=int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "240000")),
+        max_output_tokens=int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "32768")),
+        context_window=int(os.environ.get("OPENAI_CONTEXT_WINDOW", "272768")),
+    )
+    limits.validate()
 
     def run(request, user_id):
-        limits = ModelLimits(
-            model=request.model_settings.model,
-            timeout_seconds=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "240")),
-            max_input_tokens=int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "240000")),
-            max_output_tokens=int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "32768")),
-            context_window=int(os.environ.get("OPENAI_CONTEXT_WINDOW", "272768")),
-        )
-        limits.validate()
         model = BudgetedModel(client, limits, stop, settings.task_seconds)
         with neptune_refresh_service(
             artifacts=artifacts, model=model, user_id=user_id
         ) as service:
             service.run(request)
 
-    return {"GraphRefreshRequested": RefreshEventHandler(run, ready.check)}
+    return {
+        "GraphRefreshRequested": RefreshEventHandler(run, ready.check, model_settings)
+    }
 
 
 class BusinessPollingRuntime:

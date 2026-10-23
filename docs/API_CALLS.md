@@ -59,10 +59,10 @@ Inbox의 호출·복구 계약은 [완료 Inbox](implementation/REFRESH_INBOX.md
 ## Content 문서 조회
 
 [ContentDocumentSource](../app/adapters/content_documents.py)는 `X-User-Id`를 전달해
-`GET /projects/{project_id}`로 활성 프로젝트를 확인하고, 선택된 각 문서를
-`GET /files/{document_id}/content`로 읽는다. `CONTENT_BASE_URL`은 필수이며
-`CONTENT_TIMEOUT_SECONDS`는 기본 10초다. 응답의 프로젝트·문서 ID를 대조하고
-구조화 본문을 텍스트로 변환하며 제목·속성·관계·`revision_no`를 보존한다.
+선택된 문서를 `GET /projects/{project_id}/files/content?ids=…`로 100개씩 읽는다.
+Content가 활성 프로젝트 소유자만 통과시키고 휴지통·없는 문서는 `missing`으로 알린다.
+`CONTENT_BASE_URL`은 필수이며 `CONTENT_TIMEOUT_SECONDS`는 기본 10초다. 응답의 프로젝트와
+받은 문서·missing을 요청 ID와 대조하고 본문·제목·속성·관계·`revision_no`를 보존한다.
 
 `neptune_refresh_service(...)`에서 `documents`를 생략하고 신뢰한 `user_id`를 전달하면
 실제 HTTP 구현을 연결한다. 기본 평가는 명시적으로 fake를 유지한다.

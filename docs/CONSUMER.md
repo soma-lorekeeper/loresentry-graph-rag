@@ -24,7 +24,7 @@ FileChanged subject는 file_id, ProjectDeleted는 project_id, refresh 요청은 
 옛 이벤트나 삭제 뒤 더 큰 seq의 잘못된 이벤트로 데이터를 부활시키지 않는다.
 기존 [그래프 투영](implementation/GRAPH_PROJECTION.md)의 sequence 없는 fixture 경로와 구분한다.
 
-갱신안은 입력 해시·신뢰한 user_id·모델 profile·변경 문서 manifest를 내부 RefreshRequest에 연결한다.
+갱신안은 입력 해시·신뢰한 user_id·변경 문서 manifest와 기동 때 정한 모델 설정을 내부 RefreshRequest에 연결한다.
 required_events로 입력 생성 시 필요한 투영 이벤트들이 처리됐는지 확인하고 생성한다.
 완료 Inbox는 요청 ID와 요청 해시로 중복·충돌을 판정하며 실행 소유권 잠금은 아니다.
 [완료 Inbox](implementation/REFRESH_INBOX.md)와 불변 S3 재사용으로 중단을 복구한다.

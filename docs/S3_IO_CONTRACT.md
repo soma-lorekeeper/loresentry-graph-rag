@@ -16,7 +16,7 @@ S3 결과는 승인 전 제안이다. 결과 생성·저장만으로 Content 문
 
 | 객체 | 생성 주체 | 버전 | 저장 위치·역할 |
 | --- | --- | --- | --- |
-| 변경 입력 | 입력 공급자 | `refresh-input-v1` | 요청의 `input_ref`가 지정하는 입력 버킷·key. 이 요청에 전달할 변경 문서 묶음 |
+| 변경 입력 | 입력 공급자(Content) | `refresh-input-v2` | 요청의 `input_ref`가 지정하는 입력 버킷·key. 이 요청에 전달할 변경 문서 묶음 |
 | `request.json` | GraphRAG | `refresh-request-v1` | 출력 버킷. 같은 요청 ID의 입력·설정이 바뀌지 않았는지 확인하는 manifest |
 | `context.json` | GraphRAG | `refresh-context-v1` | 출력 버킷. 최초 입력과 추가 조회 문서를 고정한 실행 스냅샷 |
 | `result.json` | GraphRAG | `refresh-result-v3` | 출력 버킷. 제안 있음·변경 없음·실패 결과 |
@@ -54,7 +54,7 @@ S3 ETag·문서 revision·JSON 객체를 별도 방식으로 해시한 값으로
 
 공급자는 다음 순서로 전달한다.
 
-1. `refresh-input-v1` JSON을 UTF-8 바이트로 만든다.
+1. `refresh-input-v2` JSON을 UTF-8 바이트로 만든다.
 2. 그 바이트 전체의 SHA-256을 계산한다.
 3. 같은 바이트를 S3에 저장한다.
 4. `input_ref`와 계산한 `job.input_fingerprint`를 요청에 전달한다.
@@ -64,33 +64,36 @@ GraphRAG는 별도 S3 `VersionId`를 지정하지 않고 읽은 바이트의 해
 요청 중 사용할 입력 객체는 공급자가 보존해야 한다.
 
 요청의 `seed_ids`는 입력의 문서 ID 안에 있어야 한다. 선택적인 `changed_documents`를
-전달했다면 그 목록의 문서 ID·revision·state가 입력 문서 전체와 정확히 일치해야 한다.
+전달했다면 그 목록의 문서 ID·revision이 입력 문서 전체와 정확히 일치해야 한다.
+Kafka 요청은 이벤트의 `files` 전체를 ACTIVE 상태로 이 목록에 넣는다.
 `changed_documents=[]`이면 이 목록 대조는 생략하지만 프로젝트·문서·해시 검증은 수행한다.
 요청의 `target_ids`는 갱신할 기존 설정 ID이며 변경 입력 문서 목록과 별개다.
 
-## 변경 입력: refresh-input-v1
+## 변경 입력: refresh-input-v2
+
+Content의 `event/RefreshInput`이 만드는 형식이다. 요청 식별(project_id·request_id)과 문서 상태는
+싣지 않는다. 이벤트의 key 경로와 `input_fingerprint`가 이 바이트를 요청에 묶고, 문서의 프로젝트는
+요청의 프로젝트로 채운다. 실린 문서는 모두 ACTIVE다.
 
 | 필드 | 형식 | 계약 |
 | --- | --- | --- |
-| `schema_version` | 문자열 | 정확히 `refresh-input-v1` |
-| `project_id` | 문자열 | 요청의 `job.project_id`와 일치 |
-| `request_id` | 문자열 | 요청의 `job.request_id`와 일치 |
-| `documents` | 문서 배열 | 전달하는 변경 문서 전체. 문서 ID 중복 금지 |
+| `schema_version` | 문자열 | 정확히 `refresh-input-v2` |
+| `documents` | 문서 배열 | 지난 최신화 이후 바뀌었거나 새로 생긴 ACTIVE 문서 전체(폴더 무관). 문서 ID 중복 금지 |
 
-각 문서는 다음 필드를 사용한다. 필수 필드의 생략, 알 수 없는 필드, 문자열 숫자 등
+최상위의 알 수 없는 필드는 거절한다. 문서 원소는 Content 목록 API
+(`GET /projects/{projectId}/files/content`)의 원소와 같은 모양이라 같은 모델로 검증하며,
+문서·속성·관계 안의 알 수 없는 필드는 무시한다. 필수 필드 생략과 문자열 숫자 등
 타입 변환이 필요한 값은 거절한다.
 
 | 문서 필드 | 형식 | 필수·기본값 및 조건 |
 | --- | --- | --- |
-| `project_id` | 문자열 | 필수. 요청 프로젝트와 일치 |
-| `document_id` | 문자열 | 필수. 비어 있지 않은 ID |
-| `revision_no` | 정수 | 필수. 1 이상. 문자열·bool은 허용하지 않음 |
-| `body_text` | 문자열 또는 null | 필수. `ACTIVE`이면 문자열. `TRASHED`·`DELETED`는 null 허용 |
-| `state` | 문자열 | 생략 시 `ACTIVE`. `ACTIVE`, `TRASHED`, `DELETED` 중 하나 |
-| `folder_code` | 문자열 | 생략 시 `MANUSCRIPT`. 아래의 분류 중 하나 |
-| `title` | 문자열 또는 null | 선택. 생략 시 null. Content의 독립 제목 필드 |
-| `properties` | 문자열 쌍의 배열 | 생략 시 `[]`. 예: `[["name", "서윤"], ["alias", "윤"]]` |
-| `relations` | 관계 배열 | 생략 시 `[]`. 각 항목은 아래의 관계 필드 사용 |
+| `id` | 문자열 | 필수. Content 문서 UUID. 이벤트 `files`와 대조한다 |
+| `revision_no` | 정수 | 필수. 0 이상. 문자열·bool은 허용하지 않음 |
+| `folder_code` | 문자열 | 필수. 아래의 분류 중 하나 |
+| `title` | 문자열 | Content의 독립 제목 필드. 비어 있지 않음 |
+| `body_text` | 문자열 | 필수. 서식을 뺀 본문. 저장한 적 없는 문서는 `""` |
+| `properties` | `{key, value}` 배열 | 필수. 화면 순서. 같은 key가 반복될 수 있다(예: alias 여러 개) |
+| `relations` | 관계 배열 | 필수. 각 항목은 아래의 관계 필드 사용 |
 
 분류는 `MANUSCRIPT`, `WORLDVIEW`, `CHARACTER`, `LOCATION`, `ORGANIZATION`, `ITEM`,
 `EVENT`다. 변경 입력 개수는 기본·지원 상한 20개이며 비활성 문서도 센다.
@@ -105,28 +108,30 @@ GraphRAG가 정규화하지 않는다. 속성·제목·본문의 구분은 [도�
 
 ```json
 {
-  "schema_version": "refresh-input-v1",
-  "project_id": "project-1",
-  "request_id": "request-1",
+  "schema_version": "refresh-input-v2",
   "documents": [
     {
-      "project_id": "project-1",
-      "document_id": "chapter-05",
+      "id": "0199f1c2-0000-7000-8000-00000000000a",
       "revision_no": 6,
+      "folder_code": "MANUSCRIPT",
+      "title": "5화",
       "body_text": "비가 내렸다.\n서윤은 문을 닫았다.",
       "properties": [],
-      "relations": [],
-      "state": "ACTIVE",
-      "folder_code": "MANUSCRIPT",
-      "title": "5화"
+      "relations": [
+        {
+          "target_document_id": "0199f1c2-0000-7000-8000-00000000000b",
+          "relation_key": "related_character",
+          "description": "등장"
+        }
+      ]
     }
   ]
 }
 ```
 
-내장 관계의 필드는 `project_id`, `document_id`, `target_document_id`, `relation_key`,
-선택적인 `description`이다. description의 기본값은 빈 문자열이다.
-관계의 project·document ID는 소유 문서와 일치해야 하고 자기 연결은 금지한다.
+내장 관계의 필드는 `target_document_id`, `relation_key`, `description`이다. 관계는 그것을 담은
+문서의 것이며 양쪽 끝 문서 모두에 실린다. 휴지통에 있는 상대로 가는 관계는 빠지고,
+`relation_key`는 상대 문서의 분류로 정해진다. 같은 상대의 중복과 자기 연결은 금지한다.
 분류별 관계 키와 양방향 의미는 [제안 계약](migration/proposal-contract.md)을 따른다.
 
 ## 요청 manifest와 실행 스냅샷

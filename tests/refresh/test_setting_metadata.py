@@ -1,15 +1,16 @@
 import json
 from dataclasses import replace
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.adapters.refresh_artifacts import S3ArtifactSettings, S3RefreshArtifacts
 from app.adapters.refresh_schema import (
     ContextObject,
     InputObject,
     context_bytes,
-    fingerprint,
     input_bytes,
     json_bytes,
 )
@@ -114,23 +115,25 @@ def test_body_mentions_and_uncontracted_alias_formats_are_not_identity(changes):
 
 
 def test_input_title_and_alias_roundtrip_preserves_original_metadata():
+    project, setting = str(uuid4()), str(uuid4())
     document = DocumentSnapshot(
-        "project",
-        "setting",
+        project,
+        setting,
         1,
         "원문\n😀",
-        properties=(("alias", " ＦＯＯ  Bar "),),
+        # 같은 키가 반복되어도 순서대로 보존한다.
+        properties=(("alias", " ＦＯＯ  Bar "), ("alias", "유나")),
         folder_code="CHARACTER",
         title=" 유나 ",
     )
-    source = InputSnapshot(JobKey("project", "request", "input"), (document,))
+    source = InputSnapshot(JobKey(project, "request", "input"), (document,))
     body = input_bytes(source)
     restored = InputObject.model_validate_json(body)
-    assert restored.documents == source.documents
+    assert tuple(d.snapshot(project) for d in restored.documents) == source.documents
     assert json.loads(body)["documents"][0]["title"] == " 유나 "
 
 
-def test_missing_title_keeps_legacy_input_bytes_and_fingerprint():
+def test_v1_input_with_request_identity_or_inactive_documents_is_rejected():
     legacy = {
         "schema_version": "refresh-input-v1",
         "project_id": "project",
@@ -148,15 +151,8 @@ def test_missing_title_keeps_legacy_input_bytes_and_fingerprint():
             }
         ],
     }
-    body = json_bytes(legacy)
-    restored = InputObject.model_validate_json(body)
-    source = InputSnapshot(
-        JobKey("project", "request", fingerprint(body)), restored.documents
-    )
-    assert restored.documents[0].title is None
-    assert input_bytes(source) == body
-    assert fingerprint(input_bytes(source)) == source.job.input_fingerprint
-    assert json.loads(input_bytes(source))["documents"][0]["body_text"] is None
+    with pytest.raises(ValidationError):
+        InputObject.model_validate_json(json_bytes(legacy))
 
 
 def test_legacy_context_replay_preserves_canonical_bytes_and_immutability():

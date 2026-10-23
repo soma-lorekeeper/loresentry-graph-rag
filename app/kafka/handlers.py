@@ -60,9 +60,10 @@ class FileChanged(WireModel):
 
 
 class ChangedFile(WireModel):
+    """S3 입력에 실린 문서. Content는 ACTIVE 문서만 보내므로 상태가 없다."""
+
     file_id: Identifier
     revision_no: Annotated[StrictInt, Field(ge=0)]
-    state: Literal["ACTIVE", "TRASHED", "DELETED"]
 
 
 class InputRef(WireModel):
@@ -70,20 +71,15 @@ class InputRef(WireModel):
     key: Annotated[StrictStr, Field(min_length=1)]
 
 
-class ModelProfile(WireModel):
-    model: Annotated[StrictStr, Field(min_length=1)]
-    prompt_version: Annotated[StrictStr, Field(min_length=1)]
-    schema_version: Annotated[StrictStr, Field(min_length=1)]
-
-
 class RefreshRequested(WireModel):
+    """Content의 GraphRefreshRequested. 모델·프롬프트는 GraphRAG가 정해 싣지 않는다."""
+
     project_id: Identifier
     request_id: Identifier
     user_id: Identifier
     input_fingerprint: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
     input: InputRef
-    files: Annotated[list[ChangedFile], Field(min_length=1, max_length=20)]
-    model_settings: ModelProfile
+    files: Annotated[list[ChangedFile], Field(min_length=1)]
     required_events: list[Identifier]
 
 
@@ -134,33 +130,23 @@ def projection_change(event: IncomingEvent) -> ProjectionChange:
 
 
 def refresh_request(
-    event: IncomingEvent,
+    event: IncomingEvent, model_settings: ModelSettings
 ) -> tuple[RefreshRequest, str, tuple[str, ...]]:
+    """요청 이벤트를 내부 요청으로 바꾼다. 모델 설정은 기동 때 정한 값을 쓴다."""
     try:
         wire = RefreshRequested.model_validate(event.payload)
         if len({file.file_id for file in wire.files}) != len(wire.files):
             raise ValueError("Duplicate input document")
-        from app.adapters.llm_schema import GENERATION_VERSIONS
-        from app.refresh.prompt_versions import SUPPORTED_PROMPT_VERSIONS
-
-        if (
-            wire.model_settings.prompt_version not in SUPPORTED_PROMPT_VERSIONS
-            or wire.model_settings.schema_version not in GENERATION_VERSIONS
-        ):
-            raise ValueError("Unsupported model profile")
         request = RefreshRequest(
             job=JobKey(wire.project_id, wire.request_id, wire.input_fingerprint),
             input_ref=ArtifactRef(wire.input.bucket, wire.input.key),
-            seed_ids=tuple(
-                file.file_id for file in wire.files if file.state == "ACTIVE"
-            ),
+            # 실린 문서는 모두 ACTIVE이며 관계 탐색의 시작 문서가 된다.
+            seed_ids=tuple(file.file_id for file in wire.files),
             changed_documents=tuple(
-                ChangedDocumentRef(
-                    file.file_id, file.revision_no, DocumentState(file.state)
-                )
+                ChangedDocumentRef(file.file_id, file.revision_no, DocumentState.ACTIVE)
                 for file in wire.files
             ),
-            model_settings=ModelSettings(**wire.model_settings.model_dump()),
+            model_settings=model_settings,
             settings=SelectionSettings(),
         )
         return request, wire.user_id, tuple(wire.required_events)
@@ -181,12 +167,13 @@ class ProjectionEventHandler:
 
 
 class RefreshEventHandler:
-    def __init__(self, run: Callable, ready: Callable):
+    def __init__(self, run: Callable, ready: Callable, model_settings: ModelSettings):
         self._run = run
         self._ready = ready
+        self._model_settings = model_settings
 
     def __call__(self, event: IncomingEvent) -> None:
-        request, user_id, required_events = refresh_request(event)
+        request, user_id, required_events = refresh_request(event, self._model_settings)
         try:
             self._ready(request.job.project_id, required_events)
             self._run(request, user_id)

@@ -1,6 +1,7 @@
 """Content 업무 payload 변환·업무 오류 분류를 서버 없이 확인한다."""
 
 from dataclasses import replace
+from uuid import uuid4
 
 import pytest
 
@@ -13,7 +14,7 @@ from app.kafka.handlers import (
 )
 from app.kafka.messages import parse_event
 from app.projection.models import ProjectionUnavailable
-from app.refresh.models import DocumentState
+from app.refresh.models import DocumentState, ModelSettings
 from tests.test_kafka_messages import EVENT, PROJECT, REQUEST, content_record
 
 LOW = "11111111-1111-4111-8111-1111111111aa"
@@ -55,15 +56,13 @@ def request_event():
             "user_id": REQUEST,
             "input_fingerprint": "a" * 64,
             "input": {"bucket": "private-bucket", "key": "refresh/input.json"},
-            "files": [{"file_id": REQUEST, "revision_no": 0, "state": "ACTIVE"}],
+            "files": [{"file_id": REQUEST, "revision_no": 0}],
             "required_events": [],
-            "model_settings": {
-                "model": "gpt-6-luna",
-                "prompt_version": "refresh-prompt-v13",
-                "schema_version": "refresh-candidate-v7",
-            },
         },
     )
+
+
+SETTINGS = ModelSettings(model="gpt-6-luna")
 
 
 def test_active_and_inactive_projection_snapshots():
@@ -112,27 +111,37 @@ def test_projection_rejects_relations_owned_by_the_other_document():
 
 
 def test_refresh_identity_profile_and_manifest():
-    request, user, events = refresh_request(request_event())
+    request, user, events = refresh_request(request_event(), SETTINGS)
     assert request.job.project_id == PROJECT and user == REQUEST
     assert request.job.input_fingerprint == "a" * 64
     assert request.changed_documents[0].revision_no == 0
     assert request.changed_documents[0].state == DocumentState.ACTIVE
+    # 모델 설정은 이벤트가 아니라 GraphRAG 기동 설정에서 온다.
+    assert request.model_settings == SETTINGS
     assert request.model_settings.prompt_version == "refresh-prompt-v13"
     assert request.seed_ids == (REQUEST,)
     assert events == ()
     event = request_event()
-    with pytest.raises(InvalidEvent):
-        refresh_request(
-            replace(event, payload={**event.payload, "input_fingerprint": "ETag"})
+    # 20개를 넘는 요청도 이벤트 단계에서 거절하지 않는다.
+    many = [{"file_id": str(uuid4()), "revision_no": 1} for _ in range(25)]
+    assert (
+        len(
+            refresh_request(
+                replace(event, payload={**event.payload, "files": many}), SETTINGS
+            )[0].seed_ids
         )
-    with pytest.raises(InvalidEvent):
-        refresh_request(
-            replace(
-                event, payload={**event.payload, "files": event.payload["files"] * 2}
+        == 25
+    )
+    for change in (
+        {"input_fingerprint": "ETag"},
+        {"files": event.payload["files"] * 2},
+        {"files": []},
+        {"user_id": None},
+    ):
+        with pytest.raises(InvalidEvent):
+            refresh_request(
+                replace(event, payload={**event.payload, **change}), SETTINGS
             )
-        )
-    with pytest.raises(InvalidEvent):
-        refresh_request(replace(event, payload={**event.payload, "user_id": None}))
 
 
 def test_projection_unavailable_is_retried_not_silently_committed():
@@ -149,6 +158,7 @@ def test_refresh_checks_readiness_before_generation():
     handler = RefreshEventHandler(
         lambda request, user: calls.append("run"),
         lambda project, ids: calls.append("ready"),
+        SETTINGS,
     )
     handler(request_event())
     assert calls == ["ready", "run"]
@@ -157,6 +167,6 @@ def test_refresh_checks_readiness_before_generation():
         raise RetryableProcessingError("waiting")
 
     with pytest.raises(RetryableProcessingError):
-        RefreshEventHandler(lambda *args: pytest.fail("ran early"), not_ready)(
-            request_event()
-        )
+        RefreshEventHandler(
+            lambda *args: pytest.fail("ran early"), not_ready, SETTINGS
+        )(request_event())

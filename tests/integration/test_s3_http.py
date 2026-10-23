@@ -307,8 +307,10 @@ def test_context_json_keeps_whitespace_emoji_and_null_inactive_body(s3_server):
     state, store = s3_server
     case, _ = setup_case(state, store)
     text = "  민수\r\n\n🐈 같은 말. 같은 말.  "
+    active = replace(case.source.documents[0], body_text=text)
+    # v2 입력은 ACTIVE 문서만 싣는다. 실행 문맥은 비활성 문서의 null 본문도 보존한다.
     docs = (
-        replace(case.source.documents[0], body_text=text),
+        active,
         replace(
             case.source.documents[0],
             document_id="deleted",
@@ -316,16 +318,14 @@ def test_context_json_keeps_whitespace_emoji_and_null_inactive_body(s3_server):
             body_text=None,
         ),
     )
-    source = replace(case.source, documents=docs)
-    body = input_bytes(source)
+    body = input_bytes(replace(case.source, documents=(active,)))
     request = replace(
         case.request,
         job=replace(case.request.job, input_fingerprint=fingerprint(body)),
         changed_documents=(),
     )
     state["objects"]["input-bucket/refresh/input.json"] = (body, {})
-    read = store.read_input(request)
-    assert read.documents == docs
+    assert store.read_input(request).documents == (active,)
     from app.refresh.models import ExecutionSnapshot
 
     snapshot = ExecutionSnapshot(

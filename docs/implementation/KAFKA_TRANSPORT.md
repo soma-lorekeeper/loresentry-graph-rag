@@ -46,33 +46,32 @@ DELETED만 file/relations가 null인 tombstone이다. 나머지(TRASHED 포함)�
 owner인 edge(low→high로 저장한 outE)만 교체하며, owner가 아닌 관계가 실리면 계약 위반으로 DLQ한다.
 기존 `version` payload 초안은 사용하지 않고 ce_sequence를 순서 기준으로 쓴다.
 
-`GraphRefreshRequested`는 다음을 포함한다.
+`GraphRefreshRequested`는 다음을 포함한다. 계약 원본은 Content의 `event/GraphRefreshRequested`다.
 
-- project_id·request_id·신뢰한 user_id와 `files[].file_id/revision_no/state`
+- project_id·request_id·신뢰한 user_id와 `files[].file_id/revision_no`. 실린 문서는 모두 ACTIVE다
 - 입력 S3 bucket/key 및 **그 바이트 전체**의 SHA-256 input_fingerprint
-- 고정 model_settings의 model·prompt_version·schema_version
-- `required_events`: 이 프로젝트 각 문서의 최신 투영 이벤트 ID 목록. 삭제 문서도 포함
+- `required_events`: 이 프로젝트 각 문서의 최신 FileChanged ID 목록. 삭제 문서도 포함
 
-Content는 새 요청 시 투영 head가 없는 기존 문서도 Outbox에 기록한다.
+모델·프롬프트·후보 스키마는 이벤트에 싣지 않는다. GraphRAG가 기동할 때 `OPENAI_MODEL`과
+코드의 기본 프롬프트·스키마 버전으로 정하고, 요청 manifest(`request.json`)와 완료 Inbox digest에
+함께 기록한다. 같은 요청이 재전달되는 사이 이 설정이 바뀌면 RequestConflict로 DLQ가 되므로,
+모델을 바꿀 때는 refresh 소비를 끄고 진행 중인 요청을 비운 뒤 바꾼다.
+
 GraphRAG는 required_events가 모두 Neptune Inbox에 있을 때 생성한다. 다른 토픽의 순서나
 단순 프로젝트 최대 seq만으로 준비 완료를 판정하지 않는다. 입력 manifest·설정은 같은 요청에서 바꾸지 않는다.
 
-Content의 활성화된 요청 API는 다음과 같다. 호출자는 기존 X-User-Id 규칙을 따른다.
+Content의 요청 API는 다음과 같다. 호출자는 기존 X-User-Id 규칙을 따른다.
 
 | 경로 | 동작 |
 | --- | --- |
-| POST `/projects/{projectId}/graph-refresh` | `{ "files": ["문서 UUID"] }`, 202와 request_id·GENERATING. 최대 20개·활성 본문 5,000 코드 포인트 |
-| GET `/projects/{projectId}/graph-refresh/{requestId}` | status와 저장된 v3 result. 소유자·활성 프로젝트만 접근 |
+| POST `/projects/{projectId}/graph-refresh` | 본문 없음. 지난 최신화 이후 바뀌었거나 새로 생긴 ACTIVE 문서 전체(폴더 무관)를 S3에 올리고 202와 request_id·GENERATING. 바뀐 것이 없으면 200 NO_CHANGES |
+| GET `/projects/{projectId}/files/content?ids=…` | GraphRAG의 추가 문서 조회. [Content HTTP 조회](CONTENT_HTTP.md)를 따른다 |
 
-입력 S3 업로드가 실패하면 요청·Outbox DB 변경은 commit되지 않는다. DB rollback 뒤 남은 입력은 lifecycle로 정리한다.
-Content 완료 handler는 요청·프로젝트·입력 fingerprint·v3 outcome을 검사해 후보 JSON과 READY/FAILED 상태를
-Inbox 트랜잭션에서 함께 저장한다. 같은 request_id의 다른 ce_id도 중복 후보를 만들지 않는다.
-S3 읽기는 현재 최대 15초로 제한한 DB 트랜잭션 안에서 수행한다. Content poll batch 10건과
-max.poll.interval을 조정할 때 이 비용을 포함한다.
-문서·새 설정·관계 제안은 자동 적용하지 않는다. 승인 UI·실제 적용 API는 이 Kafka 연동의 범위가 아니다.
-한 시간 이상 미완료인 요청은 분당 정리 작업으로 FAILED 처리한다. 늦은 결과가 이를 READY로 되돌리지 않는다.
-프로젝트/사용자 삭제 뒤 S3 prefix를 best effort 정리하고, 삭제/만료된 요청의 늦은 결과도 정리한다.
-정리 장애의 잔여 객체는 3일 lifecycle에 의존한다.
+Content는 run 기록·S3 입력 업로드·Outbox를 한 트랜잭션으로 처리하며, 업로드가 실패하면 요청은
+commit되지 않는다. 남은 입력은 lifecycle로 정리한다. Content의 완료 처리(run 상태 갱신)와
+미완료 요청의 타임아웃은 아직 없으므로, 그전까지는 완료되지 않은 요청이 있으면 같은 프로젝트의
+다음 요청이 409다. 문서·새 설정·관계 제안은 자동 적용하지 않는다. 승인 UI·실제 적용 API는
+이 Kafka 연동의 범위가 아니다. 정리되지 않은 S3 객체는 3일 lifecycle에 의존한다.
 
 ## 실행 설정
 
@@ -86,7 +85,7 @@ max.poll.interval을 조정할 때 이 비용을 포함한다.
 | KAFKA_POLLING_ENABLED | false. sandbox와 업무 실행 동시 활성화 금지 |
 | NEPTUNE_ENDPOINT·NEPTUNE_PORT | writer hostname·8182. 테스트는 명시적 endpoint 주입 |
 | GRAPHRAG_S3_BUCKET·GRAPHRAG_S3_INPUT_BUCKET | refresh 활성화 시 필수. 비공개 버킷 |
-| CONTENT_BASE_URL·OPENAI_API_KEY | refresh 활성화 시 필수 |
+| CONTENT_BASE_URL·OPENAI_API_KEY·OPENAI_MODEL | refresh 활성화 시 필수. 모델과 토큰 예산은 기동 때 검증 |
 | OPENAI_TIMEOUT_SECONDS | 240. 작업 잔여 예산보다 길게 호출하지 않음 |
 
 고정 group은 `graph-rag.project-changed`, `graph-rag.graph-refresh-requested`다.

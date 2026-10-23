@@ -243,12 +243,14 @@ class S3RefreshArtifacts:
             value = InputObject.model_validate_json(body)
         except ValidationError:
             fail("S3_INPUT_INVALID", "S3 input JSON is invalid")
-        if (value.project_id, value.request_id) != (
-            request.job.project_id,
-            request.job.request_id,
-        ):
-            fail("INPUT_MISMATCH", "S3 input belongs to another request")
-        source = InputSnapshot(request.job, value.documents)
+        # v2 문서에는 프로젝트가 없다. fingerprint가 맞았으니 이 요청의 프로젝트 문서다.
+        source = InputSnapshot(
+            request.job,
+            tuple(
+                document.snapshot(request.job.project_id)
+                for document in value.documents
+            ),
+        )
         validate_input(request, source)
         return source
 

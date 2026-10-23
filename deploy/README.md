@@ -9,13 +9,14 @@ Argo CD가 Deployment를 반영한다. AWS 자격증명을 앱 코드나 Git에 
 1. Content와 GraphRAG의 CI/CD를 성공시켜 새 이미지를 준비한다.
 2. GraphRAG 저장소의 **Refresh infrastructure** workflow를 main에서 실행한다.
    기존 Content Pod Identity의 역할을 찾아 [CloudFormation 템플릿](refresh-infrastructure.yaml)을 적용한다.
-3. 성공 후 GitOps `workload/base/graph-rag/kustomization.yaml`의 `enabled=false`를 `enabled=true`로 바꿔 반영한다.
-   이 값은 Content 요청 API·완료 listener와 GraphRAG 요청 consumer를 함께 제어한다.
-   ConfigMap 이름에 hash가 붙어 두 Deployment의 env 참조와 rollout이 함께 바뀐다.
-4. Content/GraphRAG Pod 준비 상태와 로그, 실제 프로젝트의 요청 → READY/FAILED를 확인한다.
+3. 성공 후 GitOps의 `workload/base/refresh` ConfigMap(버킷·리전)과 graph-rag Deployment의
+   `graph-rag-api` service account·refresh env(`KAFKA_REFRESH_REQUESTED_ENABLED=true` 포함),
+   content Deployment의 `GRAPHRAG_S3_BUCKET`을 반영한다.
+4. Content/GraphRAG Pod 준비 상태와 로그, 실제 프로젝트의 요청 → S3 `result.json`을 확인한다.
+   Content의 완료 처리(READY/FAILED 갱신)는 아직 없어 Content 쪽 상태는 바뀌지 않는다.
 
 변경 이벤트 consumer는 독립적인 `KAFKA_PROJECT_CHANGED_ENABLED=true`로 동작하며
-refresh 버킷 활성화 전에도 투영을 처리할 수 있다. 기존 문서의 누락 head는 새 요청 때 채워 Outbox에 발행한다.
+refresh 버킷 활성화 전에도 투영을 처리할 수 있다.
 기존 샘플 fake polling은 업무 모드와 동시에 실행하지 않는다.
 
 ## AWS 자원과 권한
@@ -48,11 +49,13 @@ AWS_REGION=ap-northeast-2 bash deploy/setup-refresh.sh
 ## 런타임 설정과 Secret
 
 GitOps는 기존 `ai-chat-openai` Secret의 OPENAI_API_KEY를 참조한다. 값을 Git에 추가하지 않는다.
-Content의 GRAPHRAG_S3_BUCKET과 GraphRAG의 입력/출력 버킷은 같은 생성 ConfigMap에서 공급한다.
+Content의 GRAPHRAG_S3_BUCKET과 GraphRAG의 입력/출력 버킷은 같은 `refresh` ConfigMap에서 공급한다.
 CONTENT_BASE_URL은 http://content-api이며 신뢰한 user_id는 요청마다 Content 이벤트에서 공급한다.
 
 GraphRAG Pod grace period는 420초, runtime join 예산은 360초다.
-모델은 이벤트에 고정된 profile로 실행하고 기본 호출 timeout은 240초다. 종료 시 다음 모델 호출은 시작하지 않는다.
+모델은 GitOps의 `OPENAI_MODEL`로 정하고 프롬프트·후보 스키마 버전은 코드 기본값을 쓴다.
+기본 호출 timeout은 240초다. 종료 시 다음 모델 호출은 시작하지 않는다.
+모델을 바꿀 때는 refresh 소비를 끄고 진행 중인 요청을 비운 뒤 바꾼다(같은 요청의 설정이 바뀌면 DLQ).
 /health는 worker의 실행 실패를 반영한다. broker 연결·할당·lag는 별도로 확인한다.
 
 ## 복구
@@ -61,5 +64,5 @@ GraphRAG Pod grace period는 420초, runtime join 예산은 360초다.
 [송수신 계약](../docs/implementation/KAFKA_TRANSPORT.md)을 따른다.
 DLQ 재투입은 원인 수정 후 같은 event ID·payload·key를 유지한다.
 3일이 지난 S3 입력이 없으면 과거 요청을 조작하지 않고 새 요청을 만든다.
-Content 요청은 1시간 timeout 뒤 FAILED가 되므로 누락된 완료가 진행 중 제약을 영구 유지하지 않는다.
+Content에는 아직 완료 처리와 요청 timeout이 없어, 완료되지 않은 요청이 그 프로젝트의 다음 요청을 막는다.
 순서/삭제 fence가 있는 운영 이벤트를 사용하고 sequence 없는 fixture CLI를 운영 재투입에 쓰지 않는다.

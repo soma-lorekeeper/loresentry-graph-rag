@@ -1,7 +1,8 @@
 # 두 서비스 전체 연동 검증
 
 Linux 호스트에서 실제 Content HTTP·PostgreSQL·Outbox relay·Kafka·GraphRAG worker·Gremlin·
-S3 호환 서버·완료 Kafka·Content Inbox/READY를 검증한다. 모델만 NoChangeModel로 대체하며
+S3 호환 서버를 거쳐 GraphRAG가 결과를 저장하기까지 검증한다. Content의 완료 처리는 아직 없어
+완료 Kafka 이후는 확인하지 않는다. 모델만 NoChangeModel로 대체하며
 원격 OpenAI 호출이나 AWS 자격증명은 사용하지 않는다. 테스트 계정과 버킷은 로컬 전용이다.
 S3 이미지는 검증한 digest로 고정하고 볼륨은 소용량으로 제한한다.
 

@@ -1,14 +1,19 @@
 """업무별 runtime 수명·설정·시작 실패·종료와 FastAPI health를 확인한다."""
 
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from threading import Event, get_ident
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.kafka.business_runtime import BusinessPollingRuntime, BusinessSettings
+from app.kafka.business_runtime import (
+    BusinessPollingRuntime,
+    BusinessSettings,
+    real_handlers,
+)
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
 from app.main import create_app
+from app.refresh.errors import RefreshFailure
 from tests.fakes.refresh import FakeInbox
 
 
@@ -125,3 +130,27 @@ def test_startup_failure_closes_resources_and_app_health_tracks_runtime(monkeypa
         live.healthy = False
         assert client.get("/health").status_code == 503
     assert live.closed
+
+
+def test_refresh_handlers_take_the_model_from_environment(monkeypatch):
+    for key, value in {
+        "GRAPHRAG_S3_BUCKET": "artifacts",
+        "GRAPHRAG_S3_INPUT_BUCKET": "inputs",
+        "AWS_REGION": "ap-northeast-2",
+        "NEPTUNE_ENDPOINT": "neptune.test",
+        "OPENAI_API_KEY": "local-test-only",
+        "CONTENT_BASE_URL": "http://content-api",
+    }.items():
+        monkeypatch.setenv(key, value)
+    settings = BusinessSettings("broker:9092", (REFRESH_REQUESTED,))
+    # Content 이벤트에 모델이 없으므로 모델 env가 없거나 지원하지 않으면 기동하지 않는다.
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    with ExitStack() as stack, pytest.raises(ValueError, match="OPENAI_MODEL"):
+        real_handlers(REFRESH_REQUESTED, None, Event(), stack, settings)
+    monkeypatch.setenv("OPENAI_MODEL", "unknown-model")
+    with ExitStack() as stack, pytest.raises(RefreshFailure):
+        real_handlers(REFRESH_REQUESTED, None, Event(), stack, settings)
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-6-luna")
+    with ExitStack() as stack:
+        handlers = real_handlers(REFRESH_REQUESTED, None, Event(), stack, settings)
+        assert handlers["GraphRefreshRequested"]._model_settings.model == "gpt-6-luna"

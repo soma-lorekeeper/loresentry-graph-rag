@@ -24,9 +24,10 @@ def content_server():
             pass
 
         def do_GET(self):
+            # 요청은 query까지 기록하고, 응답은 query를 뺀 경로로 찾는다.
             state["requests"].append((self.path, dict(self.headers)))
             status, payload = state["responses"].get(
-                self.path, (404, {"code": "NOT_FOUND"})
+                self.path.split("?", 1)[0], (404, {"code": "NOT_FOUND"})
             )
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
