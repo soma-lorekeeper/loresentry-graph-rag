@@ -48,7 +48,8 @@ AWS_REGION=ap-northeast-2 bash deploy/setup-refresh.sh
 
 ## 런타임 설정과 Secret
 
-GitOps는 기존 `ai-chat-openai` Secret의 OPENAI_API_KEY를 참조한다. 값을 Git에 추가하지 않는다.
+GitOps는 graph-rag 전용 `graph-rag-openai` Secret의 OPENAI_API_KEY를 참조한다. 챗과 비용을 따로 보도록
+`ai-chat-openai`와 나누며, Deployment보다 먼저 만든다. 값을 Git에 추가하지 않는다.
 Content의 GRAPHRAG_S3_BUCKET과 GraphRAG의 입력/출력 버킷은 같은 `refresh` ConfigMap에서 공급한다.
 CONTENT_BASE_URL은 http://content-api이며 신뢰한 user_id는 요청마다 Content 이벤트에서 공급한다.
 
