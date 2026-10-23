@@ -113,7 +113,9 @@ def real_handlers(topic, publisher, stop, stack, settings):
         return {"FileChanged": handler, "ProjectDeleted": handler}
     artifact_settings = S3ArtifactSettings.from_environment(os.environ)
     artifacts = stack.enter_context(
-        s3_artifacts(artifact_settings, region_name=os.environ.get("AWS_REGION"))
+        s3_artifacts(
+            artifact_settings, region_name=os.environ.get("GRAPH_REFRESH_REGION")
+        )
     )
     ready = stack.enter_context(ProjectionReadiness.from_env())
     api_key = os.environ.get("OPENAI_API_KEY", "")

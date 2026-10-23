@@ -152,7 +152,7 @@ def test_refresh_handlers_take_the_model_from_environment(monkeypatch):
     for key, value in {
         "GRAPH_REFRESH_COMPLETED_BUCKET": "artifacts",
         "GRAPH_REFRESH_REQUEST_BUCKET": "inputs",
-        "AWS_REGION": "ap-northeast-2",
+        "GRAPH_REFRESH_REGION": "ap-northeast-2",
         "NEPTUNE_ENDPOINT": "neptune.test",
         "OPENAI_API_KEY": "local-test-only",
         "CONTENT_BASE_URL": "http://content-api",

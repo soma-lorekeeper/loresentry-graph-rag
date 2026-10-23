@@ -23,7 +23,7 @@ from app.adapters.refresh_artifacts import S3ArtifactSettings, s3_artifacts
 from app.refresh.service import RefreshService
 
 settings = S3ArtifactSettings.from_environment(os.environ)
-with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifacts:
+with s3_artifacts(settings, region_name=os.environ.get("GRAPH_REFRESH_REGION")) as artifacts:
     service = RefreshService(
         artifacts=artifacts,
         relations=relations,
@@ -41,6 +41,7 @@ with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifac
 | `GRAPH_REFRESH_PREFIX` | 출력 prefix. 기본 `refresh` |
 | `GRAPH_REFRESH_INPUT_PREFIX` | 입력 key가 속해야 하는 prefix. 기본 `refresh` |
 | `GRAPH_REFRESH_MAX_OBJECT_BYTES` | 객체별 읽기·쓰기 한도. 기본 `16777216`바이트 |
+| `GRAPH_REFRESH_REGION` | S3 client 리전. 두 버킷의 리전과 같아야 함. 없으면 AWS SDK 기본 설정을 따름 |
 
 prefix는 앞뒤 `/`나 빈 경로·`.`·`..` 요소가 없는 상대 경로다.
 입력은 지정 버킷과 `input_prefix/` 안에 있어야 하며 해당 요청의 출력 객체와 겹칠 수 없다.
