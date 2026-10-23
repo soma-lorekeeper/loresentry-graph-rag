@@ -224,20 +224,11 @@ def test_valid_original_slice_from_previous_chunk_policy_is_not_an_allowed_sourc
     assert not result.facts and not result.document_proposals
 
 
-def test_overlap_still_charges_repeated_source_text_to_context_budget():
+def test_overlap_repeats_source_text_in_context_for_the_token_budget():
+    """겹침으로 반복된 원문도 문맥에 그대로 들어가 호출 직전 토큰 계수에 포함된다."""
     old = overlap_snapshot(0)
-    budget = len(build_context(old, make_chunks(old)))
-    request = replace(
-        old.request, settings=replace(old.request.settings, max_context_chars=budget)
-    )
-    bounded = replace(old, request=request)
-    assert len(build_context(bounded, make_chunks(bounded))) <= budget
-    overlapping = replace(
-        bounded,
-        request=replace(
-            request, settings=replace(request.settings, chunk_overlap_chars=8)
-        ),
-    )
-    with pytest.raises(RefreshFailure) as caught:
-        build_context(overlapping, make_chunks(overlapping))
-    assert caught.value.failure.code == "CONTEXT_BUDGET_EXCEEDED"
+    overlapping = overlap_snapshot(8)
+    plain = build_context(old, make_chunks(old))
+    repeated = build_context(overlapping, make_chunks(overlapping))
+    # 반복 원문을 빼거나 잘라 크기를 맞추지 않으므로 겹친 문맥이 더 길다.
+    assert len(repeated) > len(plain)

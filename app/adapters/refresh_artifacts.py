@@ -23,6 +23,7 @@ from botocore.exceptions import (
 from pydantic import ValidationError
 
 from app.adapters.refresh_schema import (
+    BatchObject,
     ContextObject,
     InputObject,
     RequestObject,
@@ -74,12 +75,12 @@ class S3ArtifactSettings:
     def from_environment(cls, values):
         """명시적으로 전달받은 설정만 사용하며 프로세스 환경을 직접 읽지 않는다."""
         return cls(
-            bucket=values.get("GRAPHRAG_S3_BUCKET", ""),
-            input_bucket=values.get("GRAPHRAG_S3_INPUT_BUCKET", ""),
-            prefix=values.get("GRAPHRAG_S3_PREFIX", "refresh"),
-            input_prefix=values.get("GRAPHRAG_S3_INPUT_PREFIX", "refresh"),
+            bucket=values.get("GRAPH_REFRESH_COMPLETED_BUCKET", ""),
+            input_bucket=values.get("GRAPH_REFRESH_REQUEST_BUCKET", ""),
+            prefix=values.get("GRAPH_REFRESH_PREFIX", "refresh"),
+            input_prefix=values.get("GRAPH_REFRESH_INPUT_PREFIX", "refresh"),
             max_object_bytes=int(
-                values.get("GRAPHRAG_S3_MAX_OBJECT_BYTES", 16 * 1024 * 1024)
+                values.get("GRAPH_REFRESH_MAX_OBJECT_BYTES", 16 * 1024 * 1024)
             ),
         )
 
@@ -243,12 +244,14 @@ class S3RefreshArtifacts:
             value = InputObject.model_validate_json(body)
         except ValidationError:
             fail("S3_INPUT_INVALID", "S3 input JSON is invalid")
-        if (value.project_id, value.request_id) != (
-            request.job.project_id,
-            request.job.request_id,
-        ):
-            fail("INPUT_MISMATCH", "S3 input belongs to another request")
-        source = InputSnapshot(request.job, value.documents)
+        # v2 문서에는 프로젝트가 없다. fingerprint가 맞았으니 이 요청의 프로젝트 문서다.
+        source = InputSnapshot(
+            request.job,
+            tuple(
+                document.snapshot(request.job.project_id)
+                for document in value.documents
+            ),
+        )
         validate_input(request, source)
         return source
 
@@ -341,6 +344,36 @@ class S3RefreshArtifacts:
             fail("S3_OBJECT_INVALID", "Result or execution snapshot is invalid")
         self._check_request(request, create=True)
         return self._put(self._ref(request, "result"), body)
+
+    def read_batch(self, request, index):
+        manifest = self._check_request(request)
+        body = self._read(self._ref(request, f"batch-{index:04d}"), optional=True)
+        if body is None:
+            return None
+        if not manifest:
+            fail("S3_OBJECT_INVALID", "Batch result has no request manifest")
+        try:
+            value = BatchObject.model_validate_json(body)
+        except ValidationError:
+            fail("S3_OBJECT_INVALID", "Stored batch JSON is invalid")
+        if value.result.job != request.job:
+            raise RequestConflict("Stored batch belongs to another request")
+        return value.seed_ids, value.result
+
+    def save_batch(self, request, index, seed_ids, result):
+        if result.job != request.job:
+            raise RequestConflict("Batch result belongs to another request")
+        value = {
+            "schema_version": "refresh-batch-v1",
+            "seed_ids": list(seed_ids),
+            "result": asdict(result),
+        }
+        try:
+            BatchObject.model_validate_json(json_bytes(value))
+        except (ValueError, TypeError):
+            fail("S3_OBJECT_INVALID", "Batch result is invalid")
+        self._check_request(request, create=True)
+        return self._put(self._ref(request, f"batch-{index:04d}"), json_bytes(value))
 
 
 @contextmanager

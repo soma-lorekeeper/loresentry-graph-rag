@@ -1,5 +1,6 @@
-"""실제 Content HTTP→Outbox→Kafka→GraphRAG→S3→Kafka→Content 왕복. 모델만 대체한다."""
+"""실제 Content HTTP→Outbox→Kafka→GraphRAG→S3 결과 왕복. 모델만 대체한다."""
 
+import json
 import os
 from time import monotonic, sleep
 from uuid import uuid4
@@ -19,7 +20,7 @@ from app.kafka.business_runtime import BusinessPollingRuntime, BusinessSettings
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
 from app.projection.service import GraphProjectionHandler
-from app.refresh.models import ChangePlan, WrittenCandidate
+from app.refresh.models import ChangePlan, ModelSettings, WrittenCandidate
 
 pytestmark = [pytest.mark.integration, pytest.mark.kafka, pytest.mark.gremlin]
 
@@ -74,7 +75,11 @@ def test_real_content_request_and_completion_roundtrip():
             ) as service:
                 service.run(request)
 
-        return {"GraphRefreshRequested": RefreshEventHandler(run, ready.check)}
+        return {
+            "GraphRefreshRequested": RefreshEventHandler(
+                run, ready.check, ModelSettings(model="fullstack-no-change")
+            )
+        }
 
     runtime = BusinessPollingRuntime(
         BusinessSettings(bootstrap, (PROJECT_CHANGED, REFRESH_REQUESTED)),
@@ -98,25 +103,30 @@ def test_real_content_request_and_completion_roundtrip():
             )
             response.raise_for_status()
             file = response.json()["id"]
-            response = client.post(
-                f"/projects/{project}/graph-refresh", json={"files": [file]}
-            )
+            # Content는 지난 최신화 이후 바뀐 ACTIVE 문서를 스스로 골라 보낸다.
+            response = client.post(f"/projects/{project}/graph-refresh")
             response.raise_for_status()
+            assert response.json()["files"] == [{"file_id": file, "revision_no": 0}]
             request = response.json()["request_id"]
+            # Content의 완료 처리는 아직 없으므로 GraphRAG가 저장한 결과로 왕복을 확인한다.
+            key = f"refresh/{project}/{request}/result.json"
             deadline = monotonic() + 40
-            status = None
+            result = None
             while monotonic() < deadline:
-                response = client.get(f"/projects/{project}/graph-refresh/{request}")
-                response.raise_for_status()
-                status = response.json()
-                if status["status"] in {"READY", "FAILED"}:
+                try:
+                    body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+                except ClientError as failure:
+                    if failure.response["ResponseMetadata"]["HTTPStatusCode"] != 404:
+                        raise
+                else:
+                    result = json.loads(body)
                     break
                 assert runtime.healthy
                 sleep(0.1)
-            assert status["status"] == "READY", status
-            assert status["result"]["schema_version"] == "refresh-result-v3"
-            assert status["result"]["outcome"] == "NO_CHANGE"
-            assert status["result"]["request_id"] == request
+            assert result is not None
+            assert result["schema_version"] == "refresh-result-v3"
+            assert result["outcome"] == "NO_CHANGE"
+            assert result["request_id"] == request
             # Generation does not change Content originals.
             assert client.get(f"/files/{file}/content").json()["revision_no"] == 0
         finally:

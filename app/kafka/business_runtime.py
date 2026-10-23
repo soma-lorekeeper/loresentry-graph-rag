@@ -5,7 +5,7 @@ import math
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from threading import Event, Thread
 from time import monotonic
 
@@ -26,10 +26,13 @@ from app.kafka.polling import consumer_config
 from app.kafka.publisher import KafkaPublisher, producer_config
 from app.projection.service import GraphProjectionHandler
 from app.refresh.errors import RefreshFailure
-from app.refresh.models import Failure
+from app.refresh.models import Failure, ModelSettings
 from app.refresh.outbox import RefreshOutboxRelay
 
 logger = logging.getLogger(__name__)
+
+# 작성·보완 지시문이 계획 지시문보다 길어질 수 있는 몫(토큰). 지시문은 수천 자 수준이다.
+PLAN_RESERVE = 8192
 
 
 def enabled(env, key):
@@ -44,7 +47,6 @@ class BusinessSettings:
     bootstrap_servers: str
     topics: tuple[str, ...]
     shutdown_seconds: float = 360
-    task_seconds: float = 600
 
     def __post_init__(self):
         consumer_config(self.bootstrap_servers, "graph-rag")
@@ -54,10 +56,7 @@ class BusinessSettings:
             or not set(self.topics) <= {PROJECT_CHANGED, REFRESH_REQUESTED}
         ):
             raise ValueError("Invalid business subscriptions")
-        if not all(
-            math.isfinite(value) and value > 0
-            for value in (self.shutdown_seconds, self.task_seconds)
-        ):
+        if not (math.isfinite(self.shutdown_seconds) and self.shutdown_seconds > 0):
             raise ValueError("Invalid worker time budgets")
 
     @classmethod
@@ -80,25 +79,31 @@ class BusinessSettings:
             env.get("KAFKA_BOOTSTRAP_SERVERS", ""),
             topics,
             float(env.get("KAFKA_SHUTDOWN_SECONDS", "360")),
-            float(env.get("KAFKA_REFRESH_TASK_SECONDS", "600")),
         )
 
 
 class BudgetedModel:
-    def __init__(self, client, limits, stop, seconds):
-        self.client, self.limits, self.stop = client, limits, stop
-        self.deadline = monotonic() + seconds
+    """종료 신호가 오면 다음 호출을 시작하지 않는 모델·토큰 계수 위임.
 
-    def generate(self, model_input):
-        remaining = self.deadline - monotonic()
-        if self.stop.is_set() or remaining <= 0:
+    예산을 넘는 요청은 묶음 수만큼 호출이 늘어나므로 요청 전체 기한을 두지 않는다. 호출마다
+    OPENAI_TIMEOUT_SECONDS를 지키고, 끝난 묶음은 저장되어 재전달 때 이어서 처리한다.
+    """
+
+    def __init__(self, client, limits, stop):
+        self.client, self.limits, self.stop = client, limits, stop
+
+    def _model(self):
+        if self.stop.is_set():
             raise RefreshFailure(
                 Failure("REFRESH_INTERRUPTED", "Refresh execution interrupted", True)
             )
-        limits = replace(
-            self.limits, timeout_seconds=min(self.limits.timeout_seconds, remaining)
-        )
-        return OpenAIProposalModel(self.client, limits).generate(model_input)
+        return OpenAIProposalModel(self.client, self.limits)
+
+    def generate(self, model_input):
+        return self._model().generate(model_input)
+
+    def count(self, model_input):
+        return self._model().count(model_input)
 
 
 def real_handlers(topic, publisher, stop, stack, settings):
@@ -108,33 +113,59 @@ def real_handlers(topic, publisher, stop, stack, settings):
         return {"FileChanged": handler, "ProjectDeleted": handler}
     artifact_settings = S3ArtifactSettings.from_environment(os.environ)
     artifacts = stack.enter_context(
-        s3_artifacts(artifact_settings, region_name=os.environ.get("AWS_REGION"))
+        s3_artifacts(
+            artifact_settings, region_name=os.environ.get("GRAPH_REFRESH_REGION")
+        )
     )
     ready = stack.enter_context(ProjectionReadiness.from_env())
-    # Profile comes from the immutable Content event, while operator limits remain local.
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         raise ValueError("OPENAI_API_KEY is required for refresh processing")
     client = stack.enter_context(OpenAI(api_key=api_key, max_retries=0))
     if not os.environ.get("CONTENT_BASE_URL", "").strip():
         raise ValueError("CONTENT_BASE_URL is required for refresh processing")
+    # Content 이벤트는 모델을 모른다. 모델은 운영 env가, 프롬프트·스키마 버전은
+    # ModelSettings 기본값이 정한다. 잘못된 설정은 요청을 받기 전에 기동을 실패시킨다.
+    model_name = os.environ.get("OPENAI_MODEL", "").strip()
+    if not model_name:
+        raise ValueError("OPENAI_MODEL is required for refresh processing")
+    model_settings = ModelSettings(model=model_name)
+    # 기본값은 gpt-6-luna의 공식 최대 입력·문맥이다. 호출 하나는 최대 입력의 80%까지만 쓴다.
+    limits = ModelLimits(
+        model=model_settings.model,
+        timeout_seconds=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "240")),
+        max_input_tokens=int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "922000")),
+        max_output_tokens=int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "32768")),
+        context_window=int(os.environ.get("OPENAI_CONTEXT_WINDOW", "1050000")),
+    )
+    limits.validate()
+    # 계획 입력에는 작성 단계가 덧붙일 계획과 보완 때 덧붙일 이전 후보(각각 출력 한도 이하),
+    # 지시문 차이를 남겨 둔다. 실제 호출은 어댑터가 호출마다 다시 센다.
+    plan_budget = limits.input_budget - 2 * limits.max_output_tokens - PLAN_RESERVE
+    model = BudgetedModel(client, limits, stop)
+
+    def service(user_id):
+        return neptune_refresh_service(
+            artifacts=artifacts,
+            model=model,
+            user_id=user_id,
+            tokens=model,
+            plan_budget=plan_budget,
+        )
 
     def run(request, user_id):
-        limits = ModelLimits(
-            model=request.model_settings.model,
-            timeout_seconds=float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "240")),
-            max_input_tokens=int(os.environ.get("OPENAI_MAX_INPUT_TOKENS", "240000")),
-            max_output_tokens=int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "32768")),
-            context_window=int(os.environ.get("OPENAI_CONTEXT_WINDOW", "272768")),
-        )
-        limits.validate()
-        model = BudgetedModel(client, limits, stop, settings.task_seconds)
-        with neptune_refresh_service(
-            artifacts=artifacts, model=model, user_id=user_id
-        ) as service:
-            service.run(request)
+        with service(user_id) as refresh:
+            refresh.run(request)
 
-    return {"GraphRefreshRequested": RefreshEventHandler(run, ready.check)}
+    def fail(request, user_id, failure):
+        with service(user_id) as refresh:
+            refresh.fail(request, failure)
+
+    return {
+        "GraphRefreshRequested": RefreshEventHandler(
+            run, ready.check, model_settings, fail
+        )
+    }
 
 
 class BusinessPollingRuntime:

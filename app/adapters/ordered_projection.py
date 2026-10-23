@@ -68,16 +68,6 @@ def ordered_mutations(change):
             )
             + ".drop())"
         )
-    elif change.trashed_file_ids:
-        updates += (
-            ".sideEffect("
-            + _guard(
-                f"__.V({_vertex(subject)})",
-                _file_scope(change.project_id),
-                PROJECT_MISMATCH,
-            )
-            + ".property(single,'trashed',true))"
-        )
     else:
         file = change.files[0]
         node = (
@@ -96,30 +86,27 @@ def ordered_mutations(change):
             )
         )
         updates += f".sideEffect({node})"
-        # A snapshot replaces only this document's older incident edges.
+        # The subject owns only the edges it stores as low -> high, so a snapshot
+        # replaces its outgoing edges and never touches edges owned by the other end.
         keep = ",".join(_edge(relation.id) for relation in change.relations)
         missing = f".not(__.hasId({keep}))" if keep else ""
         updates += (
-            f".sideEffect(__.V({_vertex(subject)}).bothE('REFERENCES')"
-            f".has('project_id',{project}){missing}"
-            f".or(__.hasNot('sequence'),__.has('sequence',lte({sequence}L))).drop())"
+            f".sideEffect(__.V({_vertex(subject)}).outE('REFERENCES')"
+            f".has('project_id',{project}){missing}.drop())"
         )
         for relation in change.relations:
             low, high = relation.low_document_id, relation.high_document_id
-            other = high if low == subject else low
-            stale = (
-                f"__.or(__.V({file_marker(other)}).has('deleted',true),"
-                f"__.V({file_marker(other)}).has('sequence',gt({sequence}L)),"
-                f"__.E({_edge(relation.id)}).has('sequence',gt({sequence}L)))"
-            )
+            # Sequences are comparable only within one document, so only a
+            # permanently deleted target blocks the edge.
+            stale = f"__.V({file_marker(high)}).has('deleted',true)"
             edge = "__.identity()"
             # A not-yet-arrived endpoint is hidden until its own snapshot arrives.
             edge += (
-                f".sideEffect(__.V({_vertex(other)}).fold().coalesce("
+                f".sideEffect(__.V({_vertex(high)}).fold().coalesce("
                 + _guard(
                     "__.unfold()", _file_scope(change.project_id), PROJECT_MISMATCH
                 )
-                + f",__.addV('File').property(T.id,{_vertex(other)})"
+                + f",__.addV('File').property(T.id,{_vertex(high)})"
                 f".property(single,'project_id',{project}).property(single,'trashed',true)))"
             )
             # Content may delete and recreate the same pair with a new relation UUID.
@@ -139,7 +126,6 @@ def ordered_mutations(change):
                 + ","
                 f"__.V({_vertex(low)}).addE('REFERENCES').to(__.V({_vertex(high)}))"
                 f".property(T.id,{_edge(relation.id)}).property('project_id',{project}))"
-                f".property('sequence',{sequence}L)"
                 f".property('description',{literal(relation.description)}).property('origin','USER'))"
             )
             updates += f".sideEffect(__.choose({stale},__.identity(),{edge}))"

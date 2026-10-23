@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.adapters.content_schema import ContentDocument
 from app.refresh.models import (
-    DocumentSnapshot,
     ExecutionSnapshot,
     InputSnapshot,
     RefreshRequest,
@@ -22,12 +22,13 @@ class StrictObject(BaseModel):
 
 
 class InputObject(StrictObject):
-    """요청 식별과 최초 전달 원문. fingerprint는 객체 바이트로 별도 계산한다."""
+    """Content가 요청마다 올린 원문(refresh-input-v2). fingerprint는 바이트로 계산한다.
 
-    schema_version: Literal["refresh-input-v1"]
-    project_id: str
-    request_id: str
-    documents: tuple[DocumentSnapshot, ...]
+    요청 식별은 싣지 않는다. 이벤트의 key 경로와 input_fingerprint가 이 바이트를 요청에 묶는다.
+    """
+
+    schema_version: Literal["refresh-input-v2"]
+    documents: tuple[ContentDocument, ...]
 
 
 class RequestObject(StrictObject):
@@ -50,6 +51,14 @@ class TypedResult(StrictObject):
     result: RefreshResult
 
 
+class BatchObject(StrictObject):
+    """예산을 넘는 요청에서 끝난 한 묶음의 seed와 검증된 결과. 재전달 때 이어 가는 데 쓴다."""
+
+    schema_version: Literal["refresh-batch-v1"]
+    seed_ids: tuple[str, ...]
+    result: RefreshResult
+
+
 def json_bytes(value) -> bytes:
     """본문을 정규화하지 않고 결정적 UTF-8 JSON 바이트를 만든다."""
     return json.dumps(
@@ -62,16 +71,31 @@ def json_bytes(value) -> bytes:
 
 
 def input_bytes(source: InputSnapshot) -> bytes:
-    """입력 공급자가 저장할 JSON. 저장할 이 바이트의 SHA-256을 요청에 전달한다."""
-    obj = InputObject(
-        schema_version="refresh-input-v1",
-        project_id=source.job.project_id,
-        request_id=source.job.request_id,
-        documents=source.documents,
+    """Content 대신 테스트·평가가 저장할 v2 JSON. 이 바이트의 SHA-256을 요청에 전달한다."""
+    return json_bytes(
+        {
+            "schema_version": "refresh-input-v2",
+            "documents": [
+                {
+                    "id": d.document_id,
+                    "revision_no": d.revision_no,
+                    "folder_code": d.folder_code,
+                    "title": d.title,
+                    "body_text": d.body_text,
+                    "properties": [{"key": k, "value": v} for k, v in d.properties],
+                    "relations": [
+                        {
+                            "target_document_id": r.target_document_id,
+                            "relation_key": r.relation_key,
+                            "description": r.description,
+                        }
+                        for r in d.relations
+                    ],
+                }
+                for d in source.documents
+            ],
+        }
     )
-    value = obj.model_dump(mode="json")
-    omit_absent_titles(value["documents"])
-    return json_bytes(value)
 
 
 def context_bytes(snapshot: ExecutionSnapshot) -> bytes:

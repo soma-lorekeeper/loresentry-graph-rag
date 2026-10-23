@@ -1,10 +1,7 @@
 import json
 from dataclasses import replace
 
-import pytest
-
 from app.refresh.context import build_context
-from app.refresh.errors import RefreshFailure
 from app.refresh.models import (
     DocumentBatch,
     DocumentSnapshot,
@@ -97,18 +94,25 @@ def test_prompt_uses_injected_versions_and_separates_untrusted_text():
     assert json.loads(model_input.prompt)["evidence"]
 
 
-def test_context_budget_never_silently_truncates():
+def test_large_context_is_never_truncated_or_rejected_by_codepoints():
+    """옛 문맥 한도(480,000자)를 넘는 원문도 자르지 않고 모두 출처로 싣는다.
+
+    크기 판단은 모델 어댑터의 토큰 예산 검사가 맡는다.
+    """
     snapshot = snapshot_fixture()
+    body = "가" * 500_000
     snapshot = replace(
         snapshot,
-        request=replace(
-            snapshot.request,
-            settings=replace(snapshot.request.settings, max_context_chars=10),
+        documents=tuple(
+            replace(d, body_text=body) if d.document_id == "m1" else d
+            for d in snapshot.documents
         ),
     )
-    with pytest.raises(RefreshFailure) as caught:
-        RefreshRules().build_context(snapshot, RefreshRules().chunk(snapshot))
-    assert caught.value.failure.code == "CONTEXT_BUDGET_EXCEEDED"
+    rules = RefreshRules()
+    data = json.loads(rules.build_context(snapshot, rules.chunk(snapshot)))
+    assert "max_context_chars" not in data
+    quotes = [e["quote"] for e in data["evidence"] if e["document_id"] == "m1"]
+    assert "".join(quotes) == body
 
 
 def test_document_commands_never_enter_trusted_instructions():

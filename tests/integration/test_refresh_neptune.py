@@ -34,7 +34,7 @@ from evaluation.fakes import (
     FakeJsonArtifacts,
     FakeModel,
 )
-from tests.fakes.content import content_payload
+from tests.fakes.content import content_document, contents_payload
 
 pytestmark = [pytest.mark.integration, pytest.mark.gremlin]
 
@@ -106,7 +106,7 @@ def test_both_edge_directions_one_hop_and_category_filter(graph):
         )
         assert filtered.document_ids == (left.id,)
     # Neptune과 같은 ANTLR 엔진에서도 읽기 traversal을 실행한다.
-    value = query(build_one_hop_query(p, req.seed_ids, (), 60), language="gremlin-lang")
+    value = query(build_one_hop_query(p, req.seed_ids, ()), language="gremlin-lang")
     assert len(value[0]["relations"]) == 2
 
 
@@ -175,10 +175,9 @@ def test_refresh_fetches_only_one_hop_content_body_and_preserves_input(
     )
     state, content_endpoint = content_server
     user_id = str(uuid4())
-    state["responses"][f"/projects/{p}"] = (200, {"id": p, "trashed_at": None})
-    state["responses"][f"/files/{neighbor.id}/content"] = (
+    state["responses"][f"/projects/{p}/files/content"] = (
         200,
-        content_payload(p, neighbor.id, text=content.body_text),
+        contents_payload(p, [content_document(neighbor.id, text=content.body_text)]),
     )
     calls = Calls()
     artifacts = FakeJsonArtifacts(
@@ -200,8 +199,7 @@ def test_refresh_fetches_only_one_hop_content_body_and_preserves_input(
         assert service.inbox.find(req) == completion
         assert service.run(req) == completion
     assert [path for path, _ in state["requests"]] == [
-        f"/projects/{p}",
-        f"/files/{neighbor.id}/content",
+        f"/projects/{p}/files/content?ids={neighbor.id}"
     ]
     assert all(headers["X-User-Id"] == user_id for _, headers in state["requests"])
     assert service.documents._client.is_closed

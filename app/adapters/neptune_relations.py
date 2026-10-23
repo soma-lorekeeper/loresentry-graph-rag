@@ -12,7 +12,7 @@ from app.refresh.models import (
     RelatedDocuments,
     Relation,
 )
-from app.refresh.policy import MAX_CHANGED_DOCUMENTS, RELATION_KEYS
+from app.refresh.policy import RELATION_KEYS
 
 
 def _failure(code: str, message: str, *, retryable: bool = False):
@@ -43,9 +43,11 @@ def build_one_hop_query(
     project_id: str,
     seed_ids: tuple[str, ...],
     relation_keys: tuple[str, ...],
-    row_limit: int,
 ) -> str:
-    """원홉만 읽는다. seed·edge·상대 노드 모두 같은 프로젝트의 활성 범위로 제한한다."""
+    """원홉만 읽는다. seed·edge·상대 노드 모두 같은 프로젝트의 활성 범위로 제한한다.
+
+    이웃 수로 자르지 않는다. 모델 입력 크기는 토큰 예산과 묶음 처리가 다룬다.
+    """
     identifiers = ",".join(literal(f"file:{seed}") for seed in seed_ids)
     project = literal(project_id)
     folders = [folder for folder, key in RELATION_KEYS.items() if key in relation_keys]
@@ -61,7 +63,7 @@ def build_one_hop_query(
         ".by(__.unfold().as('seed').bothE('REFERENCES')"
         f".has('project_id',{project}).as('edge').otherV()"
         f".hasLabel('File').has('project_id',{project}).has('trashed',false)"
-        f"{category_filter}.limit({row_limit + 1})"
+        f"{category_filter}"
         ".project('seed_id','target_id','relation_id','folder_code','description')"
         ".by(__.select('seed').id()).by(__.id())"
         ".by(__.select('edge').id()).by(__.values('folder_code').fold())"
@@ -86,13 +88,7 @@ class NeptuneRelatedDocumentSource(NeptuneGremlinClient):
             raise _failure(
                 "UNSUPPORTED_GRAPH_DEPTH", "Neptune refresh supports one hop"
             )
-        if (
-            type(settings.max_documents) is not int
-            or settings.max_documents < 0
-            or type(settings.max_changed_documents) is not int
-            or not 1 <= settings.max_changed_documents <= MAX_CHANGED_DOCUMENTS
-            or not set(settings.relation_keys) <= set(RELATION_KEYS.values())
-        ):
+        if not set(settings.relation_keys) <= set(RELATION_KEYS.values()):
             raise _failure("INVALID_GRAPH_REQUEST", "Invalid graph selection policy")
         inactive = {
             document.document_id
@@ -102,24 +98,20 @@ class NeptuneRelatedDocumentSource(NeptuneGremlinClient):
         seeds = tuple(sorted(set(request.seed_ids) - inactive))
         if not seeds or settings.max_depth == 0:
             return RelatedDocuments()
-        if len(seeds) > settings.max_changed_documents:
-            raise _failure("INVALID_GRAPH_REQUEST", "Too many graph seeds")
         if request.required_graph_version is not None:
             # 현재 그래프에는 revision이 없다. 확인할 수 없는 준비 상태를 READY로 만들지 않는다.
             return RelatedDocuments(readiness=Readiness.UNKNOWN)
-        max_neighbors = settings.max_documents + settings.max_changed_documents
-        row_limit = max_neighbors * len(seeds)
         query = build_one_hop_query(
-            request.job.project_id, seeds, settings.relation_keys, row_limit
+            request.job.project_id, seeds, settings.relation_keys
         )
         try:
             result = self.execute(query)
         except NeptuneUnavailable as exc:
             raise _failure("GRAPH_QUERY_FAILED", str(exc), retryable=True) from exc
-        return self._interpret(request, seeds, result, row_limit, max_neighbors)
+        return self._interpret(request, seeds, result)
 
     @staticmethod
-    def _interpret(request, seeds, result, row_limit, max_neighbors):
+    def _interpret(request, seeds, result):
         if len(result) != 1 or not isinstance(result[0], dict):
             raise _invalid("Expected one graph selection result")
         value = result[0]
@@ -131,11 +123,6 @@ class NeptuneRelatedDocumentSource(NeptuneGremlinClient):
             observed_seeds
         ) <= set(seeds):
             raise _invalid("Graph returned unexpected seed IDs")
-        if len(rows) > row_limit:
-            raise _failure(
-                "REFERENCE_BUDGET_EXCEEDED",
-                "Graph neighborhood exceeds selection budget",
-            )
         relations = set()
         pairs = {}
         folders = {}
@@ -175,11 +162,6 @@ class NeptuneRelatedDocumentSource(NeptuneGremlinClient):
         document_ids = tuple(
             sorted({relation.target_document_id for relation in relations} - set(seeds))
         )
-        if len(document_ids) > max_neighbors:
-            raise _failure(
-                "REFERENCE_BUDGET_EXCEEDED",
-                "Graph neighborhood exceeds selection budget",
-            )
         return RelatedDocuments(
             document_ids=document_ids,
             relations=tuple(

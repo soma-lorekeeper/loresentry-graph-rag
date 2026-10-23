@@ -1,4 +1,4 @@
-"""기존 Content API로 활성 프로젝트의 추가 문서 본문을 조회한다."""
+"""Content 목록 API로 활성 프로젝트의 추가 문서 본문을 조회한다."""
 
 import math
 import os
@@ -8,9 +8,12 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import ValidationError
 
-from app.adapters.content_schema import ContentResponse, ProjectResponse, canonical_id
+from app.adapters.content_schema import ContentsResponse, canonical_id
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import DocumentBatch, Failure
+
+# Content GET /projects/{id}/files/content가 한 요청에 받는 서로 다른 id 수의 상한.
+CONTENTS_MAX = 100
 
 
 def _base_url(value: str) -> str:
@@ -80,38 +83,41 @@ class ContentDocumentSource:
         if not ids:
             return DocumentBatch(())
 
-        # 문서 API는 소유권과 문서 휴지통만 검사하므로 활성 프로젝트도 먼저 확인한다.
-        response = self._get(f"/projects/{project_id}")
-        try:
-            project = ProjectResponse.model_validate_json(response.content)
-        except ValidationError:
-            _fail("CONTENT_RESPONSE_INVALID", "Invalid Content project response")
-        if project.id != project_id:
-            _fail("PROJECT_MISMATCH", "Content project differs from request")
-        if project.trashed_at is not None:
-            _fail("CONTENT_PROJECT_UNAVAILABLE", "Content project is not active")
-
+        # 목록 API는 활성 프로젝트 소유자만 통과시키고, 한 번에 서로 다른 id를
+        # CONTENTS_MAX개까지 받는다. 휴지통·없는·다른 프로젝트 문서는 missing으로 온다.
         found, missing = [], []
-        for document_id in ids:
-            response = self._get(f"/files/{document_id}/content", document=True)
-            if response is None:
-                missing.append(document_id)
-                continue
+        for start in range(0, len(ids), CONTENTS_MAX):
+            chunk = ids[start : start + CONTENTS_MAX]
+            response = self._get(
+                f"/projects/{project_id}/files/content",
+                params=[("ids", document_id) for document_id in chunk],
+            )
             try:
-                document = ContentResponse.model_validate_json(response.content)
+                contents = ContentsResponse.model_validate_json(response.content)
             except ValidationError:
-                _fail("CONTENT_RESPONSE_INVALID", "Invalid Content document response")
-            if document.project_id != project_id:
-                _fail("PROJECT_MISMATCH", "Content document belongs to another project")
-            if document.id != document_id:
-                _fail("FETCH_MISMATCH", "Content document differs from requested ID")
-            found.append(document.snapshot())
+                _fail("CONTENT_RESPONSE_INVALID", "Invalid Content documents response")
+            if contents.project_id != project_id:
+                _fail("PROJECT_MISMATCH", "Content project differs from request")
+            returned = [document.id for document in contents.documents]
+            # 받은 문서와 missing은 겹치지 않고 합쳐서 요청한 id와 정확히 같아야 한다.
+            if (
+                len(returned) != len(set(returned))
+                or len(contents.missing) != len(set(contents.missing))
+                or set(returned) & set(contents.missing)
+                or set(returned) | set(contents.missing) != set(chunk)
+            ):
+                _fail("FETCH_MISMATCH", "Content documents differ from requested IDs")
+            found.extend(
+                document.snapshot(project_id) for document in contents.documents
+            )
+            missing.extend(contents.missing)
         return DocumentBatch(tuple(found), tuple(missing))
 
-    def _get(self, path: str, *, document: bool = False) -> httpx.Response | None:
+    def _get(self, path: str, *, params: list[tuple[str, str]]) -> httpx.Response:
         try:
             response = self._client.get(
                 f"{self.base_url}{path}",
+                params=params,
                 headers={"X-User-Id": self.user_id, "Accept": "application/json"},
                 timeout=self._timeout,
                 follow_redirects=False,
@@ -131,9 +137,7 @@ class ContentDocumentSource:
                 code = payload.get("code") if isinstance(payload, dict) else None
             except ValueError:
                 code = None
-            if document and code == "FILE_NOT_FOUND":
-                return None
-            if not document and code == "PROJECT_NOT_FOUND":
+            if code == "PROJECT_NOT_FOUND":
                 _fail("CONTENT_PROJECT_UNAVAILABLE", "Content project is unavailable")
         _fail("CONTENT_REQUEST_REJECTED", "Content rejected the request")
 

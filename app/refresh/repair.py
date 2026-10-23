@@ -3,8 +3,7 @@
 import json
 from dataclasses import asdict, replace
 
-from app.refresh.errors import RefreshFailure
-from app.refresh.models import Evidence, Failure, ModelCandidate, Outcome, Usage
+from app.refresh.models import Evidence, ModelCandidate, Outcome, Usage
 
 REPAIR_VERSION = "refresh-validation-repair-v2"
 MAX_REPAIRS_PER_CALL = 2
@@ -282,10 +281,8 @@ def _wire_candidate(candidate, context, identifiers):
     }
 
 
-def build_repair_input(
-    model_input, candidate, diagnostics, max_context_chars, *, attempt=1
-):
-    """같은 원문·범위에 실패 후보와 진단만 추가한다. 보완 자료도 문맥 예산에 포함한다."""
+def build_repair_input(model_input, candidate, diagnostics, *, attempt=1):
+    """같은 원문·범위에 실패 후보와 진단만 추가한다. 크기는 호출 직전 토큰 예산이 본다."""
     if type(attempt) is not int or not 1 <= attempt <= MAX_REPAIRS_PER_CALL:
         raise ValueError("Repair attempt is outside the supported budget")
     context = json.loads(model_input.prompt)
@@ -325,10 +322,6 @@ def build_repair_input(
     }
     prompt = json.dumps(context, ensure_ascii=False, sort_keys=True)
     instructions = model_input.instructions + REPAIR_INSTRUCTION
-    if len(prompt) + len(instructions) > max_context_chars:
-        raise RefreshFailure(
-            Failure("CONTEXT_BUDGET_EXCEEDED", "Repair prompt exceeds codepoint budget")
-        )
     return replace(model_input, prompt=prompt, instructions=instructions)
 
 

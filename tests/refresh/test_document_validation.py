@@ -4,6 +4,7 @@ import pytest
 
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import DocumentState
+from app.refresh.policy import MAX_PROPOSAL_CHARS
 from app.refresh.validation import validate_document_proposals
 from tests.fakes.real_rules import real_example
 from tests.refresh.test_context import snapshot_fixture
@@ -50,7 +51,7 @@ def test_manuscript_is_rejected_even_when_in_allowed_targets(body):
         ({"base_revision_no": True}, "REVISION_MISMATCH"),
         ({"field": "body"}, "INVALID_FIELD"),
         ({"value": {}}, "INVALID_FIELD"),
-        ({"value": "가" * 5001}, "INVALID_FIELD"),
+        ({"value": "가" * (MAX_PROPOSAL_CHARS + 1)}, "INVALID_FIELD"),
         ({"evidence": ()}, "INVALID_EVIDENCE"),
     ],
 )

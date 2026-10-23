@@ -7,7 +7,7 @@ from app.refresh.models import (
     Failure,
     Selection,
 )
-from app.refresh.policy import MAX_BODY_CHARS, MAX_CHANGED_DOCUMENTS, RELATION_KEYS
+from app.refresh.policy import RELATION_KEYS
 
 
 def reject(code, message):
@@ -16,7 +16,7 @@ def reject(code, message):
 
 
 def validate_document(request, document):
-    """프로젝트·revision·분류와 ACTIVE 본문의 원문 한도를 검증한다."""
+    """프로젝트·revision·분류와 ACTIVE 본문의 존재를 검증한다. 길이는 토큰 예산이 본다."""
     if document.project_id != request.job.project_id:
         reject("PROJECT_MISMATCH", "Document belongs to another project")
     if (
@@ -40,15 +40,14 @@ def validate_document(request, document):
             or relation.document_id == relation.target_document_id
         ):
             reject("INVALID_RELATION", "Invalid embedded relationship")
-    if document.state == DocumentState.ACTIVE:
-        if not isinstance(document.body_text, str):
-            reject("BODY_MISSING", "Active document requires body_text")
-        if len(document.body_text) > request.settings.max_input_chars:
-            reject("BODY_TOO_LARGE", "Document body exceeds codepoint limit")
+    if document.state == DocumentState.ACTIVE and not isinstance(
+        document.body_text, str
+    ):
+        reject("BODY_MISSING", "Active document requires body_text")
 
 
 def validate_input(request, source):
-    """식별·중복·설정·입력 한도를 검사한다. 비활성 항목도 변경 개수에 포함한다."""
+    """식별·중복·설정과 manifest를 검사한다. 문서 수·본문 길이로 거절하지 않는다."""
     settings = request.settings
     if source.job != request.job:
         reject("INPUT_MISMATCH", "Input identity differs from request")
@@ -56,17 +55,11 @@ def validate_input(request, source):
         (request.job.project_id, request.job.request_id, request.job.input_fingerprint)
     ):
         reject("INPUT_MISMATCH", "Request identity must be nonempty")
-    positive = (
-        settings.max_changed_documents,
-        settings.max_input_chars,
-        settings.max_context_chars,
-        settings.max_model_calls,
-        settings.chunk_chars,
-    )
     if (
-        any(type(v) is not int or v <= 0 for v in positive)
-        or type(settings.max_documents) is not int
-        or settings.max_documents < 0
+        any(
+            type(v) is not int or v <= 0
+            for v in (settings.max_model_calls, settings.chunk_chars)
+        )
         or type(settings.max_depth) is not int
         or not 0 <= settings.max_depth <= 3
         or type(settings.separate_discovery) is not bool
@@ -74,15 +67,10 @@ def validate_input(request, source):
         or not 0 <= settings.chunk_overlap_chars < settings.chunk_chars
     ):
         reject("INVALID_POLICY", "Invalid execution budget")
-    if (
-        settings.max_changed_documents > MAX_CHANGED_DOCUMENTS
-        or settings.max_input_chars > MAX_BODY_CHARS
-        or not settings.policy_version
-        or not set(settings.relation_keys) <= set(RELATION_KEYS.values())
+    if not settings.policy_version or not set(settings.relation_keys) <= set(
+        RELATION_KEYS.values()
     ):
-        reject("INVALID_POLICY", "Policy exceeds supported MVP contract")
-    if len(source.documents) > settings.max_changed_documents:
-        reject("TOO_MANY_CHANGED_DOCUMENTS", "Changed document count exceeds limit")
+        reject("INVALID_POLICY", "Policy exceeds supported contract")
     ids = [d.document_id for d in source.documents]
     if len(ids) != len(set(ids)):
         reject("DUPLICATE_DOCUMENT", "Duplicate changed document ID")
@@ -146,8 +134,6 @@ def select(request, source, related):
         visited |= following
         frontier = following
     missing = selected - present
-    if len(missing) > request.settings.max_documents:
-        reject("REFERENCE_BUDGET_EXCEEDED", "Additional document budget exceeded")
     return Selection(tuple(sorted(selected)), tuple(sorted(missing)))
 
 

@@ -6,7 +6,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.adapters.neptune_relations import NeptuneRelatedDocumentSource
+from app.adapters.neptune_relations import (
+    NeptuneRelatedDocumentSource,
+    build_one_hop_query,
+)
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import ArtifactRef, JobKey, Readiness, RefreshRequest
 
@@ -128,18 +131,21 @@ def test_required_version_is_unknown_and_zero_depth_or_no_seeds_do_no_io():
         assert caught.value.failure.code == "UNSUPPORTED_GRAPH_DEPTH"
 
 
-def test_graph_budget_overflow_is_not_silent_truncation():
+def test_many_neighbors_are_returned_without_row_limit():
+    """이웃 수로 자르거나 거절하지 않는다. 조회문에도 limit가 없다."""
     req = request()
-    req = replace(
-        req, settings=replace(req.settings, max_changed_documents=1, max_documents=0)
-    )
-    row = {
-        "seed_id": f"file:{req.seed_ids[0]}",
-        "target_id": f"file:{uuid4()}",
-        "relation_id": f"rel:{uuid4()}",
-        "folder_code": ["ITEM"],
-        "description": [""],
-    }
-    with pytest.raises(RefreshFailure) as caught:
-        lookup(req, result(req, rows=[row, row]))
-    assert caught.value.failure.code == "REFERENCE_BUDGET_EXCEEDED"
+    targets = sorted(str(uuid4()) for _ in range(100))
+    rows = [
+        {
+            "seed_id": f"file:{req.seed_ids[0]}",
+            "target_id": f"file:{target}",
+            "relation_id": f"rel:{uuid4()}",
+            "folder_code": ["ITEM"],
+            "description": ["연결 설명"],
+        }
+        for target in targets
+    ]
+    related = lookup(req, result(req, rows=rows))
+    assert related.document_ids == tuple(targets)
+    assert len(related.relations) == len(targets)
+    assert ".limit(" not in build_one_hop_query(req.job.project_id, req.seed_ids, ())

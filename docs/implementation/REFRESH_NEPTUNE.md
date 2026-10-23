@@ -58,7 +58,8 @@ C까지 확장하지 않는다. 여러 seed가 같은 상대 문서에 연결되
 | seed가 없거나 `max_depth = 0` | 관계 IO 없이 빈 결과. 명시 대상 등의 기존 선택은 유지 |
 | `max_depth > 1` | `UNSUPPORTED_GRAPH_DEPTH`. 원홉으로 조용히 축소하지 않음 |
 | HTTP·네트워크·응답 형식 실패 | 재시도 가능한 `RefreshFailure`. Content·모델 호출을 진행하지 않음 |
-| 그래프 결과가 문서 선택 예산을 초과 | `REFERENCE_BUDGET_EXCEEDED`. 일부 문서만 잘라 성공시키지 않음 |
+
+이웃 수로 결과를 자르거나 거절하지 않는다. 모델 입력 크기는 호출마다의 토큰 예산과 묶음 실행이 다룬다.
 
 `READY`는 현재 조회 스냅샷에서 seed·관계를 확인했다는 뜻이다. Kafka backlog가 없거나
 특정 Content revision까지 모두 반영됐다는 보장은 아니다. 현재 모델에는 그래프 버전이

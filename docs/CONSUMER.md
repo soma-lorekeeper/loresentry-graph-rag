@@ -24,7 +24,7 @@ FileChanged subject는 file_id, ProjectDeleted는 project_id, refresh 요청은 
 옛 이벤트나 삭제 뒤 더 큰 seq의 잘못된 이벤트로 데이터를 부활시키지 않는다.
 기존 [그래프 투영](implementation/GRAPH_PROJECTION.md)의 sequence 없는 fixture 경로와 구분한다.
 
-갱신안은 입력 해시·신뢰한 user_id·모델 profile·변경 문서 manifest를 내부 RefreshRequest에 연결한다.
+갱신안은 입력 해시·신뢰한 user_id·변경 문서 manifest와 기동 때 정한 모델 설정을 내부 RefreshRequest에 연결한다.
 required_events로 입력 생성 시 필요한 투영 이벤트들이 처리됐는지 확인하고 생성한다.
 완료 Inbox는 요청 ID와 요청 해시로 중복·충돌을 판정하며 실행 소유권 잠금은 아니다.
 [완료 Inbox](implementation/REFRESH_INBOX.md)와 불변 S3 재사용으로 중단을 복구한다.
@@ -32,7 +32,10 @@ required_events로 입력 생성 시 필요한 투영 이벤트들이 처리됐�
 ## 재시도와 DLQ
 
 개별 일시 장애는 최초 시도 뒤 1·2·4·8·10초로 재시도한다. 소진되거나 계약이 잘못된 메시지는
-소비자별 DLQ에 발행한다. 완료/DLQ 전달 확인 실패와 분류하지 않은 오류는 정상 반환하지 않는다.
+소비자별 DLQ에 발행한다. 단, 최신화 요청이 투영 대기(`required_events` 미반영 또는 seed가 그래프에
+없음)로 재시도를 다 쓰면 DLQ 대신 `PROJECTION_NOT_READY`·`GRAPH_NOT_READY` FAILED 완료를 한 번
+기록한다. Content가 요청을 끝내고 같은 문서를 다음 요청에 다시 싣게 하기 위해서다. 이 기록마저 실패하면 DLQ다.
+완료/DLQ 전달 확인 실패와 분류하지 않은 오류는 정상 반환하지 않는다.
 원본 payload·key와 ce_*를 보존하고 안전한 위치·오류 클래스 진단만 추가한다.
 원본 6개 파티션의 번호를 3개 파티션 DLQ에 강제하지 않는다.
 

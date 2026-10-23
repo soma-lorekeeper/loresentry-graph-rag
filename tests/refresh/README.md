@@ -13,9 +13,9 @@
 
 | 파일 | 검증 |
 |---|---|
-| `test_policy.py`, `test_fixed_fixtures.py`, `test_contracts.py` | 불변 값, 독립 예산, 고정 출처·revision |
-| `test_selection.py` | 20/21개·5000/5001자, 요청 manifest, 프로젝트·상태·중복·순환·누락 |
-| `test_chunking.py`, `test_context.py` | 전체 원문 보존, Unicode 구간, 반복 문장, 출처 중복 제거, 문맥 예산·버전 |
+| `test_policy.py`, `test_fixed_fixtures.py`, `test_contracts.py` | 불변 값, 선택 정책 필드, 고정 출처·revision |
+| `test_selection.py` | 문서 수·본문 길이 무제한(21개·5001자 허용), 요청 manifest, 프로젝트·상태·중복·순환·누락 |
+| `test_chunking.py`, `test_context.py` | 전체 원문 보존, Unicode 구간, 반복 문장, 출처 중복 제거, 큰 문맥 무절단·버전 |
 | `test_document_validation.py` | 허용 대상·필드·revision·근거, 동일 본문 제외, 충돌 실패 |
 | `test_relation_validation.py` | 두 방향 분류 키, 기존 연결·역방향 중복, 부분 오류의 전체 실패 |
 | `test_real_service.py` | 실제 rules와 여섯 fake, 다중 호출, 관계 전용·변경 없음, 입력 경계·복구 |

@@ -57,18 +57,14 @@ class JobKey:
 
 @dataclass(frozen=True)
 class SelectionSettings:
-    """문서 선택 정책에 전달할 관계 키·탐색 깊이·입력 크기 제한.
+    """문서 선택 정책에 전달할 관계 키·탐색 깊이·호출 예산.
 
-    변경 입력 한도와 추가 조회·문맥·호출 예산은 각각 독립적으로 적용한다.
+    문서 수·본문 길이로 입력을 자르지 않는다. 입력 크기는 모델 호출의 토큰 예산이 정한다.
     """
 
     relation_keys: tuple[str, ...] = ()
     max_depth: int = 1
-    max_documents: int = 40
-    max_input_chars: int = 5000
     policy_version: str = "refresh-v1"
-    max_changed_documents: int = 20
-    max_context_chars: int = 480000
     max_model_calls: int = 40
     chunk_chars: int = 1000
     separate_discovery: bool = False

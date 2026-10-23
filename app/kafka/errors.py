@@ -9,6 +9,18 @@ class RetryableProcessingError(RuntimeError):
     """업무 어댑터가 개별 레코드의 일시 장애로 명시적으로 분류한 실패."""
 
 
+class NotReady(RetryableProcessingError):
+    """요청이 의존하는 그래프 투영이 아직 따라오지 않았다.
+
+    재시도를 다 써도 그대로면 DLQ 대신 업무 처리기의 소진 처리(예: FAILED 완료)로 넘긴다.
+    code는 그 처리에 남길 실패 코드다.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 class DeliveryError(RuntimeError):
     """Kafka 발행을 확인하지 못했다. Outbox 대기 또는 DLQ 원본 offset을 유지한다."""
 

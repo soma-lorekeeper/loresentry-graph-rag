@@ -150,7 +150,6 @@ def test_confidence_examples_use_the_actual_strict_contract(instructions):
                 "prompt_version": "refresh-prompt-v11",
                 "schema_version": "refresh-candidate-v6",
             },
-            max_context_chars=480000,
         )
         model_input = build_prompt(json.dumps(context))
         candidate = parse_candidate(
@@ -270,9 +269,9 @@ def test_cli_replays_explicit_scores_and_writes_observation_without_network(tmp_
     rules = EvaluationRules(None, None, single_call=True)
     snapshot = evaluation_snapshot(case)
     model_input = rules.model_inputs(snapshot, rules.chunk(snapshot))[0]
-    wire = json.loads(
-        build_repair_input(model_input, case.expected, (), 480000).prompt
-    )["validation_repair"]["previous_candidate"]
+    wire = json.loads(build_repair_input(model_input, case.expected, ()).prompt)[
+        "validation_repair"
+    ]["previous_candidate"]
     for fact in wire["facts"]:
         fact["confidence"] = (
             0.42  # 기능 테스트용 고정값이며 실제 모델의 confidence가 아니다.

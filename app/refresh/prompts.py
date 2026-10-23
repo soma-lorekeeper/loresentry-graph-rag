@@ -727,7 +727,7 @@ IMPROVED_CONFIDENCE_INSTRUCTION = _compose_instruction(
 
 
 def build_prompt(context: str) -> ModelInput:
-    """문맥에 고정된 모델 설정으로 프롬프트를 구성하고 최종 크기를 검증한다."""
+    """문맥에 고정된 모델 설정으로 프롬프트를 구성한다. 크기는 호출 직전 토큰 예산이 본다."""
     data = json.loads(context)
     settings = data["model_settings"]
     if not all(
@@ -750,8 +750,6 @@ def build_prompt(context: str) -> ModelInput:
         + "\nFOLDER_RELATION_KEYS="
         + json.dumps(RELATION_KEYS, sort_keys=True)
     )
-    if len(instructions) + len(context) > data["max_context_chars"]:
-        reject("CONTEXT_BUDGET_EXCEEDED", "Prompt exceeds codepoint budget")
     scope = data.get("relation_scope")
     return ModelInput(
         context,

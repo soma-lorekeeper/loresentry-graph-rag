@@ -196,9 +196,7 @@ def test_typed_repair_short_ids_preserve_all_proposal_refs_and_canonical_roundtr
         )
         for index, fact in enumerate(candidate.facts)
     )
-    repaired_input = build_repair_input(
-        scenario.model_input, candidate, diagnostics, 1_000_000
-    )
+    repaired_input = build_repair_input(scenario.model_input, candidate, diagnostics)
     context = json.loads(repaired_input.prompt)
     feedback = context.pop("validation_repair")
     assert context == json.loads(scenario.model_input.prompt)
@@ -238,9 +236,7 @@ def test_repair_preserves_unknown_refs_without_alias_collision(unknown_ref):
         fact_id=unknown_ref,
         offending_value=unknown_ref,
     )
-    repaired_input = build_repair_input(
-        scenario.model_input, candidate, (diagnostic,), 1_000_000
-    )
+    repaired_input = build_repair_input(scenario.model_input, candidate, (diagnostic,))
     feedback = json.loads(repaired_input.prompt)["validation_repair"]
     previous = feedback["previous_candidate"]
     declarations = {fact["fact_id"] for fact in previous["facts"]}
@@ -277,9 +273,7 @@ def test_repair_only_rewrites_identifier_diagnostic_values(rule, remapped):
         fact_id=canonical_id,
         offending_value=canonical_id,
     )
-    repaired_input = build_repair_input(
-        scenario.model_input, candidate, (diagnostic,), 1_000_000
-    )
+    repaired_input = build_repair_input(scenario.model_input, candidate, (diagnostic,))
     feedback = json.loads(repaired_input.prompt)["validation_repair"]
     item = feedback["diagnostics"][0]
     assert item["fact_id"] == "F0001"
@@ -676,22 +670,36 @@ def test_repair_request_preflight_rejection_preserves_only_started_call_usage():
     assert len(result.attempts) == 1
 
 
-def test_repair_context_budget_failure_stops_before_second_generate():
+def test_repair_input_over_token_budget_stops_before_second_create():
+    """보완 입력이 토큰 예산을 넘으면 어댑터의 계수에서 멈추고 두 번째 생성은 보내지 않는다."""
+    from app.adapters.llm import ModelLimits, OpenAIProposalModel
+    from tests.refresh.test_llm import client_fixture
+
     scenario = repair_scenario()
+    # 실제 어댑터는 limits와 같은 모델 이름의 입력만 받는다.
+    scenario.request = replace(
+        scenario.request,
+        model_settings=replace(scenario.request.model_settings, model="gpt-5.6-luna"),
+    )
+    scenario.snapshot = replace(scenario.snapshot, request=scenario.request)
     original = RefreshRules().model_inputs(
         scenario.snapshot, RefreshRules().chunk(scenario.snapshot)
     )[0]
-    context_limit = len(original.prompt) + len(original.instructions) + 300
-    scenario.request = replace(
-        scenario.request,
-        settings=replace(scenario.request.settings, max_context_chars=context_limit),
-    )
-    scenario.snapshot = replace(scenario.snapshot, request=scenario.request)
-    scenario.model.responses.extend((parser_failure(), candidate_for(scenario)))
+    # 대체 계수는 글자 수 합이다. 첫 입력이 예산(max_input_tokens의 80%)에 꼭 맞게 한다.
+    tokens = len(original.instructions) + len(original.prompt)
+    limits = ModelLimits("gpt-5.6-luna", 10, tokens * 5 // 4 + 1, 2000, 1050000)
+    assert limits.input_budget == tokens
+    client = client_fixture()
+    # 첫 응답은 JSON이 아니어서 진단이 붙은, 보완할 수 있는 실패가 된다.
+    client.responses.create.return_value.output_text = "{"
+    scenario.service.model = OpenAIProposalModel(client, limits)
     _, result = run_saved(scenario)
-    assert_atomic_failure(result, "CONTEXT_BUDGET_EXCEEDED")
-    assert len(scenario.model.inputs) == 1
-    assert result.usage == Usage(1, 11, 13)
+    assert_atomic_failure(result, "MODEL_REQUEST_INVALID")
+    assert result.failure.message == "Model input token budget exceeded"
+    # 보완 입력도 계수했지만 예산을 넘어 생성 요청은 첫 번째 하나뿐이다.
+    assert client.responses.input_tokens.count.call_count == 2
+    client.responses.create.assert_called_once()
+    assert result.usage == Usage(1, 10, 20)
     assert len(result.attempts) == 1
 
 

@@ -1,28 +1,23 @@
-"""Content의 DocumentResponses.Content와 같은 조회 응답 fixture."""
+"""Content 목록 API(GET /projects/{id}/files/content)와 같은 응답 fixture."""
 
 
-def content_payload(project_id, document_id, text="Content 원문", **changes):
+def content_document(document_id, text="Content 원문", **changes):
+    """documents 원소 하나. S3 refresh-input-v2 문서와 모양이 같다."""
     return {
         "id": document_id,
-        "project_id": project_id,
-        "title": "기존 인물",
+        "revision_no": 7,
         "folder_code": "CHARACTER",
-        "episode_id": None,
-        "body": {
-            "schema_version": 1,
-            "doc": {
-                "type": "doc",
-                "content": [
-                    {"type": "paragraph", "content": [{"type": "text", "text": text}]}
-                ],
-            },
-        },
-        "legacy_body_md": None,
+        "title": "기존 인물",
+        "body_text": text,
         "properties": [{"key": "aliases", "value": "별칭  "}],
         "relations": [],
-        "locked": False,
-        "char_count": len(text),
-        "revision_no": 7,
-        "updated_at": "2026-10-15T00:00:00Z",
         **changes,
+    }
+
+
+def contents_payload(project_id, documents=(), missing=()):
+    return {
+        "project_id": project_id,
+        "documents": list(documents),
+        "missing": list(missing),
     }

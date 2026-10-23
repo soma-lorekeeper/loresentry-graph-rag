@@ -23,7 +23,7 @@ from app.adapters.refresh_artifacts import S3ArtifactSettings, s3_artifacts
 from app.refresh.service import RefreshService
 
 settings = S3ArtifactSettings.from_environment(os.environ)
-with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifacts:
+with s3_artifacts(settings, region_name=os.environ.get("GRAPH_REFRESH_REGION")) as artifacts:
     service = RefreshService(
         artifacts=artifacts,
         relations=relations,
@@ -36,11 +36,12 @@ with s3_artifacts(settings, region_name=os.environ.get("AWS_REGION")) as artifac
 
 | 설정 | 의미·기본값 |
 |---|---|
-| `GRAPHRAG_S3_BUCKET` | 실행 스냅샷·결과 버킷. 필수 |
-| `GRAPHRAG_S3_INPUT_BUCKET` | 허용할 입력 버킷. 필수. 출력 버킷과 같아도 됨 |
-| `GRAPHRAG_S3_PREFIX` | 출력 prefix. 기본 `refresh` |
-| `GRAPHRAG_S3_INPUT_PREFIX` | 입력 key가 속해야 하는 prefix. 기본 `refresh` |
-| `GRAPHRAG_S3_MAX_OBJECT_BYTES` | 객체별 읽기·쓰기 한도. 기본 `16777216`바이트 |
+| `GRAPH_REFRESH_COMPLETED_BUCKET` | 실행 스냅샷·결과 버킷. 필수 |
+| `GRAPH_REFRESH_REQUEST_BUCKET` | 허용할 입력 버킷. 필수. 출력 버킷과 같아도 됨 |
+| `GRAPH_REFRESH_PREFIX` | 출력 prefix. 기본 `refresh` |
+| `GRAPH_REFRESH_INPUT_PREFIX` | 입력 key가 속해야 하는 prefix. 기본 `refresh` |
+| `GRAPH_REFRESH_MAX_OBJECT_BYTES` | 객체별 읽기·쓰기 한도. 기본 `16777216`바이트 |
+| `GRAPH_REFRESH_REGION` | S3 client 리전. 두 버킷의 리전과 같아야 함. 없으면 AWS SDK 기본 설정을 따름 |
 
 prefix는 앞뒤 `/`나 빈 경로·`.`·`..` 요소가 없는 상대 경로다.
 입력은 지정 버킷과 `input_prefix/` 안에 있어야 하며 해당 요청의 출력 객체와 겹칠 수 없다.
@@ -57,14 +58,13 @@ SSE-KMS 등 버킷 정책에 따른 추가 권한은 운영 환경에서 별도 
 
 객체 위치·JSON 필드·fingerprint·출력 메타데이터·불변 저장·완료 전달은
 [S3 입출력 계약](../S3_IO_CONTRACT.md)을 기준으로 한다.
-입력은 `refresh-input-v1`, 요청은 `refresh-request-v1`, 스냅샷은
+입력은 Content가 만드는 `refresh-input-v2`, 요청은 `refresh-request-v1`, 스냅샷은
 `refresh-context-v1`, 새 결과 저장은 `refresh-result-v3`다.
 과거 `refresh-result-v1`·`v2` 결과는 읽기 호환한다.
 
-입력 공급자는 `app.adapters.refresh_schema.input_bytes(source)`로 저장 바이트를 만들고
-`fingerprint(body)`로 그 바이트의 해시를 계산할 수 있다. `source`는 `InputSnapshot`이다.
+테스트·평가는 Content 대신 `app.adapters.refresh_schema.input_bytes(source)`로 v2 저장 바이트를
+만들고 `fingerprint(body)`로 그 바이트의 해시를 계산할 수 있다. `source`는 `InputSnapshot`이다.
 기존 fake 평가의 fingerprint는 자료 구조를 해시한 값이므로 S3 요청에 그대로 사용할 수 없다.
-이 형식은 현재 GraphRAG 어댑터의 계약이며 Content 필드 매핑과 Kafka 전달의 운영 합의는 별도다.
 
 쓰기에는 `IfNoneMatch="*"`를 사용하고 기존 객체를 덮어쓰지 않는다.
 request manifest·context·result와 [완료 Inbox](REFRESH_INBOX.md)·완료 발행은 하나의 트랜잭션이 아니다.

@@ -6,6 +6,7 @@ import pytest
 from app.adapters.llm_schema import parse_candidate
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import DocumentBatch, ModelCandidate, Outcome, Usage
+from app.refresh.policy import MAX_PROPOSAL_CHARS
 from app.refresh.rules import RefreshRules
 from app.refresh.serialization import result_from_payload
 from evaluation.cases import new_setting_cases
@@ -83,7 +84,7 @@ def test_new_only_candidate_is_proposed_and_strict_parser_accepts_it():
         ({"candidate_id": "c1"}, "INVALID_NEW_DOCUMENT"),
         ({"name": ""}, "INVALID_NEW_DOCUMENT"),
         ({"body_text": ""}, "INVALID_NEW_DOCUMENT"),
-        ({"body_text": "가" * 5001}, "INVALID_NEW_DOCUMENT"),
+        ({"body_text": "가" * (MAX_PROPOSAL_CHARS + 1)}, "INVALID_NEW_DOCUMENT"),
         ({"evidence": ()}, "INVALID_EVIDENCE"),
     ],
 )

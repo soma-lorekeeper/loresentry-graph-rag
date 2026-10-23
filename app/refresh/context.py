@@ -8,14 +8,17 @@ from types import SimpleNamespace
 from app.refresh.evidence import unique_evidence
 from app.refresh.models import DocumentState
 from app.refresh.policy import RELATION_KEYS
-from app.refresh.selection import reject
 from app.refresh.validation import relation_in_scope, setting_name
 
 
 def existing_setting_identities(snapshot, active):
-    """실제 설정 문서의 제목·이름·별칭만 제공한다. 본문 언급으로 이름을 만들지 않는다."""
+    """실제 설정 문서의 제목·이름·별칭만 제공한다. 본문 언급으로 이름을 만들지 않는다.
+
+    묶음 실행에서는 묶음 밖 설정과 앞 묶음의 새 설정도 포함해 같은 이름을 다시 만들지 않게 한다.
+    """
     identities = []
-    for document in sorted(active.values(), key=lambda d: d.document_id):
+    known = tuple(active.values()) + getattr(snapshot, "known_settings", ())
+    for document in sorted(known, key=lambda d: d.document_id):
         if (
             document.project_id != snapshot.request.job.project_id
             or document.folder_code not in RELATION_KEYS
@@ -82,7 +85,10 @@ def build_context(
     allow_document_updates=True,
     relation_scope=None,
 ):
-    """여러 변경 문서를 함께 제공한다. 출처를 생략해 문맥 예산을 맞추지 않는다."""
+    """여러 변경 문서를 함께 제공한다. 출처를 생략해 크기를 맞추지 않는다.
+
+    크기는 모델 호출 직전의 토큰 예산 검사가 판단한다.
+    """
     targets = snapshot.target_ids if target_ids is None else target_ids
     active = {
         d.document_id: d for d in snapshot.documents if d.state == DocumentState.ACTIVE
@@ -127,9 +133,5 @@ def build_context(
             {"marker": f"C{i:04d}", **asdict(item)}
             for i, item in enumerate(evidence, 1)
         ],
-        "max_context_chars": snapshot.request.settings.max_context_chars,
     }
-    context = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    if len(context) > snapshot.request.settings.max_context_chars:
-        reject("CONTEXT_BUDGET_EXCEEDED", "Context exceeds codepoint budget")
-    return context
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)

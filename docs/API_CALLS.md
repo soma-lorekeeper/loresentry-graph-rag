@@ -59,10 +59,10 @@ Inbox의 호출·복구 계약은 [완료 Inbox](implementation/REFRESH_INBOX.md
 ## Content 문서 조회
 
 [ContentDocumentSource](../app/adapters/content_documents.py)는 `X-User-Id`를 전달해
-`GET /projects/{project_id}`로 활성 프로젝트를 확인하고, 선택된 각 문서를
-`GET /files/{document_id}/content`로 읽는다. `CONTENT_BASE_URL`은 필수이며
-`CONTENT_TIMEOUT_SECONDS`는 기본 10초다. 응답의 프로젝트·문서 ID를 대조하고
-구조화 본문을 텍스트로 변환하며 제목·속성·관계·`revision_no`를 보존한다.
+선택된 문서를 `GET /projects/{project_id}/files/content?ids=…`로 100개씩 읽는다.
+Content가 활성 프로젝트 소유자만 통과시키고 휴지통·없는 문서는 `missing`으로 알린다.
+`CONTENT_BASE_URL`은 필수이며 `CONTENT_TIMEOUT_SECONDS`는 기본 10초다. 응답의 프로젝트와
+받은 문서·missing을 요청 ID와 대조하고 본문·제목·속성·관계·`revision_no`를 보존한다.
 
 `neptune_refresh_service(...)`에서 `documents`를 생략하고 신뢰한 `user_id`를 전달하면
 실제 HTTP 구현을 연결한다. 기본 평가는 명시적으로 fake를 유지한다.
@@ -73,7 +73,13 @@ Inbox의 호출·복구 계약은 [완료 Inbox](implementation/REFRESH_INBOX.md
 
 [OpenAIProposalModel](../app/adapters/llm.py)은 동기 SDK의 `responses.create`로
 OpenAI `POST /v1/responses`를 호출한다. FastAPI 라우트에는 연결하지 않았으며
-평가 도구의 `--live` 모드에서 선택한다. 대화 응답 재생은 네트워크 호출을 하지 않는다.
+Kafka refresh와 평가 도구의 `--live` 모드에서 쓴다. 대화 응답 재생은 네트워크 호출을 하지 않는다.
+
+생성 전에는 같은 인자(모델·instructions·input·구조화 출력 형식)로
+`POST /v1/responses/input_tokens`(`responses.input_tokens.count`)를 불러 모델이 받을 입력 토큰을
+정확히 센다. 최대 입력 토큰의 80%를 넘으면 생성 요청을 보내지 않고 `MODEL_REQUEST_INVALID`로
+거절한다. 계수 호출은 생성 비용이 없으며 사용량에 넣지 않는다. Kafka refresh는 같은 계수로
+묶음 크기도 정한다.
 
 키·모델·timeout·토큰 예산·클라이언트 종료는 실행 스크립트가 담당한다. SDK와 어댑터 모두
 자동 재시도가 없다. 구조화 출력·오류 코드·스냅샷 버전·사용량 정책과 실행 명령은

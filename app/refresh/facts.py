@@ -91,9 +91,12 @@ def validate_facts(
         if d.state == DocumentState.ACTIVE
         and d.project_id == snapshot.request.job.project_id
     }
-    known_ids = set(documents) | {
-        p.candidate_id for p in candidate.new_document_proposals
-    }
+    # 묶음 실행에서 모델에게 보여 준 묶음 밖 설정도 사실의 등장 문서로 참조할 수 있다.
+    known_ids = (
+        set(documents)
+        | {p.candidate_id for p in candidate.new_document_proposals}
+        | {d.document_id for d in getattr(snapshot, "known_settings", ())}
+    )
     facts = {}
     chunks = (
         {chunk.evidence for chunk in make_chunks(snapshot)}

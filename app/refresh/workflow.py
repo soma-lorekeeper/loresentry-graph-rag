@@ -34,13 +34,24 @@ class Paragraph:
     text: str
 
 
+def current_bodies(snapshot):
+    """대상 설정의 현재 본문. 묶음 실행에서 앞 묶음이 바꾼 seed는 원문 대신 그 본문이다."""
+    working = dict(getattr(snapshot, "working_bodies", ()))
+    return {
+        d.document_id: working.get(d.document_id, d.body_text or "")
+        for d in snapshot.documents
+        if d.document_id in snapshot.target_ids
+    }
+
+
 def paragraphs(snapshot):
     """빈 줄 구분과 원문 위치를 보존하여 대상 설정에만 문단 ID를 붙인다."""
     result = []
+    bodies = current_bodies(snapshot)
     for document in snapshot.documents:
         if document.document_id not in snapshot.target_ids:
             continue
-        body = document.body_text or ""
+        body = bodies[document.document_id]
         matches = list(
             re.finditer(r"\S(?:.*?\S)?(?=\n[ \t]*\n|[ \t\r\n]*\Z)", body, re.S)
         )
@@ -223,11 +234,7 @@ def _input(snapshot, base, *, plan=None):
     context = json.loads(base.prompt)
     context["paragraphs"] = [asdict(p) for p in paragraphs(snapshot)]
     context["workflow"] = "refresh-two-stage-v1"
-    context["settings_bodies"] = {
-        d.document_id: d.body_text or ""
-        for d in snapshot.documents
-        if d.document_id in snapshot.target_ids
-    }
+    context["settings_bodies"] = current_bodies(snapshot)
     if plan is not None:
         context["change_plan"] = plan_payload(plan)
     instructions = (
@@ -239,12 +246,6 @@ def _input(snapshot, base, *, plan=None):
         RELATION_KEYS, sort_keys=True
     )
     prompt = json.dumps(context, ensure_ascii=False, sort_keys=True)
-    if len(prompt) + len(instructions) > snapshot.request.settings.max_context_chars:
-        raise RefreshFailure(
-            Failure(
-                "CONTEXT_BUDGET_EXCEEDED", "Two-stage prompt exceeds codepoint budget"
-            )
-        )
     return replace(
         base,
         prompt=prompt,

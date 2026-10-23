@@ -66,8 +66,9 @@ record-and-consent case with four calls, including one successful repair. Its fi
 result was `PROPOSED` with human semantic review pending. Repeated semantic A/B
 trials did not establish a v12 advantage, so v11 remains the default. Long-input
 trials reached the earlier output limit; the example and local output budget now
-allow 32,768 output tokens, 240,000 input tokens, a 272,768-token context budget,
-and a 240-second request timeout. This budget change is separate from prompt quality.
+allow 32,768 output tokens, 922,000 input tokens (each call may use 80% of it, counted
+with the OpenAI input token count API), a 1,050,000-token context budget, and a
+240-second request timeout. This budget change is separate from prompt quality.
 
 Each evaluation run also writes `report.md` with proposal diffs,
 check results, latency, and known token usage. To render existing evaluation JSON
@@ -217,4 +218,4 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 - User-facing graph queries against Amazon Neptune. Projection writes and Inbox
   are implemented through the explicit fixture entry point; AWS validation remains.
 - General RAG/GraphRAG retrieval beyond refresh's one-hop relation lookup.
-- Production refresh activation requires the private S3/Pod Identity infrastructure and GitOps enablement described in [deployment](deploy/README.md).
+- Production refresh activation requires the private S3 bucket (created from `loresentry-content`), the graph-rag IAM role and Pod Identity from `deploy/setup-refresh.sh`, and GitOps enablement described in [deployment](deploy/README.md).

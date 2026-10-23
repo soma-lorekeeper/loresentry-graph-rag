@@ -30,6 +30,7 @@ from app.refresh.ports import (
     RefreshArtifactStore,
     RefreshInbox,
     RelatedDocumentSource,
+    TokenCounter,
 )
 from app.refresh.repair import (
     MAX_REPAIRS_PER_CALL,
@@ -60,6 +61,8 @@ class RefreshService:
         model: ProposalModel,
         inbox: RefreshInbox,
         rules: RefreshRules | None = None,
+        tokens: TokenCounter | None = None,
+        plan_budget: int | None = None,
     ):
         """실행에 사용할 포트와 판단 규칙을 주입한다.
 
@@ -70,13 +73,19 @@ class RefreshService:
             model: 모델 후보 생성 구현.
             inbox: 완료된 요청을 재처리하지 않기 위한 Inbox.
             rules: 순수 판단 구현. 생략하면 기본 순수 업무 규칙을 쓴다.
+            tokens: 입력 토큰 계수. 주면 2단계 실행이 예산을 넘을 때 seed 묶음으로 나눈다.
+            plan_budget: 계획 입력 하나에 허용하는 토큰. 작성·보완이 덧붙일 몫을 뺀 값이다.
         """
+        if (tokens is None) != (plan_budget is None):
+            raise ValueError("Token counter and plan budget are configured together")
         self.artifacts = artifacts
         self.relations = relations
         self.documents = documents
         self.model = model
         self.inbox = inbox
         self.rules = rules if rules is not None else RefreshRules()
+        self.tokens = tokens
+        self.plan_budget = plan_budget
 
     def run(self, request: RefreshRequest) -> Completion:
         """완료 Inbox를 확인하고 S3 결과·문맥을 재사용하거나 새로 실행한다.
@@ -100,6 +109,28 @@ class RefreshService:
                 result = RefreshResult(
                     request.job, Outcome.FAILED, failure=error.failure
                 )
+        return self._finish(request, result)
+
+    def fail(self, request: RefreshRequest, failure: Failure) -> Completion:
+        """실행하지 못한 요청(투영 대기 소진 등)을 FAILED로 끝내 완료를 한 번 기록한다.
+
+        이미 완료됐거나 저장된 결과가 있으면 그것을 그대로 쓴다. 완료 이벤트 ID는 요청으로
+        정해지고 결과는 한 번만 저장되므로 동시 실행과 경합해도 완료는 하나다.
+        """
+        completed = self.inbox.find(request)
+        if completed is not None:
+            validate_completion(request, completed)
+            return completed
+        result = self.artifacts.read_result(request) or RefreshResult(
+            request.job,
+            Outcome.FAILED,
+            failure=failure,
+            prompt_version=request.model_settings.prompt_version,
+        )
+        return self._finish(request, result)
+
+    def _finish(self, request, result):
+        """결과 저장 → Inbox와 발행 대기 기록. 먼저 저장된 결과가 있으면 그것을 쓴다."""
         if result.job != request.job:
             raise RequestConflict("result identity differs")
         try:
@@ -179,7 +210,9 @@ class RefreshService:
         from app.refresh.workflow import WRITE_SCHEMAS
 
         if len(inputs) == 1 and inputs[0].schema_version in WRITE_SCHEMAS:
-            return self._two_stage(snapshot, inputs[0])
+            if self.tokens is None:
+                return self._two_stage(snapshot, inputs[0])
+            return self._batched(snapshot, inputs[0])
         documents, relations, new_documents = [], [], []
         facts = {}
         for index, model_input in enumerate(inputs):
@@ -242,6 +275,89 @@ class RefreshService:
             ),
         )
         return replace(result, usage=usage, attempts=tuple(attempts))
+
+    def _batched(self, snapshot, base):
+        """계획 입력이 예산을 넘으면 seed 묶음을 차례로 실행하고 누적 결과를 한 번 검증한다.
+
+        모든 seed가 한 번에 들어가면 지금과 같은 2단계 실행 하나로 끝낸다. 끝난 묶음은 저장해
+        재전달된 요청이 다음 묶음부터 이어 가게 한다. 한 묶음이라도 실패하면 요청 전체가 실패다.
+        """
+        from app.refresh.batching import (
+            BatchState,
+            aggregate,
+            batch_snapshot,
+            failed,
+            fold,
+        )
+
+        state, remaining, index = BatchState(), snapshot.changed_ids, 1
+        while remaining:
+            saved = self.artifacts.read_batch(snapshot.request, index)
+            if saved is None:
+                seeds = self._pack(snapshot, state, remaining)
+                if index == 1 and seeds == remaining:
+                    return self._two_stage(snapshot, base)
+                batch = batch_snapshot(snapshot, state, seeds)
+                result = self._two_stage(batch, self._batch_input(batch))
+                if result.outcome == Outcome.FAILED:
+                    return failed(state, result)
+                try:
+                    self.artifacts.save_batch(snapshot.request, index, seeds, result)
+                except RequestConflict:
+                    # 동시 재실행이 먼저 저장한 묶음을 쓴다.
+                    saved = self.artifacts.read_batch(snapshot.request, index)
+                    if saved is None:
+                        raise
+            if saved is not None:
+                seeds, result = saved
+                if seeds != remaining[: len(seeds)]:
+                    raise RequestConflict("Saved batch differs from the seed order")
+            try:
+                fold(state, result)
+            except RefreshFailure as error:
+                return failed(state, result, error.failure)
+            remaining, index = remaining[len(seeds) :], index + 1
+        return aggregate(snapshot, state, base)
+
+    def _batch_input(self, batch):
+        """묶음 스냅샷의 2단계 기본 입력. 전체 스냅샷과 같은 규칙으로 만든다."""
+        return self.rules.model_inputs(batch, self.rules.chunk(batch))[0]
+
+    def _pack(self, snapshot, state, remaining):
+        """계획 입력이 예산에 드는 가장 긴 seed 앞부분을 count API 이분 탐색으로 고른다.
+
+        문맥은 문서 수에 비례해 늘지 않으므로(관계 쌍 목록 등) 앞부분마다 실제 계획 입력을
+        만들어 센다. 남은 seed가 전부 들면 count 한 번으로 끝나고, 아니면 묶음마다
+        log2(남은 seed 수)번쯤 더 센다. seed 하나와 그 이웃만으로도 넘으면 이웃을 빼지 않고
+        실패시킨다.
+        """
+        from app.refresh.batching import batch_snapshot
+        from app.refresh.workflow import build_plan_input
+
+        def tokens(count):
+            # 앞에서 count개 seed로 묶음을 만들었을 때 계획 입력의 실제 토큰 수
+            batch = batch_snapshot(snapshot, state, remaining[:count])
+            return self.tokens.count(build_plan_input(batch, self._batch_input(batch)))
+
+        if tokens(len(remaining)) <= self.plan_budget:
+            return remaining
+        # fits개는 예산에 들고 too_big개는 넘는다는 것을 유지하며 범위를 좁힌다.
+        fits, too_big = 0, len(remaining)
+        while too_big - fits > 1:
+            middle = (fits + too_big) // 2
+            if tokens(middle) <= self.plan_budget:
+                fits = middle
+            else:
+                too_big = middle
+        if not fits:
+            raise RefreshFailure(
+                Failure(
+                    "CONTEXT_BUDGET_EXCEEDED",
+                    "A changed document and its related documents exceed the model "
+                    "input budget",
+                )
+            )
+        return remaining[:fits]
 
     def _two_stage(self, snapshot, base):
         """계획·작성 두 호출과 전체 한 번의 보완. 계획 누락을 작성 단계에서 허용하지 않는다."""
@@ -311,22 +427,8 @@ class RefreshService:
                 "previous_candidate": previous,
                 "diagnostics": [asdict(d) for d in diagnostics],
             }
+            # 보완 입력도 모델 어댑터가 호출 직전 토큰 예산으로 검사한다.
             prompt = json.dumps(context, ensure_ascii=False)
-            if (
-                len(prompt) + len(initial.instructions)
-                > snapshot.request.settings.max_context_chars
-            ):
-                return RefreshResult(
-                    snapshot.request.job,
-                    Outcome.FAILED,
-                    usage=usage,
-                    failure=Failure(
-                        "CONTEXT_BUDGET_EXCEEDED", "Plan repair exceeds budget"
-                    ),
-                    prompt_version=base.prompt_version,
-                    candidate_schema_version=base.schema_version,
-                    attempts=tuple(attempts),
-                )
             current = replace(
                 initial,
                 prompt=prompt,
@@ -464,20 +566,13 @@ class RefreshService:
                     ),
                 )
                 return None, checked, usage
-            try:
-                previous_candidate, previous_diagnostics = (
-                    candidate,
-                    checked.diagnostics,
-                )
-                current_input = build_repair_input(
-                    model_input,
-                    candidate,
-                    checked.diagnostics,
-                    snapshot.request.settings.max_context_chars,
-                    attempt=attempt_index + 1,
-                )
-            except RefreshFailure as error:
-                return None, replace(checked, failure=error.failure), usage
+            previous_candidate, previous_diagnostics = candidate, checked.diagnostics
+            current_input = build_repair_input(
+                model_input,
+                candidate,
+                checked.diagnostics,
+                attempt=attempt_index + 1,
+            )
 
     @staticmethod
     def _completion(request, result_ref, result):

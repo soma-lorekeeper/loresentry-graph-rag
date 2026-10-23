@@ -7,7 +7,12 @@ from typing import Protocol
 
 from confluent_kafka import Consumer
 
-from app.kafka.errors import InvalidEvent, ProcessingStopped, RetryableProcessingError
+from app.kafka.errors import (
+    InvalidEvent,
+    NotReady,
+    ProcessingStopped,
+    RetryableProcessingError,
+)
 from app.kafka.messages import EVENT_TYPES, IncomingEvent, parse_event
 from app.kafka.polling import PollingWorker, Record
 
@@ -90,10 +95,25 @@ class BusinessConsumerHandler:
                     attempt + 1,
                 )
                 if attempt == len(self._delays):
-                    self._reject(record, failure)
+                    self._exhausted(record, event, failure)
                     return
                 if self._stop.wait(self._delays[attempt]):
                     raise ProcessingStopped("Consumer retry stopped") from None
+
+    def _exhausted(self, record, event, failure):
+        """재시도를 다 쓴 실패를 처리한다. 투영 대기는 처리기가 업무 실패로 끝낼 수 있다.
+
+        처리기에 exhausted가 있고 실패가 NotReady면 그것을 부르고 offset을 진행한다.
+        그 처리마저 거절되거나 일시 실패하면 DLQ로 보낸다.
+        """
+        hook = getattr(self._handlers[event.event_type], "exhausted", None)
+        if hook is None or not isinstance(failure, NotReady):
+            self._reject(record, failure)
+            return
+        try:
+            hook(event, failure)
+        except (InvalidEvent, RetryableProcessingError) as hook_failure:
+            self._reject(record, hook_failure)
 
     def _reject(self, record: Record, failure: Exception) -> None:
         if self._stop.is_set():

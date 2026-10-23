@@ -54,7 +54,9 @@ def test_bad_input_schema_fails_without_leaking_original_text(mutation):
     case = new_setting_cases("gpt-5.6-luna", "s3-test")[0]
     value = json.loads(input_bytes(case.source))
     if mutation == "extra":
-        value["documents"][0]["extra"] = "private manuscript"
+        # 문서 원소는 Content 목록 API와 같은 모델이라 부가 필드를 무시하지만,
+        # 입력 봉투는 v2 필드만 허용한다.
+        value["extra"] = "private manuscript"
     elif mutation == "revision":
         value["documents"][0]["revision_no"] = "3"
     elif mutation == "identity":

@@ -1,6 +1,9 @@
-"""Content 조회 응답을 검증하고 분석용 스냅샷으로 변환한다."""
+"""Content 문서를 검증하고 분석용 스냅샷으로 변환한다.
 
-from typing import Annotated, Literal, Self
+S3 최신화 입력(refresh-input-v2)의 문서와 목록 조회 API의 문서는 같은 모양이라 한 모델로 검증한다.
+"""
+
+from typing import Annotated, Self
 from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
@@ -23,102 +26,39 @@ class ResponseObject(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore")
 
 
-class EditorNode(ResponseObject):
-    type: Literal[
-        "doc",
-        "paragraph",
-        "text",
-        "heading",
-        "bulletList",
-        "orderedList",
-        "listItem",
-        "blockquote",
-        "codeBlock",
-        "horizontalRule",
-        "hardBreak",
-    ]
-    text: str | None = None
-    content: list[Self] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def require_text(self) -> Self:
-        if self.type == "text" and self.text is None:
-            raise ValueError("Text nodes require text")
-        return self
-
-
-class EditorBody(ResponseObject):
-    schema_version: int = Field(ge=1, le=1)
-    doc: EditorNode
-
-    @model_validator(mode="after")
-    def require_root(self) -> Self:
-        if self.doc.type != "doc":
-            raise ValueError("Editor root must be a doc")
-        return self
-
-
-def body_text(body: EditorBody) -> str:
-    """Content BodyText.extract와 같은 블록·목록·hardBreak 규칙. 공백은 보존한다."""
-
-    def inline(node: EditorNode) -> str:
-        if node.type == "text":
-            return node.text
-        if node.type == "hardBreak":
-            return "\n"
-        separator = (
-            "\n"
-            if node.type in {"bulletList", "orderedList", "blockquote", "listItem"}
-            else ""
-        )
-        return separator.join(inline(child) for child in node.content)
-
-    parts = []
-    for block in body.doc.content:
-        if parts:
-            parts.append("\n")
-        text = inline(block)
-        if text:
-            parts.append(text)
-    return "".join(parts)
-
-
-class TextProperty(ResponseObject):
+class ContentProperty(ResponseObject):
     key: str = Field(min_length=1)
     value: str
 
 
 class ContentRelation(ResponseObject):
+    target_document_id: str = Field(min_length=1)
     relation_key: str
-    target_document_id: Identifier
     description: str
 
 
-class ProjectResponse(ResponseObject):
-    id: Identifier
-    trashed_at: str | None
+class ContentDocument(ResponseObject):
+    """서식을 뺀 본문과 속성·관계를 가진 Content 문서 하나. 항상 ACTIVE 문서다.
 
+    문서 ID의 UUID 형식은 여기서 보지 않는다. S3 입력은 이벤트 manifest의 정규 UUID와,
+    목록 응답은 요청한 ID와 정확히 대조되고, 관계 대상은 추가 조회 전에 다시 검사된다.
+    """
 
-class ContentResponse(ResponseObject):
-    id: Identifier
-    project_id: Identifier
-    title: str = Field(min_length=1)
-    folder_code: str
+    id: str = Field(min_length=1)
     revision_no: int = Field(ge=0)
-    body: EditorBody | None
-    legacy_body_md: str | None
-    properties: list[TextProperty]
+    folder_code: str
+    title: str | None = Field(default=None, min_length=1)
+    body_text: str
+    properties: list[ContentProperty]
     relations: list[ContentRelation]
 
     @model_validator(mode="after")
     def validate_document(self) -> Self:
         if self.folder_code not in RELATION_KEYS:
             raise ValueError("Unsupported document category")
-        if (self.body is None) == (self.legacy_body_md is None):
-            raise ValueError("Exactly one body representation is required")
-        keys = [item.key for item in self.properties]
-        if len(keys) != len(set(keys)) or any(not key.strip() for key in keys):
-            raise ValueError("Property keys must be unique and nonblank")
+        # 속성 키는 반복될 수 있다(alias 여러 개 등). Content에도 unique 제약이 없다.
+        if any(not item.key.strip() for item in self.properties):
+            raise ValueError("Property keys must be nonblank")
         targets = [item.target_document_id for item in self.relations]
         if len(targets) != len(set(targets)) or self.id in targets:
             raise ValueError("Relations must be unique and cannot refer to self")
@@ -128,18 +68,17 @@ class ContentResponse(ResponseObject):
             raise ValueError("Unsupported relation category")
         return self
 
-    def snapshot(self) -> DocumentSnapshot:
+    def snapshot(self, project_id: str) -> DocumentSnapshot:
+        """요청 프로젝트의 스냅샷으로 바꾼다. 실린 관계의 주인은 이 문서다."""
         return DocumentSnapshot(
-            project_id=self.project_id,
+            project_id=project_id,
             document_id=self.id,
             revision_no=self.revision_no,
-            body_text=body_text(self.body)
-            if self.body is not None
-            else self.legacy_body_md,
+            body_text=self.body_text,
             properties=tuple((item.key, item.value) for item in self.properties),
             relations=tuple(
                 Relation(
-                    self.project_id,
+                    project_id,
                     self.id,
                     item.target_document_id,
                     item.relation_key,
@@ -150,3 +89,11 @@ class ContentResponse(ResponseObject):
             folder_code=self.folder_code,
             title=self.title,
         )
+
+
+class ContentsResponse(ResponseObject):
+    """GET /projects/{id}/files/content 응답. missing은 휴지통·없음·다른 프로젝트 문서다."""
+
+    project_id: Identifier
+    documents: list[ContentDocument]
+    missing: list[Identifier]
