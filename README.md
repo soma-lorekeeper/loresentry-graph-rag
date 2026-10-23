@@ -218,4 +218,4 @@ Deployed to the `prod` namespace of the `lore-sentry-k8s` EKS cluster via Argo C
 - User-facing graph queries against Amazon Neptune. Projection writes and Inbox
   are implemented through the explicit fixture entry point; AWS validation remains.
 - General RAG/GraphRAG retrieval beyond refresh's one-hop relation lookup.
-- Production refresh activation requires the private S3/Pod Identity infrastructure and GitOps enablement described in [deployment](deploy/README.md).
+- Production refresh activation requires the private S3 bucket (created from `loresentry-content`), the graph-rag IAM role and Pod Identity from `deploy/setup-refresh.sh`, and GitOps enablement described in [deployment](deploy/README.md).

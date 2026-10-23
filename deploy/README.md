@@ -7,8 +7,8 @@ Argo CD가 Deployment를 반영한다. AWS 자격증명을 앱 코드나 Git에 
 ## 배포 순서
 
 1. Content와 GraphRAG의 CI/CD를 성공시켜 새 이미지를 준비한다.
-2. GraphRAG 저장소의 **Refresh infrastructure** workflow를 main에서 실행한다.
-   기존 Content Pod Identity의 역할을 찾아 [CloudFormation 템플릿](refresh-infrastructure.yaml)을 적용한다.
+2. AWS 자원을 만든다(아래 "AWS 자원과 권한"). 먼저 Content 저장소의 `docs/aws/setup-refresh.sh`로
+   버킷과 content 권한을, 이어서 이 저장소의 `deploy/setup-refresh.sh`로 graph-rag 역할과 Pod Identity를 만든다.
 3. 성공 후 GitOps의 `workload/base/refresh` ConfigMap(버킷·리전)과 graph-rag Deployment의
    `graph-rag-api` service account·refresh env(`KAFKA_REFRESH_REQUESTED_ENABLED=true` 포함),
    content Deployment의 `GRAPHRAG_S3_BUCKET`을 반영한다.
@@ -21,28 +21,24 @@ refresh 버킷 활성화 전에도 투영을 처리할 수 있다.
 
 ## AWS 자원과 권한
 
-템플릿은 공개 접근이 차단되고 AES256 기본 암호화가 적용된
-`loresentry-refresh-prod-<AWS_ACCOUNT_ID>` 버킷을 만든다. `refresh/` 객체는 3일, 미완료 multipart는
-1일에 정리한다. 버킷 삭제·교체 때는 Retain으로 자료를 보존한다. CloudFront 미디어 버킷을 사용하지 않는다.
+다른 AWS 자원(media 버킷 등)과 같이 IAM·S3 권한이 있는 사람이 작업 PC에서 aws-cli 스크립트로 만든다.
+CI 역할에는 이 권한이 없다. 두 스크립트 모두 다시 실행해도 안전하다.
 
-GraphRAG 역할은 이 버킷 refresh/의 GetObject·PutObject만 허용한다.
-Content의 기존 역할에는 같은 prefix의 GetObject·PutObject·DeleteObject와 prefix로 제한한 ListBucket을 추가한다.
-GraphRAG의 Pod Identity는 prod/graph-rag-api service account에 연결하고 trust policy의 session tag로
-cluster·namespace·service account를 제한한다.
-[Pod Identity association](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-eks-podidentityassociation.html)과
-[역할 trust policy](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-role.html)는 AWS 공식 계약을 따른다.
-
-workflow는 기존 `vars.AWS_CI_ROLE_ARN`의 OIDC 역할을 사용한다. 이 역할에 CloudFormation stack 관리와
-해당 S3/IAM/EKS Pod Identity 자원을 생성·수정할 권한이 필요하다. 기존 이미지 배포 권한만 있다면
-AccessDenied로 끝나며 앱 배포 성공을 인프라 준비 성공으로 해석하지 않는다.
-관리 권한을 가진 실행 환경에서는 아래 스크립트를 직접 실행할 수도 있다.
+| 스크립트 | 만드는 것 |
+| --- | --- |
+| Content `docs/aws/setup-refresh.sh` | `loresentry-refresh-prod-<AWS_ACCOUNT_ID>` 버킷(공개 차단, AES256, `refresh/` 3일 만료, 미완료 multipart 1일 정리), Content 역할 `lore-sentry-content-role`에 붙이는 `lore-sentry-content-refresh-policy` |
+| 이 저장소 `deploy/setup-refresh.sh` | 정책 `lore-sentry-graph-rag-refresh-policy`, 역할 `lore-sentry-graph-rag-role`, `prod/graph-rag-api` Pod Identity 연결 |
 
 ```bash
-AWS_REGION=ap-northeast-2 bash deploy/setup-refresh.sh
+AWS_PROFILE=lorekeeper bash deploy/setup-refresh.sh
 ```
 
-자동 발견이 불가능하면 기존 Content IAM 역할의 **이름**을 CONTENT_ROLE_NAME으로 지정한다.
-이 스크립트는 Kubernetes API를 변경하지 않는다. service account와 Deployment는 GitOps가 관리한다.
+GraphRAG 정책([iam-graph-rag-refresh-policy.json](iam-graph-rag-refresh-policy.json))은 `refresh/*`의
+GetObject·PutObject와 `refresh/` prefix로 제한한 ListBucket을 허용한다. ListBucket이 없으면 아직 없는
+request·context·batch·result 객체를 읽을 때 S3가 404 대신 403을 돌려줘 모든 요청이 `S3_ACCESS_DENIED`로 끝난다.
+역할의 신뢰 정책([iam-graph-rag-pod-identity-trust.json](iam-graph-rag-pod-identity-trust.json))은
+Content 역할과 같이 EKS Pod Identity만 허용하고, 어떤 service account가 받는지는 Pod Identity 연결이 정한다.
+스크립트는 버킷이 없으면 멈추고, Kubernetes API는 바꾸지 않는다. service account와 Deployment는 GitOps가 관리한다.
 기존 Neptune IAM 인증을 켠 환경에서는 별도로 해당 DB resource의 neptune-db:connect 권한을 공급한다.
 현재 기본 구성은 기존 NEPTUNE_IAM_AUTH=false를 유지한다.
 
