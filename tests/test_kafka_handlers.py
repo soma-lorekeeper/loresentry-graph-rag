@@ -56,7 +56,7 @@ def request_event():
             **event.payload,
             "user_id": REQUEST,
             "input_fingerprint": "a" * 64,
-            "input": {"bucket": "private-bucket", "key": "refresh/input.json"},
+            "location": {"bucket": "private-bucket", "key": "refresh/input.json"},
             "files": [{"file_id": REQUEST, "revision_no": 0}],
             "required_events": [],
         },

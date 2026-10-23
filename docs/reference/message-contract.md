@@ -67,24 +67,31 @@
   ```
 - **GraphRefreshRequested**
   - 마지막 최신화 이후 revision_no가 오른 파일을 보냄. 관계로 이어진 추가 파일은 graph-rag가 content HTTP API로 가져감.
-  - Content가 변경 문서 전체의 본문·revision·현재 관계를 S3에 올리고, 이벤트에는 변경 목록과 S3 위치만 담음. 첫 MVP는 최대 20개·ACTIVE 본문당 5,000자를 지원하며 초과 시 명시적 입력 실패로 처리함. 일부 문서나 본문을 조용히 잘라내지 않음.
+  - Content가 변경 문서 전체의 본문·revision·현재 관계를 S3에 올리고, 이벤트에는 변경 목록과 S3 위치만 담음. 변경 문서 수와 본문 길이에는 상한이 없고, 모델 호출 하나의 입력이 예산을 넘으면 graph-rag가 변경 문서를 묶음으로 나눠 처리함([S3 입출력 계약](../S3_IO_CONTRACT.md)). 일부 문서나 본문을 조용히 잘라내지 않음.
   - 기존 설정 수정·새 설정 생성·관계 ADD 제안과 결과 S3의 의미는 [갱신안 입력·결과 계약](../migration/proposal-contract.md)을 따름. 추가 조회 자료는 변경 입력 한도와 별도로 관리함.
   - 생성 후보의 candidate_id와 기존 문서 ID를 구분하며, 승인 시 실제 ID 매핑은 Content 책임이다. 이는 결과 객체 내부 규칙으로 완료 이벤트에 제안 본문을 추가하지 않는다.
   - 프로젝트당 진행 중인 요청은 하나.
   ```json
   {
-    "request_id": "…",
     "project_id": "…",
-    "files": [{ "file_id": "…", "revision_no": 42, "state": "ACTIVE" }],
-    "input": {
+    "request_id": "…",
+    "user_id": "…",
+    "input_fingerprint": "…",
+    "location": {
       "bucket": "…",
       "key": "refresh/{project_id}/{request_id}/input.json"
-    }
+    },
+    "files": [{ "file_id": "…", "revision_no": 42 }],
+    "required_events": ["…"]
   }
   ```
 
   - **request_id**: refresh_runs 행의 id. 결과 이벤트와 짝을 맞추는 키.
-  - **files**: 휴지통, 삭제된 파일도 포함. state는 ACTIVE, TRASHED, DELETED이고 본문(body_text)은 ACTIVE만 S3에 올림.
+  - **user_id**: 최신화를 요청한 사용자. graph-rag가 관계 문서를 더 가져갈 때 content에 이 사용자로 물음.
+  - **input_fingerprint**: S3 입력 바이트 전체의 sha256(소문자 16진수 64자). graph-rag가 읽은 바이트와 대조함.
+  - **location**: S3 입력(`refresh-input-v2`)의 위치.
+  - **files**: S3 입력에 실은 문서와 revision. 입력의 문서 목록과 정확히 같음. 휴지통·삭제 문서는 보내지 않으므로 모두 활성 문서.
+  - **required_events**: 프로젝트 문서마다 가장 최근 FileChanged 이벤트의 id. graph-rag는 이것을 모두 그래프에 반영한 뒤 처리함.
   - **revision_no**: 문서 조건부 저장의 충돌 판정 번호. 본문 내용이 달라진 횟수가 아니며, 새 저장이 성공하면 같은 본문이어도 증가할 수 있다. 역관계·휴지통 등 모든 변경 순서를 보장하는 FileChanged version과 구분한다.
 - **GraphRefreshCompleted**
   - 최신화가 끝나면 graph-rag가 결과를 S3에 쓰고 발행. 실패도 같은 이벤트로 보냄.
