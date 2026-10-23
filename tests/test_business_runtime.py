@@ -150,8 +150,8 @@ def test_stopping_runtime_starts_no_new_generation_or_token_count():
 
 def test_refresh_handlers_take_the_model_from_environment(monkeypatch):
     for key, value in {
-        "GRAPHRAG_S3_BUCKET": "artifacts",
-        "GRAPHRAG_S3_INPUT_BUCKET": "inputs",
+        "GRAPH_REFRESH_BUCKET": "artifacts",
+        "GRAPH_REFRESH_INPUT_BUCKET": "inputs",
         "AWS_REGION": "ap-northeast-2",
         "NEPTUNE_ENDPOINT": "neptune.test",
         "OPENAI_API_KEY": "local-test-only",

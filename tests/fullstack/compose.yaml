@@ -35,7 +35,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:19092
       KAFKA_CONSUMER_GRAPH_REFRESH_COMPLETED_ENABLED: 'true'
       GRAPH_REFRESH_ENABLED: 'true'
-      GRAPHRAG_S3_BUCKET: refresh-fullstack-test
+      GRAPH_REFRESH_BUCKET: refresh-fullstack-test
       AWS_ENDPOINT_URL_S3: http://127.0.0.1:18333
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: local-test-only
