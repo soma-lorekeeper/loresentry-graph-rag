@@ -80,7 +80,7 @@ class RefreshRequested(WireModel):
     request_id: Identifier
     user_id: Identifier
     input_fingerprint: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
-    input: InputRef
+    location: InputRef
     files: Annotated[list[ChangedFile], Field(min_length=1)]
     required_events: list[Identifier]
 
@@ -141,7 +141,7 @@ def refresh_request(
             raise ValueError("Duplicate input document")
         request = RefreshRequest(
             job=JobKey(wire.project_id, wire.request_id, wire.input_fingerprint),
-            input_ref=ArtifactRef(wire.input.bucket, wire.input.key),
+            input_ref=ArtifactRef(wire.location.bucket, wire.location.key),
             # 실린 문서는 모두 ACTIVE이며 관계 탐색의 시작 문서가 된다.
             seed_ids=tuple(file.file_id for file in wire.files),
             changed_documents=tuple(
