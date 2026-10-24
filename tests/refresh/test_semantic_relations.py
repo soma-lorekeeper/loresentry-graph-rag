@@ -27,6 +27,7 @@ from app.refresh.models import (
     Usage,
 )
 from app.refresh.rules import RefreshRules
+from app.refresh.serialization import result_from_payload, result_to_payload
 from app.refresh.service import RefreshService
 
 NAMED_EXCERPT = "민해주는 백도윤에게 방문 전달을 맡겼다."
@@ -299,21 +300,41 @@ def test_wire_fact_reference_requires_a_declared_local_identifier(kind, referenc
 
 
 @pytest.mark.parametrize("field", ["actor", "recipient", "object"])
-def test_role_surface_missing_from_marker_cannot_ground_this_fact(field):
+def test_role_surface_is_not_matched_against_the_marker_text(field):
     payload, model_input, snapshot = semantic_fixture()
     payload["facts"][0][field] = {"surface": "강연오", "document_id": None}
     payload["facts"][0]["statement"] += " 강연오도 있었다."
-    assert_failed(checked(payload, model_input, snapshot), "INVALID_FACT")
+    assert checked(payload, model_input, snapshot).outcome == Outcome.PROPOSED
 
 
 @pytest.mark.parametrize("field", ["actor", "recipient", "object"])
-def test_v4_role_surface_elsewhere_in_chunk_cannot_ground_short_excerpt(field):
+def test_v4_role_surface_is_not_matched_against_the_excerpt(field):
     payload, model_input, snapshot = semantic_fixture(
         schema_version="refresh-candidate-v4"
     )
     payload["facts"][0][field] = {"surface": "윤준", "document_id": None}
     payload["facts"][0]["statement"] += " 윤준도 있었다."
-    assert_failed(checked(payload, model_input, snapshot), "INVALID_FACT")
+    assert checked(payload, model_input, snapshot).outcome == Outcome.PROPOSED
+
+
+def test_stored_fact_with_legacy_source_alignments_still_reads():
+    payload, model_input, snapshot = semantic_fixture()
+    result = checked(payload, model_input, snapshot)
+    stored = json.loads(
+        json.dumps(result_to_payload(snapshot.request, result, snapshot))
+    )
+    stored["facts"][0]["source_alignments"] = [
+        {
+            "field": "action",
+            "original": "넘겼다",
+            "restored": "건넸다",
+            "similarity": 0.95,
+            "start": 0,
+            "end": 3,
+            "original_statement": "넘겼다",
+        }
+    ]
+    assert result_from_payload(stored).facts == result.facts
 
 
 @pytest.mark.parametrize("field", ["actor", "recipient"])
@@ -390,11 +411,17 @@ def test_invalid_fact_classification_is_rejected_at_strict_schema(field):
     assert caught.value.failure.code == "MODEL_INVALID_RESPONSE"
 
 
-@pytest.mark.parametrize("field,value", [("action", "승인했다"), ("statement", "")])
+@pytest.mark.parametrize("field,value", [("action", ""), ("statement", "")])
 def test_action_and_statement_are_bounded_by_fact_contract(field, value):
     payload, model_input, snapshot = semantic_fixture()
     payload["facts"][0][field] = value
     assert_failed(checked(payload, model_input, snapshot), "INVALID_FACT")
+
+
+def test_action_may_paraphrase_the_marker_text():
+    payload, model_input, snapshot = semantic_fixture()
+    payload["facts"][0]["action"] = "승인했다"
+    assert checked(payload, model_input, snapshot).outcome == Outcome.PROPOSED
 
 
 @pytest.mark.parametrize("fact_ids", [[], ["unknown"]])

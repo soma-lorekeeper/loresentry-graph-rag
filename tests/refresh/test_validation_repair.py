@@ -189,7 +189,7 @@ def test_typed_repair_short_ids_preserve_all_proposal_refs_and_canonical_roundtr
     diagnostics = tuple(
         ValidationDiagnostic(
             f"facts[{index}].action",
-            "fact.action_in_source",
+            "fact.action_bounded",
             fact_id=fact.fact_id,
             source_marker=marker,
             offending_value="오류 표현",
@@ -260,7 +260,7 @@ def test_repair_preserves_unknown_refs_without_alias_collision(unknown_ref):
         ("fact.reference_unique", True),
         ("fact.reference_known", True),
         ("fact.reference_source_coverage", True),
-        ("fact.action_in_source", False),
+        ("fact.action_bounded", False),
     ],
 )
 def test_repair_only_rewrites_identifier_diagnostic_values(rule, remapped):
@@ -444,13 +444,14 @@ def test_all_fact_leaf_diagnostics_are_sent_in_bounded_repairs(repair_all):
     valid = replace(
         valid, facts=(*valid.facts, waiting), document_proposals=(document,)
     )
-    missing_object = replace(waiting, object=FactEntity("알 수 없는 물건", None))
-    wrong_action_and_identity = replace(
-        valid.facts[0],
-        action="넘겼다",
-        recipient=FactEntity("백도윤", "haeju"),
+    missing_object = replace(
+        waiting, object=FactEntity("알 수 없는 물건", "missing-object")
     )
-    invalid = replace(valid, facts=(wrong_action_and_identity, missing_object))
+    wrong_identity = replace(
+        valid.facts[0],
+        recipient=FactEntity("백도윤", "missing-recipient"),
+    )
+    invalid = replace(valid, facts=(wrong_identity, missing_object))
     repaired = (
         valid if repair_all else replace(valid, facts=(valid.facts[0], missing_object))
     )
@@ -463,8 +464,8 @@ def test_all_fact_leaf_diagnostics_are_sent_in_bounded_repairs(repair_all):
     first = result.attempts[0]
     assert first.outcome == Outcome.FAILED
     assert {(d.path, d.rule) for d in first.diagnostics} == {
-        ("facts[0].action", "fact.action_in_source"),
-        ("facts[1].object.surface", "fact.role_surface_in_source"),
+        ("facts[0].recipient.document_id", "fact.entity_reference_known"),
+        ("facts[1].object.document_id", "fact.entity_reference_known"),
     }
     assert {d.fact_id for d in first.diagnostics} == {
         valid.facts[0].fact_id,
@@ -491,7 +492,7 @@ def test_all_fact_leaf_diagnostics_are_sent_in_bounded_repairs(repair_all):
         assert result.attempts[1].outcome == Outcome.FAILED
         assert result.attempts[2].outcome == Outcome.PROPOSED
         assert [(d.path, d.rule) for d in result.attempts[1].diagnostics] == [
-            ("facts[1].object.surface", "fact.role_surface_in_source")
+            ("facts[1].object.document_id", "fact.entity_reference_known")
         ]
         latest = json.loads(scenario.model.inputs[2].prompt)["validation_repair"]
         assert latest["attempt"] == 2

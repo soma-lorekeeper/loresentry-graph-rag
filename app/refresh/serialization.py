@@ -18,14 +18,12 @@ from app.refresh.models import (
     ParagraphCopyRemoval,
     RefreshResult,
     RelationProposal,
-    SourceAlignment,
     SourceFact,
     SourceScopeExtension,
     Usage,
     ValidationDiagnostic,
 )
 from app.refresh.repair import MAX_REPAIRS_PER_CALL
-from app.refresh.source_alignment import valid_alignment_records
 
 RESULT_SCHEMA_VERSION = "refresh-result-v3"
 _CANDIDATE_SCHEMAS = {
@@ -63,8 +61,6 @@ def result_to_payload(request, result, snapshot=None):
         value = asdict(proposal)
         if isinstance(proposal, SourceFact) and value["confidence"] is None:
             value.pop("confidence")
-        if isinstance(proposal, SourceFact) and not value["source_alignments"]:
-            value.pop("source_alignments")
         value.pop("evidence")
         value["evidence_refs"] = [refs[e] for e in proposal.evidence]
         return value
@@ -204,10 +200,7 @@ def result_from_payload(payload):
                 if "fact_ids" in item:
                     item["fact_ids"] = tuple(item["fact_ids"])
                 if cls is SourceFact:
-                    item["source_alignments"] = tuple(
-                        SourceAlignment(**entry)
-                        for entry in item.get("source_alignments", ())
-                    )
+                    item.pop("source_alignments", None)
                     for role in ("actor", "recipient", "object"):
                         if item[role] is not None:
                             item[role] = FactEntity(**item[role])
@@ -309,11 +302,11 @@ def _check_outcome(result):
                     for p in result.new_document_proposals
                 }
                 != {(p.candidate_id, p.folder_code, p.name) for p in plan.new_documents}
-                or {
+                or not {
                     tuple(sorted((p.document_id, p.target_document_id)))
                     for p in result.relation_proposals
                 }
-                != {
+                <= {
                     tuple(sorted((p.document_id, p.target_document_id)))
                     for p in plan.relations
                 }
@@ -328,8 +321,6 @@ def _check_outcome(result):
     if len(facts) != len(result.facts):
         raise ValueError("Duplicate stored fact identifier")
     for fact in result.facts:
-        if not valid_alignment_records(fact):
-            raise ValueError("Invalid stored source alignment")
         if (
             result.candidate_schema_version
             in {"refresh-candidate-v6", "refresh-candidate-v8"}

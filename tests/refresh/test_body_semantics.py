@@ -286,7 +286,7 @@ def test_wrong_source_chunk_does_not_become_a_semantic_omission_or_pass():
         candidate,
         replace(first, target_ids=snapshot.target_ids, relation_scope=None),
     )
-    assert result.failure.code == "INVALID_FACT"
+    assert result.failure.code == "INVALID_FACT_REFERENCE"
     assessment = assess(case, result)
     assert assessment["omission_metrics"] == "not_evaluated"
 

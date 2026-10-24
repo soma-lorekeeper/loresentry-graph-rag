@@ -223,19 +223,6 @@ class FactEntity:
 
 
 @dataclass(frozen=True)
-class SourceAlignment:
-    """서버가 복원한 표현의 원래 출력·유사도·원문 절대 위치."""
-
-    field: str
-    original: str
-    restored: str
-    similarity: float
-    start: int
-    end: int
-    original_statement: str
-
-
-@dataclass(frozen=True)
 class SourceFact:
     """생성에 사용한 개별 사실. 구조화 자체가 원문의 의미적 함의를 보증하지 않는다."""
 
@@ -251,7 +238,6 @@ class SourceFact:
     evidence: tuple[Evidence, ...]
     # 자기평가 메타데이터는 사실의 정체성·내용 비교에 사용하지 않는다.
     confidence: float | None = field(default=None, compare=False)
-    source_alignments: tuple[SourceAlignment, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)

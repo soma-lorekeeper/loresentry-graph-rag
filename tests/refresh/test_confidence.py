@@ -88,13 +88,12 @@ def test_score_is_required_only_in_v6_and_does_not_change_fact_identity():
         parse(payload, replace(model_input, schema_version="refresh-candidate-v5"))
 
 
-def test_high_confidence_cannot_bypass_source_validation():
+def test_reworded_action_is_only_observed_not_rejected():
     payload, model_input, snapshot = fixture(1.0)
     payload["facts"][0]["action"] = "원문에 없는 행동"
     candidate = parse(payload, model_input)
     result = RefreshRules().validate_candidate(snapshot, candidate, model_input)
-    assert result.outcome == Outcome.FAILED
-    assert result.failure.code == "INVALID_FACT"
+    assert result.outcome == Outcome.PROPOSED
     observation = observe_confidence(snapshot, candidate, result.diagnostics)
     assert observation["facts"][0]["confidence"] == 1
     assert observation["facts"][0]["mechanical_errors"] == ["fact.action_in_source"]

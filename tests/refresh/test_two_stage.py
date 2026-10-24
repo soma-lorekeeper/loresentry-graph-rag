@@ -15,6 +15,7 @@ from app.refresh.models import (
     Outcome,
     Usage,
 )
+from app.refresh.policy import RELATION_KEYS
 from app.refresh.rules import RefreshRules
 from app.refresh.serialization import result_from_payload, result_to_payload
 from app.refresh.service import RefreshService
@@ -224,11 +225,176 @@ def test_invalid_plan_is_rejected_before_writing(change):
         validate_plan(s.snapshot, get_plan(s), s.plan_input)
 
 
+def new_location(s):
+    marker = s.plan["edits"][0]["source_markers"][0]
+    return marker, dict(
+        candidate_id="new:LOCATION:정비소",
+        folder_code="LOCATION",
+        name="정비소",
+        instruction="덮개를 교체한 정비소를 기록한다.",
+        source_markers=[marker],
+    )
+
+
+def plan_failure(s, plan_input=None):
+    with pytest.raises(RefreshFailure) as caught:
+        validate_plan(s.snapshot, get_plan(s), plan_input or s.plan_input)
+    return [(d.path, d.rule, d.offending_value) for d in caught.value.diagnostics]
+
+
+def test_reverse_duplicate_relations_are_merged_and_written_once():
+    s = fixture()
+    marker, location = new_location(s)
+    s.plan["new_documents"] = [location]
+    s.plan["relations"] = [
+        dict(
+            document_id="doyun",
+            target_document_id=location["candidate_id"],
+            source_markers=[marker],
+        ),
+        dict(
+            document_id=location["candidate_id"],
+            target_document_id="doyun",
+            source_markers=[marker],
+        ),
+    ]
+    plan = validate_plan(s.snapshot, get_plan(s), s.plan_input)
+    assert [(r.document_id, r.target_document_id) for r in plan.relations] == [
+        ("doyun", location["candidate_id"])
+    ]
+    s.written["new_document_proposals"] = [
+        {
+            "candidate_id": location["candidate_id"],
+            "folder_code": "LOCATION",
+            "name": "정비소",
+            "body_text": "백도윤이 강철 덮개를 사용한 곳이다.",
+            "evidence": [{"marker": marker}],
+            "fact_ids": ["F1"],
+        }
+    ]
+    s.written["relation_proposals"] = [
+        {
+            "document_id": "doyun",
+            "target_document_id": location["candidate_id"],
+            "base_revision_no": s.doy.revision_no,
+            "target_base_revision_no": None,
+            "relation_key": RELATION_KEYS["LOCATION"],
+            "reverse_relation_key": RELATION_KEYS["CHARACTER"],
+            "operation": "ADD",
+            "fact_ids": ["F1"],
+        }
+    ]
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
+    assert len(s.artifacts.read_result(s.request).relation_proposals) == 1
+
+
+def written_location(s, location, marker, pairs):
+    s.written["new_document_proposals"] = [
+        {
+            "candidate_id": location["candidate_id"],
+            "folder_code": "LOCATION",
+            "name": location["name"],
+            "body_text": "백도윤이 강철 덮개를 사용한 곳이다.",
+            "evidence": [{"marker": marker}],
+            "fact_ids": ["F1"],
+        }
+    ]
+    documents = {"doyun": s.doy, "item": s.item}
+    s.written["relation_proposals"] = [
+        {
+            "document_id": a,
+            "target_document_id": b,
+            "base_revision_no": getattr(documents.get(a), "revision_no", None),
+            "target_base_revision_no": getattr(documents.get(b), "revision_no", None),
+            "relation_key": RELATION_KEYS[
+                documents[b].folder_code if b in documents else "LOCATION"
+            ],
+            "reverse_relation_key": RELATION_KEYS[
+                documents[a].folder_code if a in documents else "LOCATION"
+            ],
+            "operation": "ADD",
+            "fact_ids": ["F1"],
+        }
+        for a, b in pairs
+    ]
+
+
+@pytest.mark.parametrize(
+    "planned,written",
+    [
+        (
+            [("doyun", "LOC")],
+            [("doyun", "LOC"), ("item", "LOC"), ("LOC", "doyun")],
+        ),
+        ([("doyun", "LOC"), ("item", "LOC")], [("doyun", "LOC")]),
+    ],
+    ids=["unplanned_and_reversed", "missing"],
+)
+def test_written_relations_are_fitted_to_the_plan_instead_of_failing(planned, written):
+    s = fixture()
+    marker, location = new_location(s)
+    key = location["candidate_id"]
+
+    def ids(pairs):
+        return [tuple(key if x == "LOC" else x for x in pair) for pair in pairs]
+
+    s.plan["new_documents"] = [location]
+    s.plan["relations"] = [
+        dict(document_id=a, target_document_id=b, source_markers=[marker])
+        for a, b in ids(planned)
+    ]
+    written_location(s, location, marker, ids(written))
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
+    result = s.artifacts.read_result(s.request)
+    assert [
+        tuple(sorted((r.document_id, r.target_document_id)))
+        for r in result.relation_proposals
+    ] == [tuple(sorted(("doyun", key)))]
+    assert result.usage.calls == 2
+
+
+def test_new_setting_with_an_existing_name_fails_at_planning_with_the_name():
+    s = fixture()
+    marker, _ = new_location(s)
+    s.plan["new_documents"] = [
+        dict(
+            candidate_id="new:CHARACTER:백도윤",
+            folder_code="CHARACTER",
+            name="백도윤",
+            instruction="백도윤을 기록한다.",
+            source_markers=[marker],
+        )
+    ]
+    assert plan_failure(s) == [("new_documents[0].name", "plan.new_existing", "백도윤")]
+
+
+def test_rejected_relation_names_its_pair_for_repair():
+    s = fixture()
+    marker, _ = new_location(s)
+    s.plan["relations"] = [
+        dict(document_id="doyun", target_document_id="doyun", source_markers=[marker])
+    ]
+    assert plan_failure(s) == [
+        ("relations[0]", "plan.relation_allowed", "doyun <-> doyun")
+    ]
+
+
+@pytest.mark.parametrize("flag", ["allow_new_documents", "allow_document_updates"])
+def test_plan_outside_call_scope_fails_at_planning(flag):
+    s = fixture()
+    _, location = new_location(s)
+    s.plan["new_documents"] = [location]
+    context = json.loads(s.plan_input.prompt)
+    context[flag] = False
+    plan_input = replace(s.plan_input, prompt=json.dumps(context, ensure_ascii=False))
+    rule = "plan.new_allowed" if flag == "allow_new_documents" else "plan.edits_allowed"
+    assert [rule for _, rule, _ in plan_failure(s, plan_input)] == [rule]
+
+
 @pytest.mark.parametrize(
     "change",
     [
         "missing",
-        "extra",
         "duplicate",
         "empty",
         "unchanged",
@@ -241,10 +407,6 @@ def test_incomplete_or_invalid_written_edits_fail(change):
     write_input = build_write_input(s.snapshot, s.base, get_plan(s))
     if change == "missing":
         s.written["paragraph_edits"].pop()
-    elif change == "extra":
-        s.written["paragraph_edits"].append(
-            {**s.written["paragraph_edits"][0], "edit_id": "E999"}
-        )
     elif change == "duplicate":
         s.written["paragraph_edits"].append(s.written["paragraph_edits"][0])
     elif change == "empty":
@@ -262,6 +424,43 @@ def test_incomplete_or_invalid_written_edits_fail(change):
             schema_version=write_input.schema_version,
             model_input=write_input,
         )
+
+
+def test_unplanned_paragraph_edit_is_dropped():
+    s = fixture()
+    s.written["paragraph_edits"].append(
+        {
+            **s.written["paragraph_edits"][0],
+            "edit_id": "E999",
+            "text": "계획에 없는 문단.",
+        }
+    )
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
+    result = s.artifacts.read_result(s.request)
+    assert all("계획에 없는 문단." not in p.value for p in result.document_proposals)
+
+
+def test_relation_keys_and_revisions_are_filled_by_the_server():
+    s = fixture()
+    marker, location = new_location(s)
+    key = location["candidate_id"]
+    s.plan["new_documents"] = [location]
+    s.plan["relations"] = [
+        dict(document_id="doyun", target_document_id=key, source_markers=[marker])
+    ]
+    written_location(s, location, marker, [("doyun", key)])
+    s.written["relation_proposals"][0].update(
+        relation_key=RELATION_KEYS["CHARACTER"],
+        reverse_relation_key=RELATION_KEYS["CHARACTER"],
+        base_revision_no=s.doy.revision_no + 1,
+    )
+    assert s.service.run(s.request).outcome == Outcome.PROPOSED
+    (relation,) = s.artifacts.read_result(s.request).relation_proposals
+    assert (
+        relation.relation_key,
+        relation.reverse_relation_key,
+        relation.base_revision_no,
+    ) == (RELATION_KEYS["LOCATION"], RELATION_KEYS["CHARACTER"], s.doy.revision_no)
 
 
 def test_one_repair_can_complete_missing_edit_within_three_calls():
@@ -514,6 +713,29 @@ def test_existing_setting_marker_is_not_new_change_evidence():
             schema_version=write_input.schema_version,
             model_input=write_input,
         )
+
+
+def test_body_that_differs_from_paragraph_assembly_is_reassembled_by_the_server():
+    s = fixture()
+    writing = build_write_input(s.snapshot, s.base, get_plan(s))
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=writing.schema_version,
+        model_input=writing,
+    )
+    drifted = replace(
+        candidate,
+        document_proposals=tuple(
+            replace(p, value=p.value + "\n\n모델이 덧붙인 문장.")
+            for p in candidate.document_proposals
+        ),
+    )
+    result = RefreshRules().validate_candidate(s.snapshot, drifted, writing)
+    assert result.outcome == Outcome.PROPOSED
+    assert [p.value for p in result.document_proposals] == [
+        p.value for p in candidate.document_proposals
+    ]
 
 
 def test_full_copies_of_preserved_paragraphs_are_removed_and_audited():

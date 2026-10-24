@@ -102,24 +102,24 @@ def test_legacy_v4_invalid_excerpt_has_precise_source_feedback_without_relaxing_
 @pytest.mark.parametrize(
     "field,value,path,rule",
     [
-        ("action", "원문에 없는 행동", "facts[0].action", "fact.action_in_source"),
+        ("action", " ", "facts[0].action", "fact.action_bounded"),
         (
             "actor.surface",
-            "다른 사람",
+            " ",
             "facts[0].actor.surface",
-            "fact.role_surface_in_source",
+            "fact.role_surface_bounded",
         ),
         (
-            "recipient.surface",
-            "다른 사람",
-            "facts[0].recipient.surface",
-            "fact.role_surface_in_source",
+            "recipient.document_id",
+            "missing-recipient",
+            "facts[0].recipient.document_id",
+            "fact.entity_reference_known",
         ),
         (
-            "object.surface",
-            "다른 물건",
-            "facts[0].object.surface",
-            "fact.role_surface_in_source",
+            "object.document_id",
+            "missing-object",
+            "facts[0].object.document_id",
+            "fact.entity_reference_known",
         ),
     ],
 )
@@ -246,7 +246,7 @@ def test_safe_leaf_failures_collect_all_facts_and_roles_before_proposal_checks()
     first = replace(
         original,
         action="원문에 없는 행동",
-        actor=FactEntity("보이지 않는 행위자", "haeju"),
+        actor=FactEntity("보이지 않는 행위자", "missing-first"),
         recipient=replace(original.recipient, document_id="yunjun"),
         object=FactEntity("보이지 않는 물건", None),
     )
@@ -268,19 +268,17 @@ def test_safe_leaf_failures_collect_all_facts_and_roles_before_proposal_checks()
     result = RefreshRules().validate_candidate(snapshot, candidate, model_input)
     assert result.outcome == Outcome.FAILED
     assert result.failure.code == "INVALID_FACT"
-    assert result.failure.message == "Fact action must preserve source wording"
+    assert result.failure.message == "Roles must preserve their source surfaces"
     assert not result.facts and not result.relation_proposals
     assert result.usage == candidate.usage
     assert [(d.path, d.rule) for d in result.diagnostics] == [
-        ("facts[0].action", "fact.action_in_source"),
-        ("facts[0].actor.surface", "fact.role_surface_in_source"),
-        ("facts[0].object.surface", "fact.role_surface_in_source"),
+        ("facts[0].actor.document_id", "fact.entity_reference_known"),
         ("facts[1].actor.document_id", "fact.entity_reference_known"),
         ("facts[1].recipient.document_id", "fact.entity_reference_known"),
         ("facts[1].object.document_id", "fact.entity_reference_known"),
     ]
-    assert {d.fact_id for d in result.diagnostics[:3]} == {first.fact_id}
-    assert {d.fact_id for d in result.diagnostics[3:]} == {second.fact_id}
+    assert {d.fact_id for d in result.diagnostics[:1]} == {first.fact_id}
+    assert {d.fact_id for d in result.diagnostics[1:]} == {second.fact_id}
     assert {d.source_marker for d in result.diagnostics} == {
         payload["facts"][0]["source"]["marker"]
     }
@@ -328,7 +326,9 @@ def test_unsafe_fact_stops_collection_and_preserves_the_first_leaf_failure(
     payload, model_input, snapshot = semantic_fixture()
     candidate = parse(payload, model_input)
     original = candidate.facts[0]
-    first = replace(original, action="원문에 없는 행동")
+    first = replace(
+        original, actor=replace(original.actor, document_id="missing-first")
+    )
     second = replace(original, fact_id="second-fact")
     if defect == "fact_type":
         second = object()
@@ -342,15 +342,19 @@ def test_unsafe_fact_stops_collection_and_preserves_the_first_leaf_failure(
         second = replace(
             second, evidence=(replace(second.evidence[0], quote="다른 원문"),)
         )
-    third = replace(original, fact_id="unchecked-fact", action="검사하지 않는 행동")
+    third = replace(
+        original,
+        fact_id="unchecked-fact",
+        actor=replace(original.actor, document_id="missing-third"),
+    )
     result = RefreshRules().validate_candidate(
         snapshot, replace(candidate, facts=(first, second, third)), model_input
     )
     assert result.outcome == Outcome.FAILED
     assert result.failure.code == "INVALID_FACT"
-    assert result.failure.message == "Fact action must preserve source wording"
+    assert result.failure.message == "Roles must preserve their source surfaces"
     assert [(d.path, d.rule) for d in result.diagnostics] == [
-        ("facts[0].action", "fact.action_in_source"),
+        ("facts[0].actor.document_id", "fact.entity_reference_known"),
         (path, rule),
     ]
     assert not result.facts and not result.relation_proposals
