@@ -373,7 +373,7 @@ class RefreshService:
         for attempt_index in range(2):
             try:
                 plan = self.model.generate(current)
-                self.rules.validate_plan(snapshot, plan, current)
+                plan = self.rules.validate_plan(snapshot, plan, current)
             except RefreshFailure as error:
                 observed = Usage(1, error.usage.input_tokens, error.usage.output_tokens)
                 if plan is not None:

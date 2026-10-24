@@ -111,6 +111,13 @@ Google 스타일 `Args:`·`Returns:`·`Raises:`를 사용한다.
 참조할 수 있으며 execution.source_scope_extensions에 추가 사용 위치와 마커를 기록한다.
 현재 변경 원고 밖의 근거는 허용하지 않는다. 계획의 문단·신규 후보·관계 목록은 그대로 고정한다.
 
+계획 검증은 방향만 다른 같은 관계를 하나로 합친다. 기존 설정과 같은 유형·이름의 신규 설정,
+호출 범위(allow_new_documents·allow_document_updates·allow_new_endpoint_relations) 밖의 작업은
+작성 전에 계획 단계에서 거절하고, 진단에 문제 위치와 값(관계쌍·이름·ID)을 넣어 보완 호출이 고칠 수 있게 한다.
+작성 결과의 관계는 계획 범위로 맞춘다. 계획에 없는 관계는 버리고 빠진 관계는 제안하지 않으며,
+같은 쌍은 사실을 합친다. 관계 키와 기준 revision은 끝점의 유형·revision으로 서버가 채운다.
+계획에 없는 edit_id의 문단은 버리고, 빠진 edit_id와 신규 설정은 누락 ID를 진단에 담아 실패한다.
+
 작성 응답이 서버가 그대로 보존할 같은 문서의 문단을 완전히 복사한 경우 해당 복사본만
 제거한다. 변경·삭제 대상 문단, 다른 문서, 유사 표현과 부분 복사는 제거하지 않는다.
 execution.paragraph_copy_removals에는 edit_id, 원문 문단 ID와 제거 전 작성 text를 기록한다.

@@ -302,11 +302,11 @@ def _check_outcome(result):
                     for p in result.new_document_proposals
                 }
                 != {(p.candidate_id, p.folder_code, p.name) for p in plan.new_documents}
-                or {
+                or not {
                     tuple(sorted((p.document_id, p.target_document_id)))
                     for p in result.relation_proposals
                 }
-                != {
+                <= {
                     tuple(sorted((p.document_id, p.target_document_id)))
                     for p in plan.relations
                 }
