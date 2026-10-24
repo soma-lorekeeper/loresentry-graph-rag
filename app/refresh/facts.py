@@ -1,5 +1,6 @@
 """개별 사실의 출처·문서/제안 참조 검사. 역할의 의미적 정답은 보증하지 않는다."""
 
+from dataclasses import replace
 from math import isfinite
 
 from app.refresh.errors import RefreshFailure
@@ -11,6 +12,7 @@ from app.refresh.models import (
     SourceFact,
     ValidationDiagnostic,
 )
+from app.refresh.tolerance import resolve_id
 
 
 def bounded(value, maximum):
@@ -220,14 +222,21 @@ def validate_facts(
                 not isinstance(entity.document_id, str)
                 or entity.document_id not in known_ids
             ):
-                fail(
-                    role_path + ".document_id",
-                    "fact.entity_reference_known",
-                    "Roles must preserve their source surfaces",
-                    fact=fact,
-                    value=entity.document_id,
-                    collect=True,
-                )
+                resolved = resolve_id(entity.document_id, known_ids)
+                if resolved is None:
+                    fail(
+                        role_path + ".document_id",
+                        "fact.entity_reference_known",
+                        "Roles must preserve their source surfaces",
+                        fact=fact,
+                        value=entity.document_id,
+                        collect=True,
+                    )
+                else:
+                    # 옮겨 적다 몇 글자 틀린 ID는 가장 가까운 실제 ID로 고친다.
+                    fact = replace(
+                        fact, **{role: replace(entity, document_id=resolved)}
+                    )
             # 초기 구현에서는 surface와 문서 제목·이름·별칭의 일치를 차단 조건으로
             # 사용하지 않는다. 문서 ID의 존재·프로젝트 범위만 검사한다.
         facts[fact.fact_id] = fact

@@ -295,13 +295,13 @@ def _check_outcome(result):
         if result.outcome != Outcome.FAILED:
             plan = result.change_plan
             if (
-                set(p.target_document_id for p in result.document_proposals)
-                != set(e.document_id for e in plan.edits)
-                or {
+                not set(p.target_document_id for p in result.document_proposals)
+                <= set(e.document_id for e in plan.edits)
+                or not {
                     (p.candidate_id, p.folder_code, p.name)
                     for p in result.new_document_proposals
                 }
-                != {(p.candidate_id, p.folder_code, p.name) for p in plan.new_documents}
+                <= {(p.candidate_id, p.folder_code, p.name) for p in plan.new_documents}
                 or not {
                     tuple(sorted((p.document_id, p.target_document_id)))
                     for p in result.relation_proposals

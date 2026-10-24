@@ -55,7 +55,7 @@ class WireModel:
         )
 
 
-def fixture(*, maximum=3, confidence=False):
+def fixture(*, maximum=3, confidence=False, doyun_body=None):
     _, _, original = semantic_fixture("백도윤은 검게 산화시킨 강철 덮개를 사용했다.")
     request = replace(
         original.request,
@@ -69,7 +69,8 @@ def fixture(*, maximum=3, confidence=False):
     )
     doy = replace(
         original.documents[2],
-        body_text="백도윤은 황동 덮개 의지를 사용한다. 배달부다.\n\n파견 기한은 한 달이다.  😀\n",
+        body_text=doyun_body
+        or "백도윤은 황동 덮개 의지를 사용한다. 배달부다.\n\n파견 기한은 한 달이다.  😀\n",
     )
     item = DocumentSnapshot(
         request.job.project_id,
@@ -207,7 +208,7 @@ def test_two_calls_update_both_documents_and_preserve_unedited_bytes():
         "manuscript",
     ],
 )
-def test_invalid_plan_is_rejected_before_writing(change):
+def test_invalid_plan_items_are_dropped_or_fixed_instead_of_failing(change):
     s = fixture()
     if change == "unknown_id":
         s.plan["edits"][0]["paragraph_id"] = "P9999"
@@ -221,8 +222,16 @@ def test_invalid_plan_is_rejected_before_writing(change):
         s.plan["edits"].append(s.plan["edits"][0])
     else:
         s.plan["edits"][0]["document_id"] = "chapter"
-    with pytest.raises(RefreshFailure):
-        validate_plan(s.snapshot, get_plan(s), s.plan_input)
+    plan = validate_plan(s.snapshot, get_plan(s), s.plan_input)
+    assert plan.reviewed_document_ids == s.snapshot.target_ids
+    kept = [(e.document_id, e.paragraph_id, e.base_revision_no) for e in plan.edits]
+    if change in {"unknown_id", "unknown_marker", "manuscript"}:
+        assert kept == [("item", "P0001", s.item.revision_no)]
+    else:
+        assert kept == [
+            ("doyun", "P0001", s.doy.revision_no),
+            ("item", "P0001", s.item.revision_no),
+        ]
 
 
 def new_location(s):
@@ -260,7 +269,8 @@ def test_reverse_duplicate_relations_are_merged_and_written_once():
     ]
     plan = validate_plan(s.snapshot, get_plan(s), s.plan_input)
     assert [(r.document_id, r.target_document_id) for r in plan.relations] == [
-        ("doyun", location["candidate_id"])
+        ("doyun", location["candidate_id"]),
+        ("chapter", location["candidate_id"]),
     ]
     s.written["new_document_proposals"] = [
         {
@@ -285,7 +295,13 @@ def test_reverse_duplicate_relations_are_merged_and_written_once():
         }
     ]
     assert s.service.run(s.request).outcome == Outcome.PROPOSED
-    assert len(s.artifacts.read_result(s.request).relation_proposals) == 1
+    assert {
+        tuple(sorted((r.document_id, r.target_document_id)))
+        for r in s.artifacts.read_result(s.request).relation_proposals
+    } == {
+        tuple(sorted(("doyun", location["candidate_id"]))),
+        tuple(sorted(("chapter", location["candidate_id"]))),
+    }
 
 
 def written_location(s, location, marker, pairs):
@@ -346,14 +362,29 @@ def test_written_relations_are_fitted_to_the_plan_instead_of_failing(planned, wr
     written_location(s, location, marker, ids(written))
     assert s.service.run(s.request).outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
-    assert [
+    assert {
         tuple(sorted((r.document_id, r.target_document_id)))
         for r in result.relation_proposals
-    ] == [tuple(sorted(("doyun", key)))]
+    } == {tuple(sorted(("doyun", key))), tuple(sorted(("chapter", key)))}
     assert result.usage.calls == 2
 
 
-def test_new_setting_with_an_existing_name_fails_at_planning_with_the_name():
+@pytest.mark.parametrize("owns_new_endpoints", [True, False])
+def test_new_setting_is_linked_to_its_source_manuscript(owns_new_endpoints):
+    s = fixture()
+    marker, location = new_location(s)
+    s.plan["new_documents"] = [location]
+    context = json.loads(s.plan_input.prompt)
+    context["relation_scope"]["allow_new_endpoint_relations"] = owns_new_endpoints
+    plan_input = replace(s.plan_input, prompt=json.dumps(context, ensure_ascii=False))
+    plan = validate_plan(s.snapshot, get_plan(s), plan_input)
+    expected = [("chapter", location["candidate_id"], (marker,))]
+    assert [
+        (r.document_id, r.target_document_id, r.source_markers) for r in plan.relations
+    ] == (expected if owns_new_endpoints else [])
+
+
+def test_new_setting_with_an_existing_name_is_dropped_at_planning():
     s = fixture()
     marker, _ = new_location(s)
     s.plan["new_documents"] = [
@@ -365,44 +396,66 @@ def test_new_setting_with_an_existing_name_fails_at_planning_with_the_name():
             source_markers=[marker],
         )
     ]
-    assert plan_failure(s) == [("new_documents[0].name", "plan.new_existing", "백도윤")]
+    plan = validate_plan(s.snapshot, get_plan(s), s.plan_input)
+    assert plan.new_documents == ()
 
 
-def test_rejected_relation_names_its_pair_for_repair():
+@pytest.mark.parametrize("target", ["doyun", "unknown-document"])
+def test_disallowed_relation_is_dropped_at_planning(target):
     s = fixture()
     marker, _ = new_location(s)
     s.plan["relations"] = [
-        dict(document_id="doyun", target_document_id="doyun", source_markers=[marker])
+        dict(document_id="doyun", target_document_id=target, source_markers=[marker])
     ]
-    assert plan_failure(s) == [
-        ("relations[0]", "plan.relation_allowed", "doyun <-> doyun")
+    assert validate_plan(s.snapshot, get_plan(s), s.plan_input).relations == ()
+
+
+def test_miscopied_document_id_in_a_relation_is_corrected():
+    s = fixture()
+    marker, location = new_location(s)
+    s.plan["new_documents"] = [location]
+    s.plan["relations"] = [
+        dict(
+            document_id="doyun",
+            target_document_id=location["candidate_id"][:-1],
+            source_markers=[marker],
+        )
+    ]
+    plan = validate_plan(s.snapshot, get_plan(s), s.plan_input)
+    assert ("doyun", location["candidate_id"]) in [
+        (r.document_id, r.target_document_id) for r in plan.relations
     ]
 
 
 @pytest.mark.parametrize("flag", ["allow_new_documents", "allow_document_updates"])
-def test_plan_outside_call_scope_fails_at_planning(flag):
+def test_plan_outside_call_scope_is_trimmed_at_planning(flag):
     s = fixture()
     _, location = new_location(s)
     s.plan["new_documents"] = [location]
     context = json.loads(s.plan_input.prompt)
     context[flag] = False
     plan_input = replace(s.plan_input, prompt=json.dumps(context, ensure_ascii=False))
-    rule = "plan.new_allowed" if flag == "allow_new_documents" else "plan.edits_allowed"
-    assert [rule for _, rule, _ in plan_failure(s, plan_input)] == [rule]
+    plan = validate_plan(s.snapshot, get_plan(s), plan_input)
+    if flag == "allow_new_documents":
+        assert plan.new_documents == () and len(plan.edits) == 2
+    else:
+        assert plan.edits == () and len(plan.new_documents) == 1
 
 
 @pytest.mark.parametrize(
-    "change",
+    "change,proposed",
     [
-        "missing",
-        "duplicate",
-        "empty",
-        "unchanged",
-        "unknown_fact",
-        "duplicate_fact",
+        ("missing", {"doyun"}),
+        ("duplicate", {"doyun", "item"}),
+        ("empty", {"item"}),
+        ("unchanged", {"item"}),
+        ("unknown_fact", {"item"}),
+        ("duplicate_fact", {"doyun", "item"}),
     ],
 )
-def test_incomplete_or_invalid_written_edits_fail(change):
+def test_incomplete_or_invalid_written_edits_leave_their_paragraph_unchanged(
+    change, proposed
+):
     s = fixture()
     write_input = build_write_input(s.snapshot, s.base, get_plan(s))
     if change == "missing":
@@ -417,13 +470,79 @@ def test_incomplete_or_invalid_written_edits_fail(change):
         s.written["paragraph_edits"][0]["fact_ids"] = ["F99"]
     else:
         s.written["paragraph_edits"][0]["fact_ids"] = ["F1", "F1"]
-    with pytest.raises(RefreshFailure):
-        parse_candidate(
-            json.dumps(s.written),
-            Usage(1),
-            schema_version=write_input.schema_version,
-            model_input=write_input,
-        )
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=write_input.schema_version,
+        model_input=write_input,
+    )
+    assert {p.target_document_id for p in candidate.document_proposals} == proposed
+
+
+def written_body(s, document_id):
+    write_input = build_write_input(s.snapshot, s.base, get_plan(s))
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=write_input.schema_version,
+        model_input=write_input,
+    )
+    return next(
+        p.value
+        for p in candidate.document_proposals
+        if p.target_document_id == document_id
+    )
+
+
+def test_single_newline_lines_are_separate_paragraphs_and_appends_follow_them():
+    s = fixture(
+        doyun_body="백도윤은 황동 덮개 의지를 사용한다.\n배달부다.\n파견 기한은 한 달이다."
+    )
+    assert [p.text for p in paragraphs(s.snapshot) if p.document_id == "doyun"] == [
+        "백도윤은 황동 덮개 의지를 사용한다.",
+        "배달부다.",
+        "파견 기한은 한 달이다.",
+    ]
+    s.written["paragraph_edits"][0]["text"] = "백도윤은 강철 덮개 의지를 사용한다."
+    assert (
+        written_body(s, "doyun")
+        == "백도윤은 강철 덮개 의지를 사용한다.\n배달부다.\n파견 기한은 한 달이다."
+    )
+    s = fixture(doyun_body="백도윤은 배달부다.\n파견 기한은 한 달이다.")
+    s.plan["edits"][0].update(paragraph_id="P0002", operation="APPEND")
+    s.written["paragraph_edits"][0]["text"] = "강철 덮개 의지를 사용한다."
+    assert (
+        written_body(s, "doyun")
+        == "백도윤은 배달부다.\n파견 기한은 한 달이다.\n강철 덮개 의지를 사용한다."
+    )
+
+
+def test_editorial_sentences_are_removed_from_written_text_and_new_settings():
+    s = fixture()
+    s.written["paragraph_edits"][0]["text"] += " 원고에 없는 경력은 덧붙이지 않는다."
+    assert "덧붙이지" not in written_body(s, "doyun")
+    marker, location = new_location(s)
+    s.plan["new_documents"] = [location]
+    s.written["new_document_proposals"] = [
+        {
+            "candidate_id": location["candidate_id"],
+            "folder_code": "LOCATION",
+            "name": "정비소",
+            "body_text": "덮개를 교체한 정비소다. 확인되지 않은 시설은 추가하지 않는다.",
+            "evidence": [],
+            "fact_ids": ["F1"],
+        }
+    ]
+    write_input = build_write_input(s.snapshot, s.base, get_plan(s))
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=write_input.schema_version,
+        model_input=write_input,
+    )
+    (new,) = candidate.new_document_proposals
+    assert new.body_text == "덮개를 교체한 정비소다."
+    assert [e.quote for e in new.evidence] == [candidate.facts[0].evidence[0].quote]
 
 
 def test_unplanned_paragraph_edit_is_dropped():
@@ -455,7 +574,11 @@ def test_relation_keys_and_revisions_are_filled_by_the_server():
         base_revision_no=s.doy.revision_no + 1,
     )
     assert s.service.run(s.request).outcome == Outcome.PROPOSED
-    (relation,) = s.artifacts.read_result(s.request).relation_proposals
+    (relation,) = [
+        r
+        for r in s.artifacts.read_result(s.request).relation_proposals
+        if "doyun" in (r.document_id, r.target_document_id)
+    ]
     assert (
         relation.relation_key,
         relation.reverse_relation_key,
@@ -463,24 +586,19 @@ def test_relation_keys_and_revisions_are_filled_by_the_server():
     ) == (RELATION_KEYS["LOCATION"], RELATION_KEYS["CHARACTER"], s.doy.revision_no)
 
 
-def test_one_repair_can_complete_missing_edit_within_three_calls():
+def test_missing_written_edit_is_skipped_without_a_repair_call():
     s = fixture()
     incomplete = {**s.written, "paragraph_edits": s.written["paragraph_edits"][:1]}
-    s.model.responses = [s.plan, incomplete, s.written]
+    s.model.responses = [s.plan, incomplete]
     assert s.service.run(s.request).outcome == Outcome.PROPOSED
     result = s.artifacts.read_result(s.request)
-    assert result.usage.calls == 3
-    assert [a.outcome for a in result.attempts] == [
-        Outcome.PROPOSED,
-        Outcome.FAILED,
-        Outcome.PROPOSED,
-    ]
-    assert [a.call_index for a in result.attempts] == [1, 2, 2]
+    assert result.usage.calls == 2
+    assert [p.target_document_id for p in result.document_proposals] == ["doyun"]
 
 
 def test_plan_repair_reserves_write_call_and_does_not_allow_fourth():
     s = fixture()
-    invalid = {**s.plan, "reviewed_document_ids": []}
+    invalid = {**s.plan, "edits": [{"edit_id": "E1"}]}
     s.model.responses = [invalid, s.plan, s.written]
     assert s.service.run(s.request).outcome == Outcome.PROPOSED
     assert len(s.model.inputs) == 3
@@ -532,7 +650,7 @@ def test_delete_and_append_preserve_all_other_text():
     )
 
 
-def test_writing_cannot_add_unplanned_new_settings_or_relationships():
+def test_unplanned_new_settings_from_writing_are_dropped():
     s = fixture()
     write_input = build_write_input(s.snapshot, s.base, get_plan(s))
     marker = s.plan["edits"][0]["source_markers"][0]
@@ -546,13 +664,14 @@ def test_writing_cannot_add_unplanned_new_settings_or_relationships():
             "fact_ids": ["F1"],
         }
     ]
-    with pytest.raises(RefreshFailure, match="Every planned new setting"):
-        parse_candidate(
-            json.dumps(s.written),
-            Usage(1),
-            schema_version=write_input.schema_version,
-            model_input=write_input,
-        )
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=write_input.schema_version,
+        model_input=write_input,
+    )
+    assert candidate.new_document_proposals == ()
+    assert len(candidate.document_proposals) == 2
 
 
 def test_two_stages_reach_sdk_with_correct_response_schemas():
@@ -596,14 +715,14 @@ def replace_response(response, text):
     return result
 
 
-def test_no_fourth_call_after_plan_repair_and_invalid_write():
+def test_no_fourth_call_after_plan_repair_and_empty_write():
     s = fixture()
     s.model.responses = [
-        {**s.plan, "reviewed_document_ids": []},
+        {**s.plan, "edits": [{"edit_id": "E1"}]},
         s.plan,
         {**s.written, "paragraph_edits": []},
     ]
-    assert s.service.run(s.request).outcome == Outcome.FAILED
+    assert s.service.run(s.request).outcome == Outcome.NO_CHANGE
     result = s.artifacts.read_result(s.request)
     assert len(s.model.inputs) == 3
     assert result.usage.calls == 3
@@ -706,13 +825,13 @@ def test_existing_setting_marker_is_not_new_change_evidence():
         item["marker"] for item in context["evidence"] if item["document_id"] == "doyun"
     )
     s.written["facts"][0]["source"]["marker"] = marker
-    with pytest.raises(RefreshFailure, match="current changed manuscripts"):
-        parse_candidate(
-            json.dumps(s.written),
-            Usage(1),
-            schema_version=write_input.schema_version,
-            model_input=write_input,
-        )
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=write_input.schema_version,
+        model_input=write_input,
+    )
+    assert candidate.document_proposals == ()
 
 
 def test_body_that_differs_from_paragraph_assembly_is_reassembled_by_the_server():

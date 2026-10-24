@@ -62,6 +62,10 @@ def relation_scope_context(snapshot, active, scope):
         [left, right]
         for left, right in combinations(sorted(active), 2)
         if (left, right) not in existing
+        and not (
+            active[left].folder_code == "MANUSCRIPT"
+            and active[right].folder_code == "MANUSCRIPT"
+        )
         and relation_in_scope(
             snapshot,
             SimpleNamespace(document_id=left, target_document_id=right),
