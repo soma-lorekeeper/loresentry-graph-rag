@@ -20,7 +20,7 @@ from tests.fakes.fixtures import example
 def repair_result():
     request, _, _, snapshot, _, baseline = example()
     diagnostic = ValidationDiagnostic(
-        "facts[0].action", "fact.action_in_source", "F1", "C0001", "바뀐 표현"
+        "facts[0].action", "fact.action_bounded", "F1", "C0001", " "
     )
     attempts = (
         ModelAttempt(

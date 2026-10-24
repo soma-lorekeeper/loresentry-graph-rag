@@ -72,7 +72,8 @@ def test_failed_candidates_keep_observation_and_quality_comparison(tmp_path):
         return replace(
             candidate,
             facts=tuple(
-                replace(fact, action="검사에 없는 행동") for fact in candidate.facts
+                replace(fact, action="검사에 없는 행동", statement="")
+                for fact in candidate.facts
             ),
         )
 

@@ -613,14 +613,13 @@ FINAL_VALIDATION = """## 반환 전 검증
 본문에 적은 업무 분담·협력 관계가 허용된 새 관계 제안에도 반영됐는지 확인한다.
 관련 사실을 추출하고도 대응 본문·관계 없이 facts만 제거하는 것으로 누락을 감추지 않는다.
 
-### 원문 표현 대조
+### 출처 대조
 
-각 nonnull actor·recipient·object의 surface와 action이 source.marker에 해당하는
-quote 안에 그대로 있는지 문자열로 대조한다. 일치하지 않으면 이름과 행동을 함께 담은
-다른 마커를 선택하거나 surface·action을 해당 quote의 실제 표현으로 고친다.
-서로 다른 마커의 quote를 합치지 않는다. 이름 대응이 불분명하면 document_id를
-null로 두고, 원문에 역할 자체가 없으면 해당 entity를 null로 둔다. 이 과정에서도 확인할 수
-없는 새 주장은 제거하며, statement가 남은 역할의 의미를 유지하는지 다시 확인한다.
+각 사실의 역할과 행동이 source.marker에 해당하는 quote로 뒷받침되는지 확인한다.
+뒷받침되지 않으면 그 사실을 실제로 담은 다른 마커를 선택한다. 서로 다른 마커의 quote를
+합치지 않는다. 이름 대응이 불분명하면 document_id를 null로 두고, 원문에 역할 자체가 없으면
+해당 entity를 null로 둔다. 확인할 수 없는 새 주장은 제거하며, statement가 남은 역할의 의미를
+유지하는지 다시 확인한다.
 """
 
 

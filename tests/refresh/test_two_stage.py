@@ -516,6 +516,29 @@ def test_existing_setting_marker_is_not_new_change_evidence():
         )
 
 
+def test_body_that_differs_from_paragraph_assembly_is_reassembled_by_the_server():
+    s = fixture()
+    writing = build_write_input(s.snapshot, s.base, get_plan(s))
+    candidate = parse_candidate(
+        json.dumps(s.written),
+        Usage(1),
+        schema_version=writing.schema_version,
+        model_input=writing,
+    )
+    drifted = replace(
+        candidate,
+        document_proposals=tuple(
+            replace(p, value=p.value + "\n\n모델이 덧붙인 문장.")
+            for p in candidate.document_proposals
+        ),
+    )
+    result = RefreshRules().validate_candidate(s.snapshot, drifted, writing)
+    assert result.outcome == Outcome.PROPOSED
+    assert [p.value for p in result.document_proposals] == [
+        p.value for p in candidate.document_proposals
+    ]
+
+
 def test_full_copies_of_preserved_paragraphs_are_removed_and_audited():
     s = fixture()
     unchanged = "파견 기한은 한 달이다.  😀"

@@ -169,10 +169,7 @@ def evaluation_fingerprint(value) -> str:
                         and field.name == "paragraph_edits"
                         and not getattr(item, "paragraph_edits", ())
                     )
-                    or (
-                        isinstance(item, SourceFact)
-                        and field.name in {"confidence", "source_alignments"}
-                    )
+                    or (isinstance(item, SourceFact) and field.name == "confidence")
                 )
             ]
             return f"{type(item).__name__}({', '.join(parts)})"

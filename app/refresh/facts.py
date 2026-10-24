@@ -37,7 +37,7 @@ def validate_facts(
     schema_version=None,
     source_markers=None,
 ):
-    """원문 표현과 알려진 문서·제안 참조를 검사한다. 함의 검사는 별도 평가가 맡는다."""
+    """출처 마커와 알려진 문서·제안 참조를 검사한다. 함의 검사는 별도 평가가 맡는다."""
 
     diagnostics = []
     first_failure = None
@@ -196,18 +196,6 @@ def validate_facts(
                 "Legacy fact excerpt exceeds its budget",
                 fact=fact,
             )
-        excerpt = evidence[0].quote
-        # With typed fields and a verified source, these leaf checks are independent.
-        # Keep the first failure while reporting every safely checkable fact/role.
-        if fact.action not in excerpt:
-            fail(
-                path + ".action",
-                "fact.action_in_source",
-                "Fact action must preserve source wording",
-                fact=fact,
-                value=fact.action,
-                collect=True,
-            )
         for role in ("actor", "recipient", "object"):
             entity = getattr(fact, role)
             if entity is None:
@@ -228,26 +216,6 @@ def validate_facts(
                     fact=fact,
                     value=entity.surface,
                 )
-            if entity.surface not in excerpt:
-                fail(
-                    role_path + ".surface",
-                    "fact.role_surface_in_source",
-                    "Roles must preserve their source surfaces",
-                    fact=fact,
-                    value=entity.surface,
-                    collect=True,
-                )
-            # 현대 marker 계약에서 statement는 요약이다. 원문 surface는 위에서 검사한다.
-            # 기존 excerpt 계약의 저장 응답은 과거 검증 규칙을 유지한다.
-            if not chunks and entity.surface not in fact.statement:
-                fail(
-                    role_path + ".surface",
-                    "fact.role_surface_in_statement",
-                    "Roles must preserve their source surfaces",
-                    fact=fact,
-                    value=entity.surface,
-                    collect=True,
-                )
             if entity.document_id is not None and (
                 not isinstance(entity.document_id, str)
                 or entity.document_id not in known_ids
@@ -261,7 +229,7 @@ def validate_facts(
                     collect=True,
                 )
             # 초기 구현에서는 surface와 문서 제목·이름·별칭의 일치를 차단 조건으로
-            # 사용하지 않는다. 원문 표현과 문서 ID의 존재·프로젝트 범위는 검사한다.
+            # 사용하지 않는다. 문서 ID의 존재·프로젝트 범위만 검사한다.
         facts[fact.fact_id] = fact
     if first_failure is not None:
         raise RefreshFailure(first_failure, diagnostics=tuple(diagnostics)) from None

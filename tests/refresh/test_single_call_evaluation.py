@@ -94,7 +94,7 @@ def test_single_call_repair_uses_same_full_scope_and_stays_under_budget():
         if len(requests) == 1:
             return replace(
                 candidate,
-                facts=(replace(candidate.facts[0], action="원문에 없는 행동"),)
+                facts=(replace(candidate.facts[0], statement=""),)
                 + candidate.facts[1:],
             )
         return candidate

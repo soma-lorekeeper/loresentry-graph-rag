@@ -502,8 +502,8 @@ def materialize_candidate(dto, usage, model_input):
     )
 
 
-def validate_materialized_candidate(snapshot, candidate, model_input):
-    """파서를 우회한 포트와 보완 병합도 계획의 문단 조립 계약을 재검증한다."""
+def assemble_written_candidate(snapshot, candidate, model_input):
+    """파서를 우회한 포트와 보완 병합의 본문을 계획의 문단 조립 결과로 맞춘다."""
     if not isinstance(candidate, WrittenCandidate):
         plan_fail(
             "Written candidate with paragraph edits required",
@@ -513,21 +513,17 @@ def validate_materialized_candidate(snapshot, candidate, model_input):
     # 최초 계획은 이미 검증했지만 어댑터·fake가 바꾼 문맥도 같은 기준으로 검사한다.
     validate_plan(snapshot, plan, model_input)
     facts = {fact.fact_id: fact for fact in candidate.facts}
-    normalized, _ = normalize_paragraph_edits(
+    normalized, removals = normalize_paragraph_edits(
         plan, candidate.paragraph_edits, json.loads(model_input.prompt)
     )
-    if normalized != candidate.paragraph_edits:
-        plan_fail(
-            "Paragraph edits contain copies already preserved by the server",
-            rule="plan.paragraph_scoped",
-        )
-    expected = assemble_paragraphs(plan, candidate.paragraph_edits, model_input, facts)
-    if candidate.document_proposals != expected:
-        plan_fail(
-            "Candidate body differs from server paragraph assembly",
-            rule="plan.body_assembled",
-        )
+    candidate = replace(
+        candidate,
+        document_proposals=assemble_paragraphs(plan, normalized, model_input, facts),
+        paragraph_edits=normalized,
+        paragraph_copy_removals=candidate.paragraph_copy_removals + removals,
+    )
     validate_written_scope(plan, candidate, model_input)
+    return candidate
 
 
 def collect_source_extensions(candidate, model_input):

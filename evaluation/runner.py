@@ -14,7 +14,6 @@ from app.refresh.models import (
 )
 from app.refresh.rules import RefreshRules
 from app.refresh.service import RefreshService
-from app.refresh.source_alignment import align_candidate
 from app.refresh.validation import relation_in_scope
 from evaluation.cases import EvaluationCase, assess
 from evaluation.confidence import observe_confidence
@@ -197,7 +196,6 @@ class EvaluationRules(RefreshRules):
                 legacy = version
         if legacy is not None:
             model_input = replace(model_input, schema_version=legacy)
-        candidate = align_candidate(snapshot, candidate, model_input)
         result = super().validate_candidate(snapshot, candidate, model_input)
         if self.recorder is not None and model_input.relation_scope is not None:
             raw = self.recorder.last_candidate

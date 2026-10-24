@@ -472,7 +472,6 @@ def parse_candidate(
             value = asdict(fact)
             value.pop("fact_id")
             value.pop("confidence")
-            value.pop("source_alignments")
             canonical_id = (
                 "F"
                 + sha256(

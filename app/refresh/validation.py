@@ -23,7 +23,6 @@ from app.refresh.models import (
 )
 from app.refresh.policy import ALLOWED_FIELDS, MAX_PROPOSAL_CHARS, RELATION_KEYS
 from app.refresh.selection import reject
-from app.refresh.source_alignment import align_candidate
 
 
 def diagnostic_reject(code, message, path, rule, value=None):
@@ -440,7 +439,6 @@ def validate_relation_proposals(
 
 def validate_candidate(snapshot, candidate, model_input):
     """하나라도 잘못되면 세 목록을 비운 FAILED를 반환한다. 유효 빈 결과는 NO_CHANGE다."""
-    candidate = align_candidate(snapshot, candidate, model_input)
     usage = Usage()
     try:
         if not isinstance(candidate, ModelCandidate) or not isinstance(
@@ -495,6 +493,14 @@ def validate_candidate(snapshot, candidate, model_input):
                 or snapshot.target_ids[0] in scope.owner_target_ids
             ):
                 reject("INVALID_RELATION_SCOPE", "Invalid fallback connection owner")
+        # 묶음 결과의 집계(scope 없음)에는 단일 계획이 없다. 문단 조립은 묶음마다 했다.
+        if scope is not None and model_input.schema_version in {
+            "refresh-candidate-v7",
+            "refresh-candidate-v8",
+        }:
+            from app.refresh.workflow import assemble_written_candidate
+
+            candidate = assemble_written_candidate(snapshot, candidate, model_input)
         documents = validate_document_proposals(
             snapshot, candidate.document_proposals, allowed
         )
@@ -519,14 +525,6 @@ def validate_candidate(snapshot, candidate, model_input):
             aggregate=model_input.relation_scope is None,
             source_markers=source_markers(model_input),
         )
-        # 묶음 결과의 집계(scope 없음)에는 단일 계획이 없다. 문단 조립은 묶음마다 검증했다.
-        if scope is not None and model_input.schema_version in {
-            "refresh-candidate-v7",
-            "refresh-candidate-v8",
-        }:
-            from app.refresh.workflow import validate_materialized_candidate
-
-            validate_materialized_candidate(snapshot, candidate, model_input)
         relations = validate_relation_proposals(
             snapshot, candidate.relation_proposals, new_documents, scope
         )

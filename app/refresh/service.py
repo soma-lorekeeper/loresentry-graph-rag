@@ -42,7 +42,6 @@ from app.refresh.repair import (
     repairable,
 )
 from app.refresh.rules import RefreshRules
-from app.refresh.source_alignment import align_candidate
 
 
 class RefreshService:
@@ -527,7 +526,6 @@ class RefreshService:
                             candidate, current_input
                         ),
                     )
-                candidate = align_candidate(snapshot, candidate, current_input)
                 checked = self.rules.validate_candidate(
                     snapshot, candidate, current_input
                 )
