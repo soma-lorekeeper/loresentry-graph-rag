@@ -3,6 +3,7 @@
 import json
 import re
 from dataclasses import asdict, dataclass, replace
+from difflib import SequenceMatcher
 
 from app.refresh.errors import RefreshFailure
 from app.refresh.evidence import unique_evidence
@@ -13,13 +14,17 @@ from app.refresh.models import (
     Failure,
     ParagraphCopyRemoval,
     ParagraphEdit,
+    PlannedRelation,
+    RelationProposal,
     SourceScopeExtension,
     Usage,
     ValidationDiagnostic,
     WrittenCandidate,
 )
 from app.refresh.policy import RELATION_KEYS
+from app.refresh.tolerance import resolve_id, strip_editorial
 
+PARAGRAPH = re.compile(r"\S(?:[^\n]*\S)?")
 PLAN_SCHEMA = "refresh-plan-v1"
 WRITE_SCHEMAS = frozenset({"refresh-candidate-v7", "refresh-candidate-v8"})
 WORKFLOW_PROMPT_VERSION = "refresh-prompt-v13"
@@ -46,16 +51,17 @@ def current_bodies(snapshot):
 
 
 def paragraphs(snapshot):
-    """빈 줄 구분과 원문 위치를 보존하여 대상 설정에만 문단 ID를 붙인다."""
+    """줄마다 원문 위치를 보존하여 대상 설정에만 문단 ID를 붙인다.
+
+    Content는 에디터의 블록을 줄바꿈 하나로 이어 평문을 만든다. 그래서 한 줄이 한 문단이다.
+    """
     result = []
     bodies = current_bodies(snapshot)
     for document in snapshot.documents:
         if document.document_id not in snapshot.target_ids:
             continue
         body = bodies[document.document_id]
-        matches = list(
-            re.finditer(r"\S(?:.*?\S)?(?=\n[ \t]*\n|[ \t\r\n]*\Z)", body, re.S)
-        )
+        matches = list(PARAGRAPH.finditer(body))
         if not matches:
             result.append(
                 Paragraph(document.document_id, document.revision_no, "P0000", 0, 0, "")
@@ -119,167 +125,160 @@ def _bounded(value, maximum):
 
 
 def validate_plan(snapshot, plan, model_input):
-    """범위·revision·작업 중복·출처 마커를 검사한다. 의미상 완전성은 보증하지 않는다.
+    """계획을 실행할 수 있는 범위로 맞춘다. 의미상 완전성은 보증하지 않는다.
 
-    방향만 다른 같은 관계는 하나로 합친 계획을 반환한다.
+    잘못된 작업·신규 설정·관계는 실패 대신 버리거나 고친다. 같은 문단의 작업은 하나로 합치고,
+    옮겨 적다 틀린 문서 ID는 가장 가까운 실제 ID로 고치며, 방향만 다른 관계는 하나로 합친다.
+    신규 설정과 그 근거 원고의 관계가 빠졌으면 채운다.
     """
+    from app.refresh.validation import existing_setting_names, setting_name
+
     if not isinstance(plan, ChangePlan):
         plan_fail("Typed change plan required")
-    targets = snapshot.target_ids
-    if len(plan.reviewed_document_ids) != len(set(plan.reviewed_document_ids)) or set(
-        plan.reviewed_document_ids
-    ) != set(targets):
-        plan_fail(
-            "Every selected settings document must be reviewed",
-            "reviewed_document_ids",
-            "plan.targets_reviewed",
-        )
     context = json.loads(model_input.prompt)
     markers = {item["marker"]: item for item in context["evidence"]}
     inventory = {(p.document_id, p.paragraph_id): p for p in paragraphs(snapshot)}
     existing = {d.document_id: d for d in snapshot.documents}
-    edit_ids, positions = set(), set()
+    targets = set(snapshot.target_ids)
 
-    def sources(item, path):
-        invalid = [
-            marker
-            for marker in item.source_markers
-            if marker not in markers
-            or markers[marker]["document_id"] not in snapshot.changed_ids
-        ]
-        if (
-            not item.source_markers
-            or len(set(item.source_markers)) != len(item.source_markers)
-            or invalid
-        ):
-            plan_fail(
-                "Plan requires unique changed-source markers",
-                path + ".source_markers",
-                "plan.source_markers",
-                ", ".join(invalid) or None,
+    def sources(item):
+        return tuple(
+            dict.fromkeys(
+                marker
+                for marker in item.source_markers
+                if marker in markers
+                and markers[marker]["document_id"] in snapshot.changed_ids
             )
+        )
 
-    if (
-        len(plan.edits) > len(inventory) * 2
-        or len(plan.new_documents) > 20
-        or len(plan.relations) > 100
-    ):
-        plan_fail("Change plan budget exceeded")
-    if plan.edits and not context["allow_document_updates"]:
-        plan_fail(
-            "Document updates are outside this call's scope",
-            "edits",
-            "plan.edits_allowed",
-        )
-    if plan.new_documents and not context["allow_new_documents"]:
-        plan_fail(
-            "New settings are outside this call's scope",
-            "new_documents",
-            "plan.new_allowed",
-        )
-    for index, edit in enumerate(plan.edits):
-        paragraph = inventory.get((edit.document_id, edit.paragraph_id))
-        if (
-            paragraph is None
-            or type(edit.base_revision_no) is not int
-            or edit.base_revision_no != paragraph.base_revision_no
-        ):
-            plan_fail(
-                "Edit must identify an existing target paragraph and revision",
-                f"edits[{index}]",
-                "plan.paragraph_known",
-                f"{edit.document_id} {edit.paragraph_id} r{edit.base_revision_no}",
+    edits = {}
+    if context["allow_document_updates"]:
+        for edit in plan.edits:
+            document_id = resolve_id(edit.document_id, targets)
+            operation = "APPEND" if edit.paragraph_id == "P0000" else edit.operation
+            paragraph = inventory.get((document_id, edit.paragraph_id))
+            found = sources(edit)
+            if (
+                paragraph is None
+                or operation not in {"REPLACE", "DELETE", "APPEND"}
+                or not found
+                or not isinstance(edit.instruction, str)
+                or not edit.instruction.strip()
+            ):
+                continue
+            position = (
+                document_id,
+                edit.paragraph_id,
+                "APPEND" if operation == "APPEND" else "CHANGE",
             )
-        if (
-            edit.operation not in {"REPLACE", "DELETE", "APPEND"}
-            or (edit.paragraph_id == "P0000" and edit.operation != "APPEND")
-            or not _bounded(edit.edit_id, 200)
-            or edit.edit_id in edit_ids
-            or not _bounded(edit.instruction, 2000)
-        ):
-            plan_fail(
-                "Unique bounded edit and instruction required",
-                f"edits[{index}]",
-                "plan.edit_valid",
-                edit.edit_id,
+            previous = edits.get(position)
+            if previous is None:
+                edits[position] = replace(
+                    edit,
+                    document_id=document_id,
+                    base_revision_no=paragraph.base_revision_no,
+                    operation=operation,
+                    instruction=edit.instruction[:2000],
+                    source_markers=found,
+                )
+                continue
+            edits[position] = replace(
+                previous,
+                operation=previous.operation
+                if previous.operation == operation
+                else "REPLACE",
+                instruction=(previous.instruction + "\n" + edit.instruction)[:2000],
+                source_markers=tuple(dict.fromkeys(previous.source_markers + found)),
             )
-        position = (
-            edit.document_id,
-            edit.paragraph_id,
-            "APPEND" if edit.operation == "APPEND" else "CHANGE",
-        )
-        if position in positions:
-            plan_fail(
-                "Only one replacement/deletion and one append per paragraph",
-                f"edits[{index}]",
-                "plan.position_unique",
-                f"{edit.document_id} {edit.paragraph_id} {edit.operation}",
+    planned_edits, edit_ids = [], set()
+    for index, edit in enumerate(list(edits.values())[: len(inventory) * 2], 1):
+        edit_id = edit.edit_id
+        if not _bounded(edit_id, 200) or edit_id in edit_ids:
+            edit_id = next(
+                f"E{index}-{n}"
+                for n in range(1, 1000)
+                if f"E{index}-{n}" not in edit_ids
             )
-        positions.add(position)
-        edit_ids.add(edit.edit_id)
-        sources(edit, f"edits[{index}]")
-    from app.refresh.validation import existing_setting_names, setting_name
-
+        edit_ids.add(edit_id)
+        planned_edits.append(replace(edit, edit_id=edit_id))
     existing_names = existing_setting_names(snapshot)
-    new_ids, names = set(), set()
-    for index, item in enumerate(plan.new_documents):
-        if (
-            item.folder_code not in RELATION_KEYS
-            or item.folder_code == "MANUSCRIPT"
-            or not _bounded(item.name, 200)
-            or not _bounded(item.instruction, 2000)
-            or item.candidate_id != f"new:{item.folder_code}:{item.name}"
-            or item.candidate_id in existing
-            or item.candidate_id in new_ids
-            or (item.folder_code, setting_name(item.name)) in names
-        ):
-            plan_fail(
-                "Unique settings identity required",
-                f"new_documents[{index}]",
-                "plan.new_identity",
-                item.candidate_id,
+    new_documents, renamed, names = {}, {}, set()
+    if context["allow_new_documents"]:
+        for item in plan.new_documents:
+            name = item.name.strip() if isinstance(item.name, str) else ""
+            candidate_id = f"new:{item.folder_code}:{name}"
+            key = (item.folder_code, setting_name(name))
+            found = sources(item)
+            if (
+                not name
+                or len(name) > 200
+                or item.folder_code not in RELATION_KEYS
+                or item.folder_code == "MANUSCRIPT"
+                or not isinstance(item.instruction, str)
+                or not item.instruction.strip()
+                or not found
+                or key in existing_names
+                or key in names
+                or candidate_id in existing
+                or len(new_documents) >= 20
+            ):
+                continue
+            renamed[item.candidate_id] = candidate_id
+            names.add(key)
+            new_documents[candidate_id] = replace(
+                item,
+                candidate_id=candidate_id,
+                name=name,
+                instruction=item.instruction[:2000],
+                source_markers=found,
             )
-        if (item.folder_code, setting_name(item.name)) in existing_names:
-            plan_fail(
-                "New setting duplicates an existing setting name",
-                f"new_documents[{index}].name",
-                "plan.new_existing",
-                item.name,
-            )
-        new_ids.add(item.candidate_id)
-        names.add((item.folder_code, setting_name(item.name)))
-        sources(item, f"new_documents[{index}]")
     scope = context["relation_scope"]
     allowed_pairs = {tuple(sorted(pair)) for pair in scope["allowed_existing_pairs"]}
+    known = set(existing) | set(new_documents)
     relations = {}
-    for index, item in enumerate(plan.relations):
-        pair = tuple(sorted((item.document_id, item.target_document_id)))
-        new_endpoint = bool(set(pair) & new_ids)
-        if (
-            len(set(pair)) != 2
-            or any(key not in existing and key not in new_ids for key in pair)
-            or (new_endpoint and not scope["allow_new_endpoint_relations"])
-            or (not new_endpoint and pair not in allowed_pairs)
+    for item in plan.relations:
+        source = resolve_id(renamed.get(item.document_id, item.document_id), known)
+        target = resolve_id(
+            renamed.get(item.target_document_id, item.target_document_id), known
+        )
+        found = sources(item)
+        if source is None or target is None or source == target or not found:
+            continue
+        pair = tuple(sorted((source, target)))
+        new_endpoint = bool(set(pair) & set(new_documents))
+        if (new_endpoint and not scope["allow_new_endpoint_relations"]) or (
+            not new_endpoint and pair not in allowed_pairs
         ):
-            plan_fail(
-                "Unique allowed new relation required",
-                f"relations[{index}]",
-                "plan.relation_allowed",
-                f"{item.document_id} <-> {item.target_document_id}",
-            )
-        sources(item, f"relations[{index}]")
+            continue
         previous = relations.get(pair)
         relations[pair] = (
-            item
+            PlannedRelation(source, target, found)
             if previous is None
             else replace(
                 previous,
-                source_markers=tuple(
-                    dict.fromkeys(previous.source_markers + item.source_markers)
-                ),
+                source_markers=tuple(dict.fromkeys(previous.source_markers + found)),
             )
         )
-    return replace(plan, relations=tuple(relations.values()))
+    if scope["allow_new_endpoint_relations"]:
+        for item in new_documents.values():
+            manuscripts = {}
+            for marker in item.source_markers:
+                document_id = markers[marker]["document_id"]
+                if existing[document_id].folder_code == "MANUSCRIPT":
+                    manuscripts.setdefault(document_id, []).append(marker)
+            for document_id, found in manuscripts.items():
+                pair = tuple(sorted((document_id, item.candidate_id)))
+                if pair not in relations:
+                    relations[pair] = PlannedRelation(
+                        document_id, item.candidate_id, tuple(found)
+                    )
+    return replace(
+        plan,
+        reviewed_document_ids=tuple(snapshot.target_ids),
+        edits=tuple(planned_edits),
+        new_documents=tuple(new_documents.values()),
+        relations=tuple(relations.values())[:100],
+    )
 
 
 def _input(snapshot, base, *, plan=None):
@@ -318,81 +317,58 @@ def build_write_input(snapshot, base, plan):
 
 
 def assemble_paragraphs(plan, edits, model_input, facts):
-    """모든 작업을 검사하고 편집하지 않은 원문을 보존하면서 본문을 조립한다."""
+    """쓸 수 있는 문단 작업만 조립하고 나머지 원문은 그대로 둔다.
+
+    빠진 작업, 현재 변경 원고의 근거 사실이 없는 작업, 내용이 바뀌지 않은 작업은 그 문단을
+    원문대로 둔다. 작성 지시가 본문 문장으로 옮겨진 경우 그 문장은 지운다.
+    """
     context = json.loads(model_input.prompt)
     inventory = {
         (p["document_id"], p["paragraph_id"]): p for p in context["paragraphs"]
     }
     documents = {item["document_id"]: item for item in context["documents"]}
-    indexed = {edit.edit_id: edit for edit in edits}
-    expected = {edit.edit_id for edit in plan.edits}
-    if len(indexed) != len(edits) or set(indexed) != expected:
-        plan_fail(
-            "Every planned edit must be returned exactly once",
-            "paragraph_edits",
-            "plan.edits_complete",
-            f"missing: {', '.join(sorted(expected - set(indexed))) or '-'}; "
-            f"unplanned: {', '.join(sorted(set(indexed) - expected)) or '-'}",
-        )
+    indexed = {}
+    for edit in edits:
+        indexed.setdefault(edit.edit_id, edit)
+    allowed = {
+        facts_marker(context, item["marker"])
+        for item in context["evidence"]
+        if item["document_id"] in context["changed_ids"]
+    }
     grouped = {}
     for operation in plan.edits:
-        edit = indexed[operation.edit_id]
-        if not edit.fact_ids or any(key not in facts for key in edit.fact_ids):
-            plan_fail(
-                "Paragraph edit requires known facts",
-                "paragraph_edits",
-                "plan.facts_known",
-            )
-        if (operation.operation == "DELETE" and edit.text != "") or (
-            operation.operation != "DELETE" and not edit.text.strip()
-        ):
-            plan_fail(
-                "Only DELETE edits may have empty text",
-                "paragraph_edits",
-                "plan.text_valid",
-            )
+        edit = indexed.get(operation.edit_id)
+        paragraph = inventory.get((operation.document_id, operation.paragraph_id))
+        if edit is None or paragraph is None:
+            continue
+        refs = tuple(
+            key
+            for key in dict.fromkeys(edit.fact_ids)
+            if key in facts
+            and facts[key].evidence
+            and facts[key].evidence[0] in allowed
+        )
+        text = "" if operation.operation == "DELETE" else strip_editorial(edit.text)
         if (
-            operation.operation == "REPLACE"
-            and edit.text
-            == inventory[(operation.document_id, operation.paragraph_id)]["text"]
+            not refs
+            or (operation.operation != "DELETE" and not text.strip())
+            or len(text) > 5000
+            or (operation.operation == "REPLACE" and text == paragraph["text"])
         ):
-            plan_fail(
-                "Replacement must change its planned paragraph",
-                "paragraph_edits",
-                "plan.edit_effective",
-            )
-        if len(edit.text) > 5000:
-            plan_fail(
-                "Paragraph exceeds body budget", "paragraph_edits", "plan.text_bounded"
-            )
-        if any(
-            fact.evidence[0]
-            not in {
-                facts_marker(context, item["marker"])
-                for item in context["evidence"]
-                if item["document_id"] in context["changed_ids"]
-            }
-            for key in edit.fact_ids
-            for fact in (facts[key],)
-        ):
-            plan_fail(
-                "Edit facts must come from the current changed manuscripts",
-                "paragraph_edits",
-                "plan.source_coverage",
-            )
-        paragraph = inventory[(operation.document_id, operation.paragraph_id)]
+            continue
         grouped.setdefault(operation.document_id, []).append(
-            (operation, edit, paragraph)
+            (operation, replace(edit, text=text, fact_ids=refs), paragraph)
         )
     result = []
     for document_id, operations in sorted(grouped.items()):
         body = context["settings_bodies"][document_id]
+        separator = "\n\n" if "\n\n" in body.strip() else "\n"
         changes = {}
         appends = {}
         for operation, edit, paragraph in operations:
             if operation.operation == "APPEND":
                 appends[paragraph["end"]] = (
-                    "\n\n" if paragraph["end"] else ""
+                    separator if paragraph["end"] else ""
                 ) + edit.text
             else:
                 changes[paragraph["start"]] = (paragraph["end"], edit.text)
@@ -410,11 +386,7 @@ def assemble_paragraphs(plan, edits, model_input, facts):
         parts.append(body[cursor:])
         value = "".join(parts)
         if value == body:
-            plan_fail(
-                "Planned edit left the body unchanged",
-                "paragraph_edits",
-                "plan.edit_effective",
-            )
+            continue
         refs = tuple(
             dict.fromkeys(key for _, edit, _ in operations for key in edit.fact_ids)
         )
@@ -446,79 +418,124 @@ def facts_marker(context, marker):
     )
 
 
-def validate_written_scope(plan, candidate, model_input):
-    """계획한 신규 설정의 누락과 정체 변경을 검사하고 관계를 계획 범위로 맞춘다.
+def _distinct_statements(refs, facts):
+    """문장이 거의 같은 사실은 앞의 것 하나만 남긴다. 관계 설명이 같은 말을 반복하지 않게 한다."""
+    kept, seen = [], []
+    for key in refs:
+        text = re.sub(r"[\s\W_]+", "", facts[key].statement)
+        if any(SequenceMatcher(None, text, other).ratio() >= 0.9 for other in seen):
+            continue
+        kept.append(key)
+        seen.append(text)
+    return tuple(kept)
 
-    계획에 없는 관계는 버리고, 빠진 관계는 제안하지 않으며, 같은 쌍은 하나로 합친다.
-    관계 키와 기준 revision은 끝점의 유형·revision에서 서버가 채운다.
+
+def validate_written_scope(plan, candidate, model_input):
+    """신규 설정과 관계를 계획 범위로 맞춘다.
+
+    계획에 없는 신규 설정·관계는 버리고 빠진 것은 제안하지 않는다. 신규 설정의 근거에는 참조한
+    사실의 출처를 더하고, 작성 지시가 옮겨진 문장은 지운다. 같은 쌍의 관계는 하나로 합치고 거의
+    같은 사실은 한 번만 참조하며, 관계 키와 기준 revision은 끝점의 유형·revision으로 채운다.
+    계획한 원고와 신규 설정의 관계를 작성 단계가 빠뜨렸으면 신규 설정의 사실로 만든다.
     """
-    new = {
-        (p.candidate_id, p.folder_code, p.name): p
-        for p in candidate.new_document_proposals
-    }
-    expected = {(p.candidate_id, p.folder_code, p.name): p for p in plan.new_documents}
-    if len(new) != len(candidate.new_document_proposals) or set(new) != set(expected):
-        missing = [key[0] for key in expected if key not in new]
-        extra = [key[0] for key in new if key not in expected]
-        plan_fail(
-            "Every planned new setting must be returned once",
-            "new_document_proposals",
-            "plan.new_complete",
-            f"missing: {', '.join(missing) or '-'}; unplanned: {', '.join(extra) or '-'}",
-        )
     context = json.loads(model_input.prompt)
+    allowed = {
+        facts_marker(context, item["marker"])
+        for item in context["evidence"]
+        if item["document_id"] in context["changed_ids"]
+    }
+    facts = {fact.fact_id: fact for fact in candidate.facts}
+
+    def usable(refs):
+        return tuple(
+            key
+            for key in dict.fromkeys(refs)
+            if key in facts and all(e in allowed for e in facts[key].evidence)
+        )
+
+    planned_new = {item.candidate_id: item for item in plan.new_documents}
+    new = {}
+    for proposal in candidate.new_document_proposals:
+        item = planned_new.get(resolve_id(proposal.candidate_id, set(planned_new)))
+        refs = usable(proposal.fact_ids)
+        body = strip_editorial(proposal.body_text)
+        if item is None or item.candidate_id in new or not refs or not body.strip():
+            continue
+        new[item.candidate_id] = replace(
+            proposal,
+            candidate_id=item.candidate_id,
+            folder_code=item.folder_code,
+            name=item.name,
+            body_text=body,
+            evidence=unique_evidence(
+                tuple(e for e in proposal.evidence if e in allowed)
+                + tuple(e for key in refs for e in facts[key].evidence)
+            ),
+            fact_ids=refs,
+        )
     endpoints = {
         item["document_id"]: (item["folder_code"], item["revision_no"])
         for item in context["documents"]
     }
-    endpoints.update(
-        {item.candidate_id: (item.folder_code, None) for item in plan.new_documents}
-    )
+    endpoints.update({key: (item.folder_code, None) for key, item in new.items()})
     planned = {
         tuple(sorted((p.document_id, p.target_document_id))) for p in plan.relations
     }
-    facts = {fact.fact_id: fact for fact in candidate.facts}
+
+    def relation_for(source, target, refs):
+        selected = [facts[key] for key in refs]
+        return RelationProposal(
+            source,
+            target,
+            endpoints[source][1],
+            endpoints[target][1],
+            RELATION_KEYS.get(endpoints[target][0]),
+            RELATION_KEYS.get(endpoints[source][0]),
+            fact_description(selected),
+            unique_evidence(e for fact in selected for e in fact.evidence),
+            "ADD",
+            refs,
+        )
+
     relation = {}
     for proposal in candidate.relation_proposals:
-        pair = tuple(sorted((proposal.document_id, proposal.target_document_id)))
+        source = resolve_id(proposal.document_id, set(endpoints))
+        target = resolve_id(proposal.target_document_id, set(endpoints))
+        if source is None or target is None:
+            continue
+        pair = tuple(sorted((source, target)))
         if pair not in planned:
             continue
         previous = relation.get(pair)
         if previous is not None:
-            refs = tuple(dict.fromkeys(previous.fact_ids + proposal.fact_ids))
-            selected = [facts[key] for key in refs]
-            proposal = replace(
-                previous,
-                fact_ids=refs,
-                description=fact_description(selected),
-                evidence=unique_evidence(e for fact in selected for e in fact.evidence),
-            )
-        source, target = (
-            endpoints.get(proposal.document_id),
-            endpoints.get(proposal.target_document_id),
+            source, target = previous.document_id, previous.target_document_id
+        refs = _distinct_statements(
+            usable((previous.fact_ids if previous else ()) + proposal.fact_ids), facts
         )
-        if source is not None and target is not None:
-            proposal = replace(
-                proposal,
-                relation_key=RELATION_KEYS.get(target[0]),
-                reverse_relation_key=RELATION_KEYS.get(source[0]),
-                base_revision_no=source[1],
-                target_base_revision_no=target[1],
-            )
-        relation[pair] = proposal
-    candidate = replace(candidate, relation_proposals=tuple(relation.values()))
-    for _key, proposal in list(new.items()) + list(relation.items()):
-        allowed = {
-            facts_marker(context, item["marker"])
-            for item in context["evidence"]
-            if item["document_id"] in context["changed_ids"]
-        }
-        if any(source not in allowed for source in proposal.evidence):
-            plan_fail(
-                "Output sources must come from the current changed manuscripts",
-                rule="plan.source_coverage",
-            )
-    return candidate
+        if refs:
+            relation[pair] = relation_for(source, target, refs)
+    for pair in planned - set(relation):
+        manuscript = next(
+            (key for key in pair if endpoints.get(key, ("",))[0] == "MANUSCRIPT"), None
+        )
+        other = pair[1] if manuscript == pair[0] else pair[0]
+        if manuscript is None or other not in new:
+            continue
+        refs = _distinct_statements(
+            tuple(
+                key
+                for key in new[other].fact_ids
+                if any(e.document_id == manuscript for e in facts[key].evidence)
+            ),
+            facts,
+        )
+        if refs:
+            relation[pair] = relation_for(other, manuscript, refs)
+    return replace(
+        candidate,
+        new_document_proposals=tuple(new.values()),
+        relation_proposals=tuple(relation.values()),
+    )
 
 
 def materialize_candidate(dto, usage, model_input):
@@ -556,19 +573,18 @@ def materialize_candidate(dto, usage, model_input):
             model_input=replace(model_input, schema_version=legacy_schema),
         )
         fact_refs[item["fact_id"]] = parsed.facts[0].fact_id
-    typed = []
-    for edit in edits:
-        if len(edit["fact_ids"]) != len(set(edit["fact_ids"])) or any(
-            key not in fact_refs for key in edit["fact_ids"]
-        ):
-            plan_fail("Edit requires unique declared facts", rule="plan.facts_known")
-        typed.append(
-            ParagraphEdit(
-                edit["edit_id"],
-                edit["text"],
-                tuple(fact_refs[key] for key in edit["fact_ids"]),
-            )
+    typed = [
+        ParagraphEdit(
+            edit["edit_id"],
+            edit["text"],
+            tuple(
+                dict.fromkeys(
+                    fact_refs[key] for key in edit["fact_ids"] if key in fact_refs
+                )
+            ),
         )
+        for edit in edits
+    ]
     plan = load_plan(json.loads(model_input.prompt)["change_plan"])
     facts = {fact.fact_id: fact for fact in candidate.facts}
     typed, removals = normalize_paragraph_edits(
@@ -678,9 +694,7 @@ def normalize_paragraph_edits(plan, edits, context):
         }
         copies = [
             (match, preserved[match.group()])
-            for match in re.finditer(
-                r"\S(?:.*?\S)?(?=\n[ \t]*\n|[ \t\r\n]*\Z)", edit.text, re.S
-            )
+            for match in PARAGRAPH.finditer(edit.text)
             if match.group() in preserved
         ]
         text = edit.text

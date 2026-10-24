@@ -199,7 +199,7 @@ def test_discovery_sees_only_non_target_pairs_and_new_endpoint_permission():
     assert data["target_ids"] == []
     assert data["allow_new_documents"] is True
     assert data["allow_document_updates"] is False
-    assert data["relation_scope"]["allowed_existing_pairs"] == [["m1", "m2"]]
+    assert data["relation_scope"]["allowed_existing_pairs"] == []
     assert data["relation_scope"]["allow_new_endpoint_relations"] is True
 
 
