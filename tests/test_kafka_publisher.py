@@ -92,7 +92,7 @@ def test_producer_configuration_uses_librdkafka_names():
     assert settings["enable.idempotence"] is True
     assert settings["acks"] == "all"
     assert settings["message.timeout.ms"] == 20000
-    assert settings["message.max.bytes"] == 4194304
+    assert settings["message.max.bytes"] == 6291456
     assert "max.request.size" not in settings
     with pytest.raises(ValueError):
         producer_config(" ")

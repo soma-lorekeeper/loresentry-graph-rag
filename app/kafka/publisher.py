@@ -20,7 +20,7 @@ def producer_config(bootstrap_servers: str) -> dict:
         "acks": "all",
         "enable.idempotence": True,
         "compression.type": "zstd",
-        "message.max.bytes": 4194304,
+        "message.max.bytes": 6291456,
         "request.timeout.ms": 10000,
         "message.timeout.ms": 20000,
     }

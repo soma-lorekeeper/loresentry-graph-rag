@@ -105,6 +105,7 @@ def test_manual_offset_config():
     assert config["enable.auto.commit"] is False
     assert config["enable.auto.offset.store"] is False
     assert config["allow.auto.create.topics"] is False
+    assert config["max.partition.fetch.bytes"] == 6291456
     assert config["group.protocol"] == "classic"
     with pytest.raises(ValueError):
         consumer_config("", "group")

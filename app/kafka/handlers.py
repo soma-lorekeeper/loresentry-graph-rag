@@ -1,5 +1,6 @@
 """Content 업무 payload를 내부 투영·refresh 모델로 변환하고 유스케이스를 호출한다."""
 
+import base64
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Annotated, Literal
@@ -83,6 +84,7 @@ class RefreshRequested(WireModel):
     location: InputRef
     files: Annotated[list[ChangedFile], Field(min_length=1)]
     required_events: list[Identifier]
+    wrapped_key: Annotated[StrictStr, Field(min_length=1)] | None = None
 
 
 def projection_change(event: IncomingEvent) -> ProjectionChange:
@@ -133,12 +135,17 @@ def projection_change(event: IncomingEvent) -> ProjectionChange:
 
 def refresh_request(
     event: IncomingEvent, model_settings: ModelSettings
-) -> tuple[RefreshRequest, str, tuple[str, ...]]:
+) -> tuple[RefreshRequest, str, tuple[str, ...], bytes | None]:
     """요청 이벤트를 내부 요청으로 바꾼다. 모델 설정은 기동 때 정한 값을 쓴다."""
     try:
         wire = RefreshRequested.model_validate(event.payload)
         if len({file.file_id for file in wire.files}) != len(wire.files):
             raise ValueError("Duplicate input document")
+        wrapped_key = (
+            None
+            if wire.wrapped_key is None
+            else base64.b64decode(wire.wrapped_key, validate=True)
+        )
         request = RefreshRequest(
             job=JobKey(wire.project_id, wire.request_id, wire.input_fingerprint),
             input_ref=ArtifactRef(wire.location.bucket, wire.location.key),
@@ -151,7 +158,7 @@ def refresh_request(
             model_settings=model_settings,
             settings=SelectionSettings(),
         )
-        return request, wire.user_id, tuple(wire.required_events)
+        return request, wire.user_id, tuple(wire.required_events), wrapped_key
     except (ValidationError, ValueError):
         raise InvalidEvent("invalid:refresh-request") from None
 
@@ -172,10 +179,10 @@ class RefreshEventHandler:
     """최신화 요청을 실행한다. 투영이 끝내 따라오지 않으면 FAILED 완료로 요청을 끝낸다.
 
     Args:
-        run: (request, user_id)로 갱신안을 만들고 완료를 기록한다.
+        run: (request, user_id, wrapped_key)로 갱신안을 만들고 완료를 기록한다.
         ready: (project_id, required_events)로 투영 준비를 확인한다.
         model_settings: 기동 때 정한 모델·프롬프트·스키마 버전.
-        fail: (request, user_id, failure)로 실행하지 않은 요청의 FAILED 완료를 기록한다.
+        fail: (request, user_id, wrapped_key, failure)로 실행하지 않은 요청의 FAILED 완료를 기록한다.
     """
 
     def __init__(
@@ -191,10 +198,12 @@ class RefreshEventHandler:
         self._fail = fail
 
     def __call__(self, event: IncomingEvent) -> None:
-        request, user_id, required_events = refresh_request(event, self._model_settings)
+        request, user_id, required_events, wrapped_key = refresh_request(
+            event, self._model_settings
+        )
         with _classified():
             self._ready(request.job.project_id, required_events)
-            self._run(request, user_id)
+            self._run(request, user_id, wrapped_key)
 
     def exhausted(self, event: IncomingEvent, failure: NotReady) -> None:
         """재시도를 다 쓰도록 투영이 준비되지 않은 요청을 FAILED 완료로 끝낸다.
@@ -204,9 +213,11 @@ class RefreshEventHandler:
         """
         if self._fail is None:
             raise failure
-        request, user_id, _ = refresh_request(event, self._model_settings)
+        request, user_id, _, wrapped_key = refresh_request(event, self._model_settings)
         with _classified():
-            self._fail(request, user_id, Failure(failure.code, str(failure)))
+            self._fail(
+                request, user_id, wrapped_key, Failure(failure.code, str(failure))
+            )
 
 
 @contextmanager

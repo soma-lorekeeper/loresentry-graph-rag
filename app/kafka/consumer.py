@@ -35,29 +35,30 @@ class BusinessConsumerHandler:
 
     def __init__(
         self,
-        topic: str,
+        topics: str | tuple[str, ...],
         handlers: Mapping[str, Callable[[IncomingEvent], None]],
         dead_letters: DeadLetterPublisher,
         stop: Event,
         *,
         retry_delays: tuple[float, ...] = (1, 2, 4, 8, 10),
     ):
-        if topic not in EVENT_TYPES:
+        topics = (topics,) if isinstance(topics, str) else tuple(topics)
+        if not topics or any(topic not in EVENT_TYPES for topic in topics):
             raise ValueError("Unsupported business topic")
-        if set(handlers) != EVENT_TYPES[topic] or not all(
+        if any(set(handlers) != EVENT_TYPES[topic] for topic in topics) or not all(
             callable(handler) for handler in handlers.values()
         ):
             raise ValueError("Every business event requires an explicit handler")
         if any(not 0 <= delay < float("inf") for delay in retry_delays):
             raise ValueError("Retry delays must be nonnegative and finite")
-        self._topic = topic
+        self._topics = topics
         self._handlers = dict(handlers)
         self._dead_letters = dead_letters
         self._stop = stop
         self._delays = retry_delays
 
     def __call__(self, record: Record) -> None:
-        if record.topic != self._topic:
+        if record.topic not in self._topics:
             raise ValueError("Record is outside the configured subscription")
         if self._stop.is_set():
             raise ProcessingStopped("Consumer is stopping")
@@ -129,7 +130,7 @@ class BusinessConsumerHandler:
 
 def business_worker(
     consumer: Consumer,
-    topic: str,
+    topics: str | tuple[str, ...],
     handlers: Mapping[str, Callable[[IncomingEvent], None]],
     dead_letters: DeadLetterPublisher,
     stop: Event,
@@ -142,6 +143,6 @@ def business_worker(
     PollingWorker가 성공 반환 뒤 현재 할당 세대의 offset+1만 commit한다.
     """
     handler = BusinessConsumerHandler(
-        topic, handlers, dead_letters, stop, retry_delays=retry_delays
+        topics, handlers, dead_letters, stop, retry_delays=retry_delays
     )
-    return PollingWorker(consumer, (topic,), handler)
+    return PollingWorker(consumer, handler._topics, handler)

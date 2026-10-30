@@ -13,7 +13,13 @@ from app.kafka.errors import (
     ProcessingStopped,
     RetryableProcessingError,
 )
-from app.kafka.messages import REFRESH_REQUESTED
+from app.kafka.messages import (
+    PROJECT_CHANGED,
+    PROJECT_CHANGED_TOPICS,
+    PROJECT_CHANGED_V2,
+    REFRESH_REQUESTED,
+    dead_letter_record,
+)
 from tests.test_kafka_messages import content_record
 
 
@@ -240,3 +246,44 @@ def test_polling_commits_only_confirmed_business_or_dead_letter(failure_kind):
     assert len(calls) == (2 if failure_kind == "retry" else 1)
     assert len(dead_letters.sent) == (1 if failure_kind in {"retry", "invalid"} else 0)
     assert transport.closed
+
+
+def test_project_changed_v1_and_v2_share_one_handler_and_dead_letter_by_topic():
+    from app.kafka.consumer import business_worker
+    from tests.test_kafka_polling import Transport
+
+    received = []
+    dead_letters = DeadLetters()
+    handlers = {"FileChanged": received.append, "ProjectDeleted": received.append}
+    consume = BusinessConsumerHandler(
+        PROJECT_CHANGED_TOPICS, handlers, dead_letters, Event(), retry_delays=()
+    )
+    v1 = content_record("FileChanged")
+    v2 = replace(v1, topic=PROJECT_CHANGED_V2)
+    consume(v1)
+    consume(v2)
+    assert [event.event_type for event in received] == ["FileChanged"] * 2
+    consume(replace(v2, value=b"not JSON"))
+    ((record, failure),) = dead_letters.sent
+    assert dead_letter_record(record, failure).topic == (
+        "content.project.changed.v2.graph-rag.dlq"
+    )
+    with pytest.raises(ValueError, match="outside"):
+        consume(content_record())
+    with pytest.raises(ValueError):
+        BusinessConsumerHandler(
+            (PROJECT_CHANGED, REFRESH_REQUESTED), handlers, DeadLetters(), Event()
+        )
+
+    class Subscription(Transport):
+        def subscribe(self, topics, **callbacks):
+            self.topics = topics
+            super().subscribe(topics, **callbacks)
+
+    stop = Event()
+    stop.set()
+    transport = Subscription(stop)
+    business_worker(
+        transport, PROJECT_CHANGED_TOPICS, handlers, DeadLetters(), stop
+    ).run(stop)
+    assert transport.topics == [PROJECT_CHANGED, PROJECT_CHANGED_V2]

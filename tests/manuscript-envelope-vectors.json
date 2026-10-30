@@ -1,0 +1,36 @@
+{
+  "description": "Manuscript envelope test vectors. envelope = 0x01 | nonce(12) | AES-256-GCM(key, nonce, zlib(utf8(plaintext)), aad) where aad = utf8('lore-sentry:v1:{project_id}:{subject_id}:{purpose}'). Decrypt each envelope and compare to plaintext; also check that a different purpose fails.",
+  "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "mac_key_hex": "abb74f8b67f846ec5a2bcb59256310ea3dcf68b4cc512c2a8b3f2ddbfe53ee7f",
+  "body_text_mac_hex": "17128a44083c0c81861c4819eaab28e5e62840293e83a3a2f0a83e22e4066c43",
+  "vectors": [
+    {
+      "project_id": "0b5e0c5e-6a8f-4e0e-9a5c-1f2d3c4b5a69",
+      "subject_id": "7d1c2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+      "purpose": "body_text",
+      "plaintext": "유중혁은 회귀를 반복하는 인물이다.\n그는 매 회차의 결말을 알고 있다.",
+      "envelope_hex": "01000102030405060708090a0b3f9ec3d178ec422b9d47475598877a0ad766977951db4fb82becada931eb3f2ac399dca3d951a617f3ddfa042ba9e93d2b10e53aca3b80ab65390d974279742eaeb2c90698bad44da06a0b367cb1d2e6ee9e8745c06004ecac78f5e9548563b21c656432f3d2bd126540474b7f4de362311aa663"
+    },
+    {
+      "project_id": "0b5e0c5e-6a8f-4e0e-9a5c-1f2d3c4b5a69",
+      "subject_id": "7d1c2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+      "purpose": "body_json",
+      "plaintext": "{\"schema_version\":1,\"doc\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"도깨비 학살 😀\"}]}]}}",
+      "envelope_hex": "010c0d0e0f1011121314151617e062c28e5538321bfa67c4fadaa60c2999ccbe5cc4a96ae052edac524ef6ea5300bf3f97e33652f58d00fd18bc5f504e20f45ac3ac7d513aa7baf359a335eff349010a4bc3d2161b1c0dc8b0eb9121d6d5449d3f6aa3e6ad3000c5d4f86b4dcb1f2edb2a673619225a080c711f24d3e2da435a309c92c39f35ae"
+    },
+    {
+      "project_id": "0b5e0c5e-6a8f-4e0e-9a5c-1f2d3c4b5a69",
+      "subject_id": "7d1c2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+      "purpose": "body_text",
+      "plaintext": "",
+      "envelope_hex": "0118191a1b1c1d1e1f202122236b834310db49654e9438aed16c041e2710650f11fb75d9e0"
+    },
+    {
+      "project_id": "0b5e0c5e-6a8f-4e0e-9a5c-1f2d3c4b5a69",
+      "subject_id": "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b",
+      "purpose": "refresh_input",
+      "plaintext": "{\"schema_version\":\"refresh-input-v2\",\"documents\":[]}",
+      "envelope_hex": "012425262728292a2b2c2d2e2f8b13088809009361f4aae93a5eb96cdb0f59281804279875f17c4489413b12453dc74d4599065797d9897f162a9e0c121fe72245ff6ba20612806ed05790a254952d1040d75d1256428d9888"
+    }
+  ]
+}
