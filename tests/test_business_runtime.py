@@ -1,7 +1,8 @@
 """업무별 runtime 수명·설정·시작 실패·종료와 FastAPI health를 확인한다."""
 
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from threading import Event, get_ident
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,9 +12,11 @@ from app.kafka.business_runtime import (
     BusinessSettings,
     real_handlers,
 )
-from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
+from app.kafka.handlers import refresh_request
+from app.kafka.messages import PROJECT_CHANGED, PROJECT_CHANGED_V2, REFRESH_REQUESTED
 from app.main import create_app
 from app.refresh.errors import RefreshFailure
+from app.refresh.models import Failure
 from tests.fakes.refresh import FakeInbox
 
 
@@ -25,7 +28,7 @@ def test_settings_disabled_separate_from_fake_and_require_explicit_enable():
             "KAFKA_BOOTSTRAP_SERVERS": "broker:9092",
         }
     )
-    assert settings.topics == (PROJECT_CHANGED,)
+    assert settings.topics == (PROJECT_CHANGED, PROJECT_CHANGED_V2)
     for env in (
         {"KAFKA_REFRESH_REQUESTED_ENABLED": "yes"},
         {"KAFKA_REFRESH_REQUESTED_ENABLED": "true"},
@@ -67,7 +70,7 @@ def test_two_subscriptions_have_independent_owned_threads_and_cleanup(monkeypatc
         class Worker:
             def run(self, event):
                 assert consumer.group.startswith("graph-rag.")
-                running[0 if topic == PROJECT_CHANGED else 1].set()
+                running[0 if PROJECT_CHANGED in topic else 1].set()
                 assert event.wait(3)
 
         return Worker()
@@ -170,3 +173,113 @@ def test_refresh_handlers_take_the_model_from_environment(monkeypatch):
     with ExitStack() as stack:
         handlers = real_handlers(REFRESH_REQUESTED, None, Event(), stack, settings)
         assert handlers["GraphRefreshRequested"]._model_settings.model == "gpt-6-luna"
+
+
+def test_project_changed_v1_and_v2_use_one_consumer_in_the_same_group(monkeypatch):
+    seen = []
+
+    class Producer:
+        def __init__(self, config):
+            assert config["message.max.bytes"] == 6291456
+
+        def flush(self, timeout):
+            pass
+
+    class Consumer:
+        def __init__(self, config):
+            self.config = config
+
+    def handlers(topic, publisher, stop, stack, settings):
+        seen.append(("handlers", topic))
+        return {"FileChanged": lambda _: None, "ProjectDeleted": lambda _: None}
+
+    def worker(consumer, topics, handlers, publisher, stop):
+        seen.append(("worker", consumer.config["group.id"], topics))
+
+        class Worker:
+            def run(self, event):
+                assert event.wait(3)
+
+        return Worker()
+
+    settings = BusinessSettings.from_env(
+        {"KAFKA_PROJECT_CHANGED_ENABLED": "true", "KAFKA_BOOTSTRAP_SERVERS": "broker"}
+    )
+    assert settings.subscriptions == ((PROJECT_CHANGED, PROJECT_CHANGED_V2),)
+    both = BusinessSettings("broker", (PROJECT_CHANGED, REFRESH_REQUESTED))
+    assert both.subscriptions == ((PROJECT_CHANGED,), (REFRESH_REQUESTED,))
+    assert BusinessSettings("broker", (PROJECT_CHANGED_V2,)).subscriptions == (
+        (PROJECT_CHANGED_V2,),
+    )
+    with pytest.raises(ValueError):
+        BusinessSettings("broker", ("content.project.changed.v3",))
+    monkeypatch.setattr("app.kafka.business_runtime.business_worker", worker)
+    runtime = BusinessPollingRuntime(
+        settings,
+        handler_factory=handlers,
+        consumer_factory=Consumer,
+        producer_factory=Producer,
+    )
+    runtime.start()
+    assert runtime.healthy
+    runtime.close()
+    assert seen == [
+        ("handlers", PROJECT_CHANGED),
+        ("worker", "graph-rag.project-changed", (PROJECT_CHANGED, PROJECT_CHANGED_V2)),
+    ]
+
+
+@pytest.mark.parametrize("configured", [True, False])
+def test_refresh_handlers_unwrap_the_project_key_per_request(monkeypatch, configured):
+    from tests.test_kafka_handlers import SETTINGS, request_event
+
+    for key, value in {
+        "GRAPH_REFRESH_COMPLETED_BUCKET": "artifacts",
+        "GRAPH_REFRESH_REQUEST_BUCKET": "inputs",
+        "GRAPH_REFRESH_REGION": "ap-northeast-2",
+        "NEPTUNE_ENDPOINT": "neptune.test",
+        "OPENAI_API_KEY": "local-test-only",
+        "CONTENT_BASE_URL": "http://content-api",
+        "OPENAI_MODEL": "gpt-6-luna",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("MANUSCRIPT_KEY_ID", raising=False)
+    stores, unwrapped = [], []
+
+    @contextmanager
+    def service(*, artifacts, **kwargs):
+        stores.append(artifacts)
+        yield SimpleNamespace(run=lambda request: None, fail=lambda *args: None)
+
+    class Keys:
+        def unwrap(self, project_id, wrapped_key):
+            unwrapped.append((project_id, wrapped_key))
+            return bytes(32)
+
+    monkeypatch.setattr("app.kafka.business_runtime.neptune_refresh_service", service)
+    if configured:
+        monkeypatch.setattr(
+            "app.kafka.business_runtime.manuscript_keys",
+            lambda env: nullcontext(Keys()),
+        )
+    request, user, _, _ = refresh_request(request_event(), SETTINGS)
+    settings = BusinessSettings("broker:9092", (REFRESH_REQUESTED,))
+    with ExitStack() as stack:
+        handler = real_handlers(REFRESH_REQUESTED, None, Event(), stack, settings)[
+            "GraphRefreshRequested"
+        ]
+        handler._run(request, user, None)
+        if not configured:
+            with pytest.raises(RefreshFailure) as caught:
+                handler._run(request, user, b"wrapped")
+            assert caught.value.failure.code == "MANUSCRIPT_KEY_UNAVAILABLE"
+            assert caught.value.failure.retryable
+            assert len(stores) == 1 and stores[0].key is None
+            return
+        handler._run(request, user, b"wrapped")
+        handler._fail(request, user, b"wrapped", Failure("GRAPH_NOT_READY", "x"))
+    plain, keyed, failed = stores
+    assert plain.key is None
+    assert keyed.key == failed.key == bytes(32)
+    assert keyed.client is plain.client and keyed.settings is plain.settings
+    assert unwrapped == [(request.job.project_id, b"wrapped")] * 2

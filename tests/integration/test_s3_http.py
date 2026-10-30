@@ -4,6 +4,7 @@ import base64
 import json
 import threading
 from dataclasses import replace
+from functools import partial
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
@@ -15,10 +16,12 @@ from botocore.config import Config
 from app.adapters.refresh_artifacts import S3ArtifactSettings, S3RefreshArtifacts
 from app.adapters.refresh_schema import (
     ContextObject,
+    RequestObject,
     fingerprint,
     input_bytes,
     json_bytes,
 )
+from app.manuscript_crypto import is_envelope, open_envelope, seal
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import Outcome, RefreshResult
 from evaluation.cases import new_setting_cases
@@ -135,9 +138,15 @@ def s3_server():
         thread.join()
 
 
+KEY = bytes(range(32))
+
+
 def setup_case(state, store):
     case = new_setting_cases("gpt-5.6-luna", "s3-test")[1]
     body = input_bytes(case.source)
+    if store.key is not None:
+        job = case.request.job
+        body = seal(store.key, job.project_id, job.request_id, "refresh_input", body)
     request = replace(
         case.request,
         job=replace(case.request.job, input_fingerprint=fingerprint(body)),
@@ -262,15 +271,16 @@ def test_write_race_is_idempotent_or_conflict_and_409_is_retryable(s3_server):
     case, _ = setup_case(state, store)
     ref = store._ref(case.request, "request")
     body = b'{"example":1}'
-    assert store._put(ref, body) == store._put(ref, body)
+    put = partial(store._put, case.request, "request")
+    assert put(body) == put(body) == ref
     with pytest.raises(RequestConflict):
-        store._put(ref, b'{"example":2}')
+        put(b'{"example":2}')
     state["failures"][("PUT", "artifact-bucket/" + ref.key)] = (
         409,
         "ConditionalRequestConflict",
     )
     with pytest.raises(RefreshFailure) as caught:
-        store._put(ref, body)
+        put(body)
     assert caught.value.failure.retryable
 
 
@@ -353,3 +363,137 @@ def test_context_json_keeps_whitespace_emoji_and_null_inactive_body(s3_server):
     assert (
         json.loads(json_bytes(encoded))["snapshot"]["documents"][0]["body_text"] == text
     )
+
+
+def artifact_objects(state):
+    return {
+        path.rsplit("/", 1)[1]: body
+        for path, (body, _) in state["objects"].items()
+        if path.startswith("artifact-bucket/")
+    }
+
+
+def test_plaintext_requests_keep_plaintext_artifacts(s3_server):
+    state, store = s3_server
+    case, scenario = setup_case(state, store)
+    scenario.service.run(case.request)
+    objects = artifact_objects(state)
+    assert {"request.json", "context.json", "result.json"} <= set(objects)
+    assert all(body.startswith(b"{") for body in objects.values())
+
+
+def test_encrypted_request_seals_text_artifacts_and_restarts_without_model(s3_server):
+    state, plain = s3_server
+    store = plain.with_key(KEY)
+    case, scenario = setup_case(state, store)
+    job = case.request.job
+    manuscript = store.read_input(case.request).documents[0].body_text
+    completion = scenario.service.run(case.request)
+    assert completion.outcome == Outcome.PROPOSED
+    objects = artifact_objects(state)
+    assert objects["request.json"].startswith(b"{")
+    assert RequestObject.model_validate_json(objects["request.json"]).request == (
+        case.request
+    )
+    for name, purpose in (
+        ("context.json", "refresh_context"),
+        ("result.json", "refresh_result"),
+    ):
+        assert is_envelope(objects[name])
+        assert manuscript.encode() not in objects[name]
+        opened = open_envelope(
+            KEY, job.project_id, job.request_id, purpose, objects[name]
+        )
+        assert json.loads(opened)
+    assert manuscript in open_envelope(
+        KEY, job.project_id, job.request_id, "refresh_context", objects["context.json"]
+    ).decode("utf-8")
+    result = store.read_result(case.request)
+    assert result.new_document_proposals == case.expected.new_document_proposals
+    with pytest.raises(RefreshFailure) as caught:
+        plain.read_result(case.request)
+    assert caught.value.failure.code == "S3_OBJECT_INVALID"
+    state["objects"].pop("input-bucket/refresh/input.json")
+    state["objects"].pop("artifact-bucket/" + store._ref(case.request, "context").key)
+    restarted = assemble(case, None, CallBudget(1))
+    restarted.service.artifacts = S3RefreshArtifacts(store.client, store.settings, KEY)
+    assert restarted.service.run(case.request) == completion
+    assert restarted.service.model.budget.used == 0
+
+
+def test_encrypted_writes_compare_opened_content_not_envelope_bytes(s3_server):
+    state, plain = s3_server
+    store = plain.with_key(KEY)
+    case, scenario = setup_case(state, store)
+    scenario.service.run(case.request)
+    snapshot = store.read_context(case.request)
+    assert store.save_context(snapshot) == store._ref(case.request, "context")
+    altered = replace(snapshot, target_ids=())
+    with pytest.raises(RequestConflict):
+        store.save_context(altered)
+    result = store.read_result(case.request)
+    assert store.save_result(case.request, result) == store._ref(case.request, "result")
+    with pytest.raises(RequestConflict):
+        store.save_result(case.request, replace(result, outcome=Outcome.NO_CHANGE))
+    ref = store._ref(case.request, "batch-0009")
+    put = partial(store._put, case.request, "batch-0009")
+    assert put(b'{"example":1}') == put(b'{"example":1}') == ref
+    with pytest.raises(RequestConflict):
+        put(b'{"example":2}')
+    sent = [
+        body
+        for method, path, _, body in state["requests"]
+        if (method, path) == ("PUT", "artifact-bucket/" + ref.key)
+    ]
+    assert len(sent) == 3 and len(set(sent)) == 3
+    assert all(is_envelope(body) for body in sent)
+
+
+def test_encrypted_batches_use_their_own_purpose(s3_server):
+    state, plain = s3_server
+    store = plain.with_key(KEY)
+    case, _ = setup_case(state, store)
+    job = case.request.job
+    result = RefreshResult(job, Outcome.NO_CHANGE)
+    ref = store.save_batch(case.request, 1, ("m1",), result)
+    body = artifact_objects(state)["batch-0001.json"]
+    assert is_envelope(body)
+    assert json.loads(
+        open_envelope(KEY, job.project_id, job.request_id, "refresh_batch", body)
+    )["seed_ids"] == ["m1"]
+    assert store.read_batch(case.request, 1) == (("m1",), result)
+    assert store.save_batch(case.request, 1, ("m1",), result) == ref
+    with pytest.raises(RefreshFailure):
+        plain.read_batch(case.request, 1)
+
+
+def test_encrypted_input_fingerprint_purpose_and_key_are_checked(s3_server):
+    state, plain = s3_server
+    store = plain.with_key(KEY)
+    case, _ = setup_case(state, store)
+    job = case.request.job
+    envelope = state["objects"]["input-bucket/refresh/input.json"][0]
+    original = input_bytes(case.source)
+    assert store.read_input(case.request) == replace(case.source, job=job)
+    with pytest.raises(RefreshFailure) as caught:
+        plain.read_input(case.request)
+    assert caught.value.failure.code == "S3_INPUT_INVALID"
+    plaintext_fingerprint = replace(
+        case.request, job=replace(job, input_fingerprint=fingerprint(original))
+    )
+    with pytest.raises(RefreshFailure) as caught:
+        store.read_input(plaintext_fingerprint)
+    assert caught.value.failure.code == "INPUT_FINGERPRINT_MISMATCH"
+    wrong = seal(KEY, job.project_id, job.request_id, "refresh_result", original)
+    state["objects"]["input-bucket/refresh/input.json"] = (wrong, {})
+    with pytest.raises(RefreshFailure) as caught:
+        store.read_input(
+            replace(
+                case.request, job=replace(job, input_fingerprint=fingerprint(wrong))
+            )
+        )
+    assert caught.value.failure.code == "S3_INPUT_INVALID"
+    assert "private" not in str(caught.value)
+    state["objects"]["input-bucket/refresh/input.json"] = (original, {})
+    assert store.read_input(plaintext_fingerprint).documents == case.source.documents
+    assert envelope != original

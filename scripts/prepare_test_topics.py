@@ -7,16 +7,18 @@ def main():
     admin = AdminClient({"bootstrap.servers": "127.0.0.1:19092"})
     topics = (
         "content.project.changed.v1",
+        "content.project.changed.v2",
         "content.graph-refresh.requested.v1",
         "graph-rag.graph-refresh.completed.v1",
         "content.project.changed.v1.graph-rag.dlq",
+        "content.project.changed.v2.graph-rag.dlq",
         "content.graph-refresh.requested.v1.graph-rag.dlq",
         "graph-rag.graph-refresh.completed.v1.content.dlq",
     )
     existing = admin.list_topics(timeout=5).topics
     for future in admin.create_topics(
         [
-            NewTopic(topic, 6 if topic == topics[0] else 3, 1)
+            NewTopic(topic, 6 if topic in topics[:2] else 3, 1)
             for topic in topics
             if topic not in existing
         ]
