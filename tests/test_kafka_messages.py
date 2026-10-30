@@ -10,7 +10,6 @@ import pytest
 from app.kafka.errors import InvalidEvent
 from app.kafka.messages import (
     PROJECT_CHANGED,
-    PROJECT_CHANGED_V2,
     REFRESH_REQUESTED,
     completion_record,
     dead_letter_record,
@@ -192,17 +191,17 @@ def test_dlq_preserves_original_bytes_and_replaces_diagnostics():
     assert b"secret" not in b"".join(value or b"" for _, value in output.headers)
 
 
-def test_project_changed_v2_uses_v1_wire_rules_and_its_own_dlq():
-    record = replace(content_record("FileChanged"), topic=PROJECT_CHANGED_V2)
+def test_project_changed_is_v2_only_with_its_own_dlq():
+    record = content_record("FileChanged")
+    assert record.topic == "content.project.changed.v2"
     assert parse_event(record).sequence == 2**63 - 1
     with pytest.raises(InvalidEvent):
         parse_event(with_header(record, "ce_sequence", None))
-    deleted = replace(content_record("ProjectDeleted"), topic=PROJECT_CHANGED_V2)
-    assert parse_event(deleted).event_type == "ProjectDeleted"
-    assert parse_event(replace(content_record(), topic=PROJECT_CHANGED_V2)) is None
     output = dead_letter_record(record, ValueError("secret"))
     assert output.topic == "content.project.changed.v2.graph-rag.dlq"
-    assert (output.key, output.value) == (record.key, record.value)
-    assert (
-        dict(output.headers)["kafka_dlt-original-topic"] == PROJECT_CHANGED_V2.encode()
-    )
+    assert dict(output.headers)["kafka_dlt-original-topic"] == record.topic.encode()
+    v1 = replace(record, topic="content.project.changed.v1")
+    with pytest.raises(ValueError, match="Unsupported"):
+        parse_event(v1)
+    with pytest.raises(ValueError, match="Unsupported"):
+        dead_letter_record(v1, ValueError("secret"))
