@@ -13,6 +13,7 @@ from confluent_kafka import Consumer, Producer
 from openai import OpenAI
 
 from app.adapters.llm import ModelLimits, OpenAIProposalModel
+from app.adapters.manuscript_keys import manuscript_keys
 from app.adapters.neptune_graph import NeptuneProjectionStore
 from app.adapters.neptune_refresh import neptune_refresh_service
 from app.adapters.projection_ready import ProjectionReadiness
@@ -21,7 +22,12 @@ from app.adapters.refresh_inbox import NeptuneRefreshInbox
 from app.kafka.consumer import business_worker
 from app.kafka.errors import ProcessingStopped
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
-from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
+from app.kafka.messages import (
+    PROJECT_CHANGED,
+    PROJECT_CHANGED_TOPICS,
+    PROJECT_CHANGED_V2,
+    REFRESH_REQUESTED,
+)
 from app.kafka.polling import consumer_config
 from app.kafka.publisher import KafkaPublisher, producer_config
 from app.projection.service import GraphProjectionHandler
@@ -53,21 +59,31 @@ class BusinessSettings:
         if (
             not self.topics
             or len(set(self.topics)) != len(self.topics)
-            or not set(self.topics) <= {PROJECT_CHANGED, REFRESH_REQUESTED}
+            or not set(self.topics)
+            <= {PROJECT_CHANGED, PROJECT_CHANGED_V2, REFRESH_REQUESTED}
         ):
             raise ValueError("Invalid business subscriptions")
         if not (math.isfinite(self.shutdown_seconds) and self.shutdown_seconds > 0):
             raise ValueError("Invalid worker time budgets")
 
+    @property
+    def subscriptions(self) -> tuple[tuple[str, ...], ...]:
+        groups = (
+            tuple(t for t in self.topics if t in PROJECT_CHANGED_TOPICS),
+            tuple(t for t in self.topics if t == REFRESH_REQUESTED),
+        )
+        return tuple(group for group in groups if group)
+
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
         topics = tuple(
             topic
-            for topic, key in (
-                (PROJECT_CHANGED, "KAFKA_PROJECT_CHANGED_ENABLED"),
-                (REFRESH_REQUESTED, "KAFKA_REFRESH_REQUESTED_ENABLED"),
+            for topics, key in (
+                (PROJECT_CHANGED_TOPICS, "KAFKA_PROJECT_CHANGED_ENABLED"),
+                ((REFRESH_REQUESTED,), "KAFKA_REFRESH_REQUESTED_ENABLED"),
             )
             if enabled(env, key)
+            for topic in topics
         )
         if not topics:
             return None
@@ -107,7 +123,7 @@ class BudgetedModel:
 
 
 def real_handlers(topic, publisher, stop, stack, settings):
-    if topic == PROJECT_CHANGED:
+    if topic in PROJECT_CHANGED_TOPICS:
         store = stack.enter_context(NeptuneProjectionStore.from_env())
         handler = ProjectionEventHandler(GraphProjectionHandler(store))
         return {"FileChanged": handler, "ProjectDeleted": handler}
@@ -117,6 +133,7 @@ def real_handlers(topic, publisher, stop, stack, settings):
             artifact_settings, region_name=os.environ.get("GRAPH_REFRESH_REGION")
         )
     )
+    keys = stack.enter_context(manuscript_keys(os.environ))
     ready = stack.enter_context(ProjectionReadiness.from_env())
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
@@ -144,21 +161,34 @@ def real_handlers(topic, publisher, stop, stack, settings):
     plan_budget = limits.input_budget - 2 * limits.max_output_tokens - PLAN_RESERVE
     model = BudgetedModel(client, limits, stop)
 
-    def service(user_id):
+    def store(request, wrapped_key):
+        if wrapped_key is None:
+            return artifacts
+        if keys is None:
+            raise RefreshFailure(
+                Failure(
+                    "MANUSCRIPT_KEY_UNAVAILABLE",
+                    "Manuscript key is not configured",
+                    True,
+                )
+            )
+        return artifacts.with_key(keys.unwrap(request.job.project_id, wrapped_key))
+
+    def service(request, user_id, wrapped_key):
         return neptune_refresh_service(
-            artifacts=artifacts,
+            artifacts=store(request, wrapped_key),
             model=model,
             user_id=user_id,
             tokens=model,
             plan_budget=plan_budget,
         )
 
-    def run(request, user_id):
-        with service(user_id) as refresh:
+    def run(request, user_id, wrapped_key):
+        with service(request, user_id, wrapped_key) as refresh:
             refresh.run(request)
 
-    def fail(request, user_id, failure):
-        with service(user_id) as refresh:
+    def fail(request, user_id, wrapped_key, failure):
+        with service(request, user_id, wrapped_key) as refresh:
             refresh.fail(request, failure)
 
     return {
@@ -207,12 +237,12 @@ class BusinessPollingRuntime:
         if self._threads:
             raise RuntimeError("Business runtime can only start once")
         try:
-            for topic in self.settings.topics:
+            for topics in self.settings.subscriptions:
                 ready = Event()
                 thread = Thread(
                     target=self._run,
-                    args=(topic, ready),
-                    name=f"kafka-{topic}",
+                    args=(topics, ready),
+                    name=f"kafka-{topics[0]}",
                     daemon=True,
                 )
                 self._threads.append(thread)
@@ -256,7 +286,7 @@ class BusinessPollingRuntime:
         finally:
             ready.set()
 
-    def _run(self, topic, ready):
+    def _run(self, topics, ready):
         try:
             with ExitStack() as stack:
                 producer = self._producer(
@@ -265,11 +295,11 @@ class BusinessPollingRuntime:
                 stack.callback(producer.flush, 1)
                 publisher = KafkaPublisher(producer)
                 handlers = self._handlers(
-                    topic, publisher, self._stop, stack, self.settings
+                    topics[0], publisher, self._stop, stack, self.settings
                 )
                 group = (
                     "graph-rag.project-changed"
-                    if topic == PROJECT_CHANGED
+                    if topics[0] in PROJECT_CHANGED_TOPICS
                     else "graph-rag.graph-refresh-requested"
                 )
                 config = consumer_config(self.settings.bootstrap_servers, group)
@@ -277,7 +307,7 @@ class BusinessPollingRuntime:
                 consumer = self._consumer(config)
                 try:
                     worker = business_worker(
-                        consumer, topic, handlers, publisher, self._stop
+                        consumer, topics, handlers, publisher, self._stop
                     )
                 except Exception:
                     consumer.close()
@@ -294,7 +324,7 @@ class BusinessPollingRuntime:
             # Do not log exception messages or chains containing message bodies.
             logger.error(
                 "Business Kafka worker failed: topic=%s reason=%s",
-                topic,
+                ",".join(topics),
                 type(failure).__name__,
             )
         finally:

@@ -28,6 +28,7 @@ def consumer_config(bootstrap_servers: str, group_id: str) -> dict:
         "enable.auto.offset.store": False,
         "auto.offset.reset": "earliest",
         "allow.auto.create.topics": False,
+        "max.partition.fetch.bytes": 6291456,
         # The callbacks below use full eager assignments, not cooperative deltas.
         "group.protocol": "classic",
         "partition.assignment.strategy": "range",

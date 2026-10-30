@@ -162,7 +162,7 @@ def test_default_overlap_preserves_legacy_request_and_context_bytes():
     )
     store._put = Mock()
     store._check_request(snapshot.request, create=True)
-    assert store._put.call_args.args[1] == request_body
+    assert store._put.call_args.args[2] == request_body
     assert RequestObject.model_validate_json(request_body).request == snapshot.request
 
 

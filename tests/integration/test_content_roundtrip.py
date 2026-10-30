@@ -18,7 +18,7 @@ from app.adapters.refresh_artifacts import S3ArtifactSettings, S3RefreshArtifact
 from app.adapters.refresh_inbox import NeptuneRefreshInbox
 from app.kafka.business_runtime import BusinessPollingRuntime, BusinessSettings
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
-from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
+from app.kafka.messages import PROJECT_CHANGED, PROJECT_CHANGED_V2, REFRESH_REQUESTED
 from app.projection.service import GraphProjectionHandler
 from app.refresh.models import ChangePlan, ModelSettings, WrittenCandidate
 
@@ -65,7 +65,7 @@ def test_real_content_request_and_completion_roundtrip():
             return {"FileChanged": handler, "ProjectDeleted": handler}
         ready = stack.enter_context(ProjectionReadiness(endpoint))
 
-        def run(request, user_id):
+        def run(request, user_id, wrapped_key):
             with neptune_refresh_service(
                 artifacts=artifacts,
                 model=NoChangeModel(),
@@ -82,7 +82,9 @@ def test_real_content_request_and_completion_roundtrip():
         }
 
     runtime = BusinessPollingRuntime(
-        BusinessSettings(bootstrap, (PROJECT_CHANGED, REFRESH_REQUESTED)),
+        BusinessSettings(
+            bootstrap, (PROJECT_CHANGED, PROJECT_CHANGED_V2, REFRESH_REQUESTED)
+        ),
         handler_factory=handlers,
         outbox_factory=lambda: NeptuneRefreshInbox(endpoint),
     )

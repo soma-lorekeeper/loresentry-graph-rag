@@ -33,6 +33,7 @@ from app.adapters.refresh_schema import (
     json_bytes,
     omit_default_discovery,
 )
+from app.manuscript_crypto import EnvelopeError, is_envelope, open_envelope, seal
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import ArtifactRef, Failure, InputSnapshot
 from app.refresh.selection import validate_document, validate_input
@@ -88,8 +89,37 @@ class S3ArtifactSettings:
 class S3RefreshArtifacts:
     """RefreshArtifactStore 구현. 쓰기는 If-None-Match로 기존 객체를 덮어쓰지 않는다."""
 
-    def __init__(self, client, settings: S3ArtifactSettings):
-        self.client, self.settings = client, settings
+    def __init__(self, client, settings: S3ArtifactSettings, key: bytes | None = None):
+        self.client, self.settings, self.key = client, settings, key
+
+    def with_key(self, key: bytes) -> "S3RefreshArtifacts":
+        return type(self)(self.client, self.settings, key)
+
+    @staticmethod
+    def _purpose(kind):
+        return "refresh_batch" if kind.startswith("batch-") else f"refresh_{kind}"
+
+    def _open(self, request, purpose, body, code="S3_OBJECT_INVALID"):
+        if not is_envelope(body):
+            return body
+        if self.key is None:
+            fail(code, "Encrypted S3 object requires a manuscript key")
+        try:
+            return open_envelope(
+                self.key,
+                request.job.project_id,
+                request.job.request_id,
+                purpose,
+                body,
+            )
+        except EnvelopeError:
+            fail(code, "Encrypted S3 object cannot be opened")
+
+    def _get(self, request, kind, *, optional=False):
+        body = self._read(self._ref(request, kind), optional=optional)
+        if body is None:
+            return None
+        return self._open(request, self._purpose(kind), body)
 
     def _ref(self, request, kind):
         if any(
@@ -138,22 +168,36 @@ class S3RefreshArtifacts:
         finally:
             stream.close()
 
-    def _put(self, ref, body):
+    def _put(self, request, kind, body):
+        ref = self._ref(request, kind)
         if len(body) > self.settings.max_object_bytes:
             fail("S3_OBJECT_TOO_LARGE", "S3 object exceeds byte budget")
+        stored = body
+        if self.key is not None and kind != "request":
+            stored = seal(
+                self.key,
+                request.job.project_id,
+                request.job.request_id,
+                self._purpose(kind),
+                body,
+            )
+            if len(stored) > self.settings.max_object_bytes:
+                fail("S3_OBJECT_TOO_LARGE", "S3 object exceeds byte budget")
         try:
             self.client.put_object(
                 Bucket=ref.bucket,
                 Key=ref.key,
-                Body=body,
+                Body=stored,
                 ContentType="application/json",
                 IfNoneMatch="*",
-                Metadata={"sha256": fingerprint(body)},
-                ChecksumSHA256=base64.b64encode(sha256(body).digest()).decode("ascii"),
+                Metadata={"sha256": fingerprint(stored)},
+                ChecksumSHA256=base64.b64encode(sha256(stored).digest()).decode(
+                    "ascii"
+                ),
             )
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") == "PreconditionFailed":
-                if self._read(ref) != body:
+                if self._get(request, kind) != body:
                     raise RequestConflict(
                         "Stored S3 object differs from proposed content"
                     ) from None
@@ -204,13 +248,12 @@ class S3RefreshArtifacts:
 
     def _check_request(self, request, *, create=False):
         expected = RequestObject(schema_version="refresh-request-v1", request=request)
-        ref = self._ref(request, "request")
         if create:
             value = expected.model_dump(mode="json")
             omit_default_discovery(value["request"])
-            self._put(ref, json_bytes(value))
+            self._put(request, "request", json_bytes(value))
             return True
-        body = self._read(ref, optional=True)
+        body = self._get(request, "request", optional=True)
         if body is None:
             return False
         try:
@@ -240,6 +283,7 @@ class S3RefreshArtifacts:
         body = self._read(ref, protected=False)
         if request.job.input_fingerprint != fingerprint(body):
             fail("INPUT_FINGERPRINT_MISMATCH", "S3 input checksum differs from request")
+        body = self._open(request, "refresh_input", body, "S3_INPUT_INVALID")
         try:
             value = InputObject.model_validate_json(body)
         except ValidationError:
@@ -257,7 +301,7 @@ class S3RefreshArtifacts:
 
     def read_context(self, request):
         manifest = self._check_request(request)
-        body = self._read(self._ref(request, "context"), optional=True)
+        body = self._get(request, "context", optional=True)
         if body is None:
             return None
         if not manifest:
@@ -298,7 +342,7 @@ class S3RefreshArtifacts:
         request = snapshot.request
         self._validate_context(request, snapshot)
         body = context_bytes(snapshot)
-        saved = self._read(self._ref(request, "context"), optional=True)
+        saved = self._get(request, "context", optional=True)
         if saved is not None:
             if saved != body:
                 raise RequestConflict("Execution snapshot is immutable")
@@ -310,11 +354,11 @@ class S3RefreshArtifacts:
         if any(documents.get(d.document_id) != d for d in source.documents):
             fail("S3_OBJECT_INVALID", "Execution snapshot differs from original input")
         self._check_request(request, create=True)
-        return self._put(self._ref(request, "context"), body)
+        return self._put(request, "context", body)
 
     def read_result(self, request):
         manifest = self._check_request(request)
-        body = self._read(self._ref(request, "result"), optional=True)
+        body = self._get(request, "result", optional=True)
         if body is None:
             return None
         if not manifest:
@@ -343,11 +387,11 @@ class S3RefreshArtifacts:
         except (ValueError, TypeError):
             fail("S3_OBJECT_INVALID", "Result or execution snapshot is invalid")
         self._check_request(request, create=True)
-        return self._put(self._ref(request, "result"), body)
+        return self._put(request, "result", body)
 
     def read_batch(self, request, index):
         manifest = self._check_request(request)
-        body = self._read(self._ref(request, f"batch-{index:04d}"), optional=True)
+        body = self._get(request, f"batch-{index:04d}", optional=True)
         if body is None:
             return None
         if not manifest:
@@ -373,7 +417,7 @@ class S3RefreshArtifacts:
         except (ValueError, TypeError):
             fail("S3_OBJECT_INVALID", "Batch result is invalid")
         self._check_request(request, create=True)
-        return self._put(self._ref(request, f"batch-{index:04d}"), json_bytes(value))
+        return self._put(request, f"batch-{index:04d}", json_bytes(value))
 
 
 @contextmanager
