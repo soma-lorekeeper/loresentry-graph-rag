@@ -245,7 +245,7 @@ def test_stop_during_poll_leaves_new_message_uncommitted():
 @pytest.mark.parametrize(
     ("topic", "group"),
     [
-        ("content.project.changed.v1", "graph-rag-fake-test"),
+        ("content.project.changed.v2", "graph-rag-fake-test"),
         ("graph-rag.sandbox.test", "graph-rag-production"),
     ],
 )

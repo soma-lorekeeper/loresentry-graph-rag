@@ -26,7 +26,7 @@ def enabled(monkeypatch):
         {
             "KAFKA_POLLING_ENABLED": "true",
             "KAFKA_BOOTSTRAP_SERVERS": "broker:9092",
-            "KAFKA_POLLING_TOPICS": "content.project.changed.v1",
+            "KAFKA_POLLING_TOPICS": "content.project.changed.v2",
         },
         {
             "KAFKA_POLLING_ENABLED": "true",

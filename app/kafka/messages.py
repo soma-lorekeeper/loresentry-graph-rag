@@ -12,14 +12,11 @@ from app.kafka.polling import Record
 from app.refresh.models import Completion
 from app.refresh.serialization import completion_to_payload
 
-PROJECT_CHANGED = "content.project.changed.v1"
-PROJECT_CHANGED_V2 = "content.project.changed.v2"
-PROJECT_CHANGED_TOPICS = (PROJECT_CHANGED, PROJECT_CHANGED_V2)
+PROJECT_CHANGED = "content.project.changed.v2"
 REFRESH_REQUESTED = "content.graph-refresh.requested.v1"
 REFRESH_COMPLETED = "graph-rag.graph-refresh.completed.v1"
 EVENT_TYPES = {
     PROJECT_CHANGED: frozenset({"FileChanged", "ProjectDeleted"}),
-    PROJECT_CHANGED_V2: frozenset({"FileChanged", "ProjectDeleted"}),
     REFRESH_REQUESTED: frozenset({"GraphRefreshRequested"}),
 }
 COMPLETION_NAMESPACE = uuid5(NAMESPACE_URL, "urn:loresentry:graph-refresh-completed:v1")
@@ -117,7 +114,7 @@ def parse_event(record: Record) -> IncomingEvent | None:
     if media_type != "application/json":
         raise InvalidEvent("invalid:content-type")
     sequence = None
-    if record.topic in PROJECT_CHANGED_TOPICS:
+    if record.topic == PROJECT_CHANGED:
         raw = _header(record, "ce_sequence")
         if not raw.isascii() or not raw.isdecimal() or len(raw) > 19:
             raise InvalidEvent("invalid:ce_sequence")

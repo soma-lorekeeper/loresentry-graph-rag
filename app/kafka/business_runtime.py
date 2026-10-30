@@ -22,12 +22,7 @@ from app.adapters.refresh_inbox import NeptuneRefreshInbox
 from app.kafka.consumer import business_worker
 from app.kafka.errors import ProcessingStopped
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
-from app.kafka.messages import (
-    PROJECT_CHANGED,
-    PROJECT_CHANGED_TOPICS,
-    PROJECT_CHANGED_V2,
-    REFRESH_REQUESTED,
-)
+from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
 from app.kafka.polling import consumer_config
 from app.kafka.publisher import KafkaPublisher, producer_config
 from app.projection.service import GraphProjectionHandler
@@ -59,31 +54,21 @@ class BusinessSettings:
         if (
             not self.topics
             or len(set(self.topics)) != len(self.topics)
-            or not set(self.topics)
-            <= {PROJECT_CHANGED, PROJECT_CHANGED_V2, REFRESH_REQUESTED}
+            or not set(self.topics) <= {PROJECT_CHANGED, REFRESH_REQUESTED}
         ):
             raise ValueError("Invalid business subscriptions")
         if not (math.isfinite(self.shutdown_seconds) and self.shutdown_seconds > 0):
             raise ValueError("Invalid worker time budgets")
 
-    @property
-    def subscriptions(self) -> tuple[tuple[str, ...], ...]:
-        groups = (
-            tuple(t for t in self.topics if t in PROJECT_CHANGED_TOPICS),
-            tuple(t for t in self.topics if t == REFRESH_REQUESTED),
-        )
-        return tuple(group for group in groups if group)
-
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
         topics = tuple(
             topic
-            for topics, key in (
-                (PROJECT_CHANGED_TOPICS, "KAFKA_PROJECT_CHANGED_ENABLED"),
-                ((REFRESH_REQUESTED,), "KAFKA_REFRESH_REQUESTED_ENABLED"),
+            for topic, key in (
+                (PROJECT_CHANGED, "KAFKA_PROJECT_CHANGED_ENABLED"),
+                (REFRESH_REQUESTED, "KAFKA_REFRESH_REQUESTED_ENABLED"),
             )
             if enabled(env, key)
-            for topic in topics
         )
         if not topics:
             return None
@@ -123,7 +108,7 @@ class BudgetedModel:
 
 
 def real_handlers(topic, publisher, stop, stack, settings):
-    if topic in PROJECT_CHANGED_TOPICS:
+    if topic == PROJECT_CHANGED:
         store = stack.enter_context(NeptuneProjectionStore.from_env())
         handler = ProjectionEventHandler(GraphProjectionHandler(store))
         return {"FileChanged": handler, "ProjectDeleted": handler}
@@ -237,12 +222,12 @@ class BusinessPollingRuntime:
         if self._threads:
             raise RuntimeError("Business runtime can only start once")
         try:
-            for topics in self.settings.subscriptions:
+            for topic in self.settings.topics:
                 ready = Event()
                 thread = Thread(
                     target=self._run,
-                    args=(topics, ready),
-                    name=f"kafka-{topics[0]}",
+                    args=(topic, ready),
+                    name=f"kafka-{topic}",
                     daemon=True,
                 )
                 self._threads.append(thread)
@@ -286,7 +271,7 @@ class BusinessPollingRuntime:
         finally:
             ready.set()
 
-    def _run(self, topics, ready):
+    def _run(self, topic, ready):
         try:
             with ExitStack() as stack:
                 producer = self._producer(
@@ -295,11 +280,11 @@ class BusinessPollingRuntime:
                 stack.callback(producer.flush, 1)
                 publisher = KafkaPublisher(producer)
                 handlers = self._handlers(
-                    topics[0], publisher, self._stop, stack, self.settings
+                    topic, publisher, self._stop, stack, self.settings
                 )
                 group = (
                     "graph-rag.project-changed"
-                    if topics[0] in PROJECT_CHANGED_TOPICS
+                    if topic == PROJECT_CHANGED
                     else "graph-rag.graph-refresh-requested"
                 )
                 config = consumer_config(self.settings.bootstrap_servers, group)
@@ -307,7 +292,7 @@ class BusinessPollingRuntime:
                 consumer = self._consumer(config)
                 try:
                     worker = business_worker(
-                        consumer, topics, handlers, publisher, self._stop
+                        consumer, topic, handlers, publisher, self._stop
                     )
                 except Exception:
                     consumer.close()
@@ -324,7 +309,7 @@ class BusinessPollingRuntime:
             # Do not log exception messages or chains containing message bodies.
             logger.error(
                 "Business Kafka worker failed: topic=%s reason=%s",
-                ",".join(topics),
+                topic,
                 type(failure).__name__,
             )
         finally:

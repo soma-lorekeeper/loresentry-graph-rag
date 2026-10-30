@@ -13,7 +13,7 @@ from app.kafka.business_runtime import (
     real_handlers,
 )
 from app.kafka.handlers import refresh_request
-from app.kafka.messages import PROJECT_CHANGED, PROJECT_CHANGED_V2, REFRESH_REQUESTED
+from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
 from app.main import create_app
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Failure
@@ -28,7 +28,7 @@ def test_settings_disabled_separate_from_fake_and_require_explicit_enable():
             "KAFKA_BOOTSTRAP_SERVERS": "broker:9092",
         }
     )
-    assert settings.topics == (PROJECT_CHANGED, PROJECT_CHANGED_V2)
+    assert settings.topics == (PROJECT_CHANGED,)
     for env in (
         {"KAFKA_REFRESH_REQUESTED_ENABLED": "yes"},
         {"KAFKA_REFRESH_REQUESTED_ENABLED": "true"},
@@ -70,7 +70,7 @@ def test_two_subscriptions_have_independent_owned_threads_and_cleanup(monkeypatc
         class Worker:
             def run(self, event):
                 assert consumer.group.startswith("graph-rag.")
-                running[0 if PROJECT_CHANGED in topic else 1].set()
+                running[0 if topic == PROJECT_CHANGED else 1].set()
                 assert event.wait(3)
 
         return Worker()
@@ -175,7 +175,7 @@ def test_refresh_handlers_take_the_model_from_environment(monkeypatch):
         assert handlers["GraphRefreshRequested"]._model_settings.model == "gpt-6-luna"
 
 
-def test_project_changed_v1_and_v2_use_one_consumer_in_the_same_group(monkeypatch):
+def test_project_changed_consumer_subscribes_to_v2_only(monkeypatch):
     seen = []
 
     class Producer:
@@ -193,8 +193,8 @@ def test_project_changed_v1_and_v2_use_one_consumer_in_the_same_group(monkeypatc
         seen.append(("handlers", topic))
         return {"FileChanged": lambda _: None, "ProjectDeleted": lambda _: None}
 
-    def worker(consumer, topics, handlers, publisher, stop):
-        seen.append(("worker", consumer.config["group.id"], topics))
+    def worker(consumer, topic, handlers, publisher, stop):
+        seen.append(("worker", consumer.config["group.id"], topic))
 
         class Worker:
             def run(self, event):
@@ -205,14 +205,10 @@ def test_project_changed_v1_and_v2_use_one_consumer_in_the_same_group(monkeypatc
     settings = BusinessSettings.from_env(
         {"KAFKA_PROJECT_CHANGED_ENABLED": "true", "KAFKA_BOOTSTRAP_SERVERS": "broker"}
     )
-    assert settings.subscriptions == ((PROJECT_CHANGED, PROJECT_CHANGED_V2),)
-    both = BusinessSettings("broker", (PROJECT_CHANGED, REFRESH_REQUESTED))
-    assert both.subscriptions == ((PROJECT_CHANGED,), (REFRESH_REQUESTED,))
-    assert BusinessSettings("broker", (PROJECT_CHANGED_V2,)).subscriptions == (
-        (PROJECT_CHANGED_V2,),
-    )
-    with pytest.raises(ValueError):
-        BusinessSettings("broker", ("content.project.changed.v3",))
+    assert settings.topics == ("content.project.changed.v2",)
+    for topic in ("content.project.changed.v1", "content.project.changed.v3"):
+        with pytest.raises(ValueError):
+            BusinessSettings("broker", (topic,))
     monkeypatch.setattr("app.kafka.business_runtime.business_worker", worker)
     runtime = BusinessPollingRuntime(
         settings,
@@ -225,7 +221,7 @@ def test_project_changed_v1_and_v2_use_one_consumer_in_the_same_group(monkeypatc
     runtime.close()
     assert seen == [
         ("handlers", PROJECT_CHANGED),
-        ("worker", "graph-rag.project-changed", (PROJECT_CHANGED, PROJECT_CHANGED_V2)),
+        ("worker", "graph-rag.project-changed", "content.project.changed.v2"),
     ]
 
 
