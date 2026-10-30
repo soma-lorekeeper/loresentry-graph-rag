@@ -13,13 +13,7 @@ from app.kafka.errors import (
     ProcessingStopped,
     RetryableProcessingError,
 )
-from app.kafka.messages import (
-    PROJECT_CHANGED,
-    PROJECT_CHANGED_TOPICS,
-    PROJECT_CHANGED_V2,
-    REFRESH_REQUESTED,
-    dead_letter_record,
-)
+from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED, dead_letter_record
 from tests.test_kafka_messages import content_record
 
 
@@ -248,7 +242,7 @@ def test_polling_commits_only_confirmed_business_or_dead_letter(failure_kind):
     assert transport.closed
 
 
-def test_project_changed_v1_and_v2_share_one_handler_and_dead_letter_by_topic():
+def test_project_changed_consumer_reads_v2_only_and_dead_letters_to_v2():
     from app.kafka.consumer import business_worker
     from tests.test_kafka_polling import Transport
 
@@ -256,23 +250,21 @@ def test_project_changed_v1_and_v2_share_one_handler_and_dead_letter_by_topic():
     dead_letters = DeadLetters()
     handlers = {"FileChanged": received.append, "ProjectDeleted": received.append}
     consume = BusinessConsumerHandler(
-        PROJECT_CHANGED_TOPICS, handlers, dead_letters, Event(), retry_delays=()
+        PROJECT_CHANGED, handlers, dead_letters, Event(), retry_delays=()
     )
-    v1 = content_record("FileChanged")
-    v2 = replace(v1, topic=PROJECT_CHANGED_V2)
-    consume(v1)
-    consume(v2)
-    assert [event.event_type for event in received] == ["FileChanged"] * 2
-    consume(replace(v2, value=b"not JSON"))
-    ((record, failure),) = dead_letters.sent
-    assert dead_letter_record(record, failure).topic == (
+    record = content_record("FileChanged")
+    consume(record)
+    assert [event.event_type for event in received] == ["FileChanged"]
+    consume(replace(record, value=b"not JSON"))
+    ((dead, failure),) = dead_letters.sent
+    assert dead_letter_record(dead, failure).topic == (
         "content.project.changed.v2.graph-rag.dlq"
     )
     with pytest.raises(ValueError, match="outside"):
-        consume(content_record())
+        consume(replace(record, topic="content.project.changed.v1"))
     with pytest.raises(ValueError):
         BusinessConsumerHandler(
-            (PROJECT_CHANGED, REFRESH_REQUESTED), handlers, DeadLetters(), Event()
+            "content.project.changed.v1", handlers, DeadLetters(), Event()
         )
 
     class Subscription(Transport):
@@ -283,7 +275,5 @@ def test_project_changed_v1_and_v2_share_one_handler_and_dead_letter_by_topic():
     stop = Event()
     stop.set()
     transport = Subscription(stop)
-    business_worker(
-        transport, PROJECT_CHANGED_TOPICS, handlers, DeadLetters(), stop
-    ).run(stop)
-    assert transport.topics == [PROJECT_CHANGED, PROJECT_CHANGED_V2]
+    business_worker(transport, PROJECT_CHANGED, handlers, DeadLetters(), stop).run(stop)
+    assert transport.topics == ["content.project.changed.v2"]
