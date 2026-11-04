@@ -54,16 +54,19 @@ class KafkaPublisher:
     def send(self, record: OutgoingRecord) -> None:
         """레코드 하나를 보내고 전달 확인을 기다린다. 결과 줄은 `kafka call completed`(topic·partition·offset)다.
 
-        실패는 `kafka call failed`(warn, error.type DeliveryError)이고 예외를 그대로 전파한다.
+        실패는 `kafka call failed`(warn, error.type DeliveryError)이고 예외를 그대로 전파한다. 헤더 목록은 로깅 팩토리
+        (LogFlow.call)가 발행 span을 열고 그 trace의 traceparent를 넣은 뒤 보낸다.
         """
         deadline = self._clock() + self._timeout
         # 전달 콜백이 받은 (error, message). 이 레코드의 확인만 담는다
         result = []
+        # 보낼 헤더 목록. LogFlow.call이 여기에 traceparent를 넣는다
+        headers = list(record.headers)
 
         def delivered(error, message):
             result.append((error, message))
 
-        with LogFlow.call("kafka") as call:
+        with LogFlow.call("kafka", topic=record.topic, headers=headers) as call:
             while True:
                 remaining = deadline - self._clock()
                 if remaining <= 0:
@@ -73,7 +76,7 @@ class KafkaPublisher:
                         record.topic,
                         key=record.key,
                         value=record.value,
-                        headers=list(record.headers),
+                        headers=headers,
                         on_delivery=delivered,
                     )
                     break
@@ -104,31 +107,24 @@ class KafkaPublisher:
             raise DeliveryError("Kafka delivery polling failed") from None
 
     def publish(
-        self,
-        completion: Completion,
-        *,
-        occurred_at: datetime | None = None,
-        traceparent: str | None = None,
+        self, completion: Completion, *, occurred_at: datetime | None = None
     ) -> None:
         """최신화 완료 이벤트를 보낸다.
 
-        Args:
-            traceparent: 완료를 기록한 요청 처리의 traceparent(InboxEvent에 저장한 값). 있으면 헤더로 실어
-                받는 서비스(content)가 그 trace를 잇는다. 없으면 헤더를 싣지 않는다.
+        relay가 행에 저장한 trace의 범위(LogScope.outbox_event) 안에서 부르므로, 로깅 팩토리가 넣는 traceparent 헤더가
+        완료를 기록한 요청 처리의 trace를 잇고 받는 서비스(content)가 그 trace를 잇는다.
         """
         AppLogger.current().info(
             "graph refresh completion publish",
             LogField.param("refresh_outcome", completion.outcome),
         )
-        self.send(
-            completion_record(
-                completion,
-                now=occurred_at or datetime.now(UTC),
-                traceparent=traceparent,
-            )
-        )
+        self.send(completion_record(completion, now=occurred_at or datetime.now(UTC)))
 
     def dead_letter(self, record: Record, failure: Exception) -> None:
-        """원본 레코드를 그 topic의 DLQ로 보낸다. 원본 헤더(traceparent 포함)를 그대로 싣는다."""
+        """원본 레코드를 그 topic의 DLQ로 보낸다. 원본 헤더를 그대로 싣는다.
+
+        그 레코드의 흐름(LogFlow.kafka_record의 consumer span) 안에서 부르므로, 원본의 traceparent 헤더는 로깅 팩토리가 발행
+        span의 값(원본 trace를 잇는다)으로 바꿔 싣는다.
+        """
         AppLogger.current().info("kafka dead letter publish")
         self.send(dead_letter_record(record, failure))

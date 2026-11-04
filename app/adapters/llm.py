@@ -100,6 +100,8 @@ class OpenAIProposalModel:
         """호출당 최대 한 요청을 보내고 응답을 업무 검증 전 후보로 반환한다.
 
         결과 줄은 `openai call completed`(걸린 시간, 사용 토큰)다. 프롬프트·모델 출력은 남기지 않는다.
+        Responses API에는 계측이 없어(EDOT OpenAI 계측은 chat completions·embeddings만 감싸고, SDK의 httpx2는 traceparent를
+        싣지 않도록 계측을 끈다) 호출 span을 OpenAI 호스트의 CLIENT span(모델 이름 포함)으로 연다.
         """
         AppLogger.current().info(
             "openai response create call",
@@ -124,7 +126,9 @@ class OpenAIProposalModel:
         if self.count(model_input) > self.limits.input_budget:
             fail("MODEL_REQUEST_INVALID", "Model input token budget exceeded")
         try:
-            with LogFlow.call("openai") as call:
+            with LogFlow.call(
+                "openai", server=self.client.base_url.host, model=model_input.model
+            ) as call:
                 response = self.client.responses.create(
                     **request_arguments(model_input),
                     max_output_tokens=self.limits.max_output_tokens,
@@ -158,7 +162,10 @@ class OpenAIProposalModel:
         """
         AppLogger.current().info("openai input tokens count call")
         try:
-            with LogFlow.call("openai") as call:
+            # 생성 호출과 같이 OpenAI 호스트의 CLIENT span이다
+            with LogFlow.call(
+                "openai", server=self.client.base_url.host, model=model_input.model
+            ) as call:
                 response = self.client.responses.input_tokens.count(
                     **request_arguments(model_input),
                     timeout=self.limits.timeout_seconds,

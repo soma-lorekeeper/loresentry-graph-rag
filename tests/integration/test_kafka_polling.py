@@ -43,7 +43,7 @@ def test_real_polling_fake_processing_and_committed_offset():
         assert producer.flush(15) == 0
         assert deliveries == [None, None, None]
         fake_producer = FakeProducer()
-        fake_handler = FakeConsumerHandler(fake_producer)
+        fake_handler = FakeConsumerHandler(fake_producer, group)
         records = []
 
         def handle(record):

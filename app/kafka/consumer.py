@@ -27,6 +27,12 @@ EVENT_NAMES = {
     PROJECT_CHANGED: "project changed",
     REFRESH_REQUESTED: "graph refresh requested",
 }
+# topic별 consumer group. business_runtime이 consumer 설정에 쓰고, 레코드 흐름의 consumer span(messaging.consumer.group.name)에도
+# 같은 값이 남는다
+GROUPS = {
+    PROJECT_CHANGED: "graph-rag.project-changed",
+    REFRESH_REQUESTED: "graph-rag.graph-refresh-requested",
+}
 # 이벤트 종류별 대상(ce_subject)의 도메인 ID 필드. 레코드 흐름의 이후 모든 줄에 project_id와 함께 붙인다
 SUBJECT_FIELDS = {
     "FileChanged": LogField.file_id,
@@ -89,6 +95,7 @@ class BusinessConsumerHandler:
             record.headers,
             EVENT_TYPES[self._topic],
             EVENT_NAMES[self._topic],
+            GROUPS[self._topic],
         ) as flow:
             # wire 검증 → 업무 처리기 → 재시도·DLQ. 결과는 레코드 흐름의 종료 줄(outcome)에 남는다
             try:

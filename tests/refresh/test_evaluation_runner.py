@@ -172,6 +172,8 @@ def test_live_auth_failure_stops_suite_and_records_unknown_cost(tmp_path, monkey
     def fake_client(**kwargs):
         yield SimpleNamespace(
             max_retries=0,
+            # 호출 span의 server.address로 읽는 SDK client의 주소
+            base_url=SimpleNamespace(host="api.openai.com"),
             responses=SimpleNamespace(
                 create=create,
                 input_tokens=SimpleNamespace(count=count_input_tokens),

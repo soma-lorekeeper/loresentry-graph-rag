@@ -212,7 +212,7 @@ class FakePublisher:
         self.calls = calls if calls is not None else Calls()
         self.delivered = []
 
-    def publish(self, completion, *, occurred_at=None, traceparent=None):
+    def publish(self, completion, *, occurred_at=None):
         self.calls.record("publisher.publish", completion)
         self.delivered.append(deepcopy(completion))
         self.calls.record("publisher.ack", completion)

@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from app.application import (
     GraphHealthService,
@@ -32,9 +31,9 @@ SERVICE = "graph-rag-api"
 # 상태 진단이 확인하는 데이터베이스. 주소·역할·엔진 버전은 응답에 싣지 않는다
 DATABASE = "neptune"
 
-# uvicorn이 이 모듈을 import할 때(서버가 "Started server process"를 찍기 전) 로그 형식과 trace를 맞춘다
+# uvicorn이 이 모듈을 import할 때(서버가 "Started server process"를 찍기 전) 로그 형식(ECS JSON)을 맞춘다.
+# 추적 엔진과 계측(content 호출·Neptune 쿼리의 httpx, S3·KMS의 botocore)은 EDOT distro가 프로세스 시작 때 켠다
 configure_logging(SERVICE)
-setup_tracing(SERVICE)
 
 
 @skip_entry_log("builds the application once at startup")
@@ -80,7 +79,8 @@ def create_app(source: GraphStatusSource | None = None) -> FastAPI:
     app = FastAPI(title=SERVICE, lifespan=lifespan)
     # 접근 로그 미들웨어는 계측이 미들웨어 묶음 바깥에서 연 서버 span 안에서 돈다
     app.add_middleware(RequestLogMiddleware)
-    FastAPIInstrumentor.instrument_app(app)
+    # 요청마다 서버 span을 연다. 받은 traceparent가 있으면 그 trace를 잇고, 내부 ASGI span(receive·send)은 만들지 않는다
+    setup_tracing(app)
 
     @app.get("/")
     def root() -> dict[str, str]:

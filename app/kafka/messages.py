@@ -156,13 +156,11 @@ def completion_event_id(completion: Completion) -> UUID:
     )
 
 
-def completion_record(
-    completion: Completion, *, now: datetime, traceparent: str | None = None
-) -> OutgoingRecord:
+def completion_record(completion: Completion, *, now: datetime) -> OutgoingRecord:
     """동일 요청의 재발행은 UUIDv5 ID를 유지한다. 시간은 IO 계층에서 주입한다.
 
-    traceparent는 완료를 기록한 요청 처리의 trace다(InboxEvent에 저장한 값). 있으면 같은 이름의 헤더로 실어
-    받는 서비스가 그 trace를 잇는다. 없으면(추적 전에 기록한 완료) 헤더를 싣지 않는다.
+    traceparent 헤더는 여기서 만들지 않는다. 발행할 때 로깅 팩토리(LogFlow.call)가 지금 문맥(행에 저장한 trace의 범위)으로
+    넣는다.
     """
     project_id = _uuid(completion.job.project_id, "project_id")
     request_id = _uuid(completion.job.request_id, "request_id")
@@ -180,8 +178,6 @@ def completion_record(
         .replace("+00:00", "Z"),
         "content-type": "application/json",
     }
-    if traceparent is not None:
-        headers["traceparent"] = traceparent
     return OutgoingRecord(
         REFRESH_COMPLETED,
         project_id.encode(),
@@ -193,7 +189,10 @@ def completion_record(
 
 
 def dead_letter_record(record: Record, failure: Exception) -> OutgoingRecord:
-    """원본 bytes를 보존하고 실패 진단에 예외 메시지·본문을 복사하지 않는다."""
+    """원본 bytes를 보존하고 실패 진단에 예외 메시지·본문을 복사하지 않는다.
+
+    원본 헤더는 그대로 둔다. 그중 traceparent는 발행할 때 로깅 팩토리가 지금 문맥(그 레코드의 consumer span)의 값으로 바꾼다.
+    """
     if record.topic not in EVENT_TYPES:
         raise ValueError("Unsupported business topic")
     reason = f"{type(failure).__module__}.{type(failure).__qualname__}"

@@ -39,6 +39,8 @@ def setup(tmp_path, text):
     response._request_id = "req_test"
     client = SimpleNamespace(
         max_retries=0,
+        # 호출 span의 server.address로 읽는 SDK client의 주소
+        base_url=SimpleNamespace(host="api.openai.com"),
         responses=SimpleNamespace(
             create=Mock(return_value=response),
             input_tokens=SimpleNamespace(count=count_input_tokens),

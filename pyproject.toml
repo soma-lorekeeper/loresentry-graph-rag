@@ -12,11 +12,14 @@ target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
-# TID251·T20: 로그는 app.logs(AppLogger, LogFlow, LogScope)로만 남긴다(LOG_SCHEMA.md 5절 "로그 클래스")
+# TID251·T20: 로그는 app.logs(AppLogger, LogFlow, LogScope)로만 남기고, 추적 API(opentelemetry)도 app.logs 안에서만 쓴다
+# (LOG_SCHEMA.md 5절 "로그 클래스")
 select = ["E4", "E7", "E9", "F", "I", "B", "UP", "TID", "T20"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "logging".msg = "Log through app.logs (AppLogger.current(), LogFlow, LogScope)."
+# span·문맥·traceparent 헤더는 로깅 팩토리(app.logs)와 EDOT distro만 다룬다(LOG_SCHEMA.md 5절 "만들기")
+"opentelemetry".msg = "Trace through app.logs (LogFlow, LogScope, setup_tracing). The EDOT distro sets up the SDK."
 "app.logs._fields".msg = "Internal logging module. Import from app.logs."
 "app.logs._flow".msg = "Internal logging module. Import from app.logs."
 "app.logs._format".msg = "Internal logging module. Import from app.logs."

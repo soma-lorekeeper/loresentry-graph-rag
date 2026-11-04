@@ -149,6 +149,8 @@ class RecordingClient:
 
     def __init__(self, client, recorder: AttemptRecorder):
         self.client, self.recorder = client, recorder
+        # 호출 span의 server.address(OpenAI 호스트)를 읽는 주소. SDK client의 값 그대로다
+        self.base_url = client.base_url
         # 토큰 계수는 생성이 아니라 기록하지 않고 그대로 넘긴다.
         self.responses = SimpleNamespace(
             create=self.create, input_tokens=client.responses.input_tokens
