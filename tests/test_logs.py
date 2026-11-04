@@ -640,3 +640,30 @@ def receipt_json(completion: Completion) -> str:
     return Receipt(
         schema_version="refresh-inbox-v1", completion=completion
     ).model_dump_json()
+
+
+def test_spans_are_sent_only_when_the_collector_address_is_set(monkeypatch):
+    # 한 번만 설정하는 표시를 풀어 setup_tracing이 provider를 새로 만들게 하고, 만든 provider를 받아 본다
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    from app.logs import _trace
+
+    made = []
+    monkeypatch.setattr(otel_trace, "set_tracer_provider", made.append)
+    monkeypatch.setenv("APP_VERSION", "build-1-1")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setattr(_trace, "_configured", False)
+    _trace.setup_tracing("graph-rag-test")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+    monkeypatch.setattr(_trace, "_configured", False)
+    _trace.setup_tracing("graph-rag-test")
+
+    local, dev = made
+    assert local._active_span_processor._span_processors == ()
+    assert [type(p) for p in dev._active_span_processor._span_processors] == [
+        BatchSpanProcessor
+    ]
+    assert dev.resource.attributes["service.version"] == "build-1-1"
+    for provider in made:
+        provider.shutdown()

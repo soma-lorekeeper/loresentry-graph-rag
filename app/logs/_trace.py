@@ -1,17 +1,20 @@
 """OpenTelemetry span을 로그 시작점과 저장용 traceparent 모양으로 다룬다(LOG_SCHEMA.md 7절).
 
 span은 계측 라이브러리(FastAPI 서버 span, content httpx 호출 span)와 로깅 팩토리(Kafka 레코드 하나의 consumer span,
-스케줄·폴링 회차의 span)가 연다. 전송(exporter)은 6단계에서 환경 변수로 켜므로 지금은 없다. exporter가 없어도
-trace·span ID는 만들어지고 HTTP·Kafka 헤더로 전파된다.
+스케줄·폴링 회차의 span)가 연다. 환경 변수 OTEL_EXPORTER_OTLP_ENDPOINT(EDOT Collector 주소)가 있을 때만 span을
+OTLP/HTTP로 보낸다. 보내지 않아도 trace·span ID는 만들어지고 HTTP·Kafka 헤더로 전파된다.
 """
 
+import os
 import re
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.propagate import extract
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ParentBased
 from opentelemetry.trace import Span, SpanKind, Status, StatusCode
 
@@ -29,16 +32,27 @@ _configured = False
 def setup_tracing(service_name: str) -> None:
     """SDK TracerProvider를 전역으로 둔다. 여러 번 불러도 처음 한 번만 적용한다.
 
-    resource는 service.name 하나, sampler는 ParentBased(AlwaysOn)다(부모가 표본이면 따르고, 시작점은 모두 남긴다).
-    exporter는 두지 않는다. 전파(propagator)는 OpenTelemetry 기본값(W3C tracecontext)을 쓴다.
+    resource는 service.name과 service.version(APP_VERSION, 로그와 같은 이미지 태그)이고, Resource.create가
+    OTEL_RESOURCE_ATTRIBUTES(예: deployment.environment.name=dev, Kibana APM의 환경 구분)를 함께 합친다.
+    sampler는 ParentBased(AlwaysOn)다(부모가 표본이면 따르고, 시작점은 모두 남긴다). 전파(propagator)는 OpenTelemetry
+    기본값(W3C tracecontext)을 쓴다.
+
+    OTEL_EXPORTER_OTLP_ENDPOINT가 있으면(dev overlay가 collector 주소를 넣는다) span을 묶어 OTLP/HTTP로 보낸다. 없으면(로컬 실행,
+    테스트) 보내지 않는다. 보내지 못한 span은 버려지고 요청·레코드 처리는 멈추지 않는다.
     """
     global _configured
     if _configured:
         return
+    attributes = {SERVICE_NAME: service_name}
+    if version := os.environ.get("APP_VERSION"):
+        attributes[SERVICE_VERSION] = version
     provider = TracerProvider(
-        resource=Resource.create({SERVICE_NAME: service_name}),
+        resource=Resource.create(attributes),
         sampler=ParentBased(ALWAYS_ON),
     )
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        # exporter가 같은 환경 변수에서 주소를 읽고 /v1/traces를 붙인다
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
     _configured = True
 
