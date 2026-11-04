@@ -1,6 +1,5 @@
 """환경 설정과 서버 수명주기로 소유하는 fake Kafka polling runtime."""
 
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import Event, Thread
@@ -10,8 +9,7 @@ from confluent_kafka import Consumer
 
 from app.kafka.fake import FakeConsumerHandler, FakeProducer
 from app.kafka.polling import PollingWorker, consumer_config
-
-logger = logging.getLogger(__name__)
+from app.logs import LogField, LogFlow
 
 
 def validate_fake_subscription(topics: tuple[str, ...], group_id: str) -> None:
@@ -87,27 +85,37 @@ class FakePollingRuntime:
             raise RuntimeError("Kafka polling runtime failed to start") from self._error
 
     def _run(self) -> None:
+        """polling 스레드의 수명 하나가 작업 흐름 하나다.
+
+        `kafka polling start` → `kafka polling completed`(기록한 sandbox 레코드 수) 또는 `kafka polling failed`
+        (error, error.type, 메시지 없는 스택)다.
+        """
         try:
-            config = consumer_config(
-                self._settings.bootstrap_servers, self._settings.group_id
-            )
-            # Keep close/commit network waits inside the pod's shutdown budget.
-            config["socket.timeout.ms"] = 10000
-            consumer = Consumer(config)
-            worker = PollingWorker(
-                consumer, self._settings.topics, FakeConsumerHandler(self.producer)
-            )
-            self._ready.set()
-            logger.info("Kafka polling started with fake consumer and producer")
-            worker.run(self._stop)
-            if not self._stop.is_set():
-                raise RuntimeError("Kafka polling worker stopped unexpectedly")
+            with LogFlow.task(
+                "kafka polling", LogField.param("topics", self._settings.topics)
+            ) as task:
+                try:
+                    config = consumer_config(
+                        self._settings.bootstrap_servers, self._settings.group_id
+                    )
+                    # Keep close/commit network waits inside the pod's shutdown budget.
+                    config["socket.timeout.ms"] = 10000
+                    consumer = Consumer(config)
+                    worker = PollingWorker(
+                        consumer,
+                        self._settings.topics,
+                        FakeConsumerHandler(self.producer),
+                    )
+                    self._ready.set()
+                    worker.run(self._stop)
+                    if not self._stop.is_set():
+                        raise RuntimeError("Kafka polling worker stopped unexpectedly")
+                finally:
+                    task.result(LogField.result("fake_published", self.producer.count))
         except BaseException as exc:
             self._error = exc
-            logger.exception("Kafka polling worker failed")
         finally:
             self._ready.set()
-            logger.info("Kafka polling stopped; fake_published=%s", self.producer.count)
 
     def close(self) -> None:
         self._stop.set()

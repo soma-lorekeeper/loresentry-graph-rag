@@ -1,11 +1,14 @@
 """Content 업무 payload 변환·업무 오류 분류를 서버 없이 확인한다."""
 
 import base64
+import json
 from dataclasses import replace
+from threading import Event
 from uuid import uuid4
 
 import pytest
 
+from app.kafka.consumer import BusinessConsumerHandler
 from app.kafka.errors import InvalidEvent, NotReady, RetryableProcessingError
 from app.kafka.handlers import (
     ProjectionEventHandler,
@@ -13,10 +16,24 @@ from app.kafka.handlers import (
     projection_change,
     refresh_request,
 )
-from app.kafka.messages import parse_event
+from app.kafka.messages import REFRESH_REQUESTED, parse_event
 from app.projection.models import ProjectionUnavailable
 from app.refresh.errors import RefreshFailure, RequestConflict
-from app.refresh.models import DocumentState, Failure, ModelSettings
+from app.refresh.models import (
+    DocumentState,
+    Failure,
+    ModelSettings,
+    Outcome,
+    RelatedDocuments,
+)
+from app.refresh.service import RefreshService
+from tests.fakes.refresh import (
+    FakeArtifacts,
+    FakeDocuments,
+    FakeInbox,
+    FakeModel,
+    FakeRelations,
+)
 from tests.test_kafka_messages import EVENT, PROJECT, REQUEST, content_record
 
 LOW = "11111111-1111-4111-8111-1111111111aa"
@@ -280,3 +297,159 @@ def test_file_changed_v2_payload_projects_without_reading_the_body():
         },
     )
     assert projection_change(deleted).deleted_file_ids == (REQUEST,)
+
+
+# ------------------------------------------------------------------ DLQ 전 FAILED 완료
+
+PROCESSING_FAILED = Failure(
+    "PROCESSING_FAILED", "Refresh request could not be processed"
+)
+TRACE = "0af7651916cd43dd8448eb211c80319c"
+
+
+def refresh_record():
+    """요청으로 해석되는 GraphRefreshRequested 레코드. 보낸 쪽의 traceparent 헤더가 있다."""
+    record = content_record()
+    payload = {
+        **json.loads(record.value),
+        "user_id": REQUEST,
+        "input_fingerprint": "a" * 64,
+        "location": {"bucket": "private-bucket", "key": "refresh/input.json"},
+        "files": [{"file_id": REQUEST, "revision_no": 0}],
+        "required_events": [],
+    }
+    return replace(
+        record,
+        value=json.dumps(payload).encode(),
+        headers=record.headers
+        + (("traceparent", f"00-{TRACE}-b7ad6b7169203331-01".encode()),),
+    )
+
+
+class Steps:
+    """FAILED 완료 기록과 DLQ 전송을 일어난 순서대로 모은다."""
+
+    def __init__(self, fail_error=None):
+        self.events = []
+        self.fail_error = fail_error
+
+    def fail(self, request, user, wrapped_key, failure):
+        if self.fail_error is not None:
+            raise self.fail_error
+        self.events.append(("completion", request.job.request_id, failure))
+
+    def dead_letter(self, record, failure):
+        self.events.append(("dlq", record.offset, failure))
+
+
+def consume(run, steps):
+    handler = RefreshEventHandler(run, lambda *args: None, SETTINGS, steps.fail)
+    BusinessConsumerHandler(
+        REFRESH_REQUESTED,
+        {"GraphRefreshRequested": handler},
+        steps,
+        Event(),
+        retry_delays=(0, 0),
+    )(refresh_record())
+
+
+def test_invalid_dependency_records_a_failed_completion_then_dead_letters(log_lines):
+    def run(request, user, wrapped_key):
+        raise RefreshFailure(Failure("S3_ACCESS_DENIED", "secret provider detail"))
+
+    steps = Steps()
+    consume(run, steps)
+    (completion, dead) = steps.events
+    assert completion == ("completion", REQUEST, PROCESSING_FAILED)
+    assert dead[0] == "dlq" and dead[2].args == ("invalid:refresh-dependency",)
+    (processed,) = log_lines.find("graph refresh requested event processed")
+    assert processed["loresentry.result.outcome"] == "FAILED"
+    assert processed["error.type"] == "InvalidEvent"
+    assert processed["loresentry.refresh.request_id"] == REQUEST
+    assert processed["trace.id"] == TRACE
+    assert "secret" not in log_lines.text()
+
+
+def test_exhausted_retries_record_a_failed_completion_then_dead_letter():
+    calls = []
+
+    def run(request, user, wrapped_key):
+        calls.append(request)
+        raise RefreshFailure(Failure("CONTENT_UNAVAILABLE", "secret", True))
+
+    steps = Steps()
+    consume(run, steps)
+    assert len(calls) == 3
+    (completion, dead) = steps.events
+    assert completion == ("completion", REQUEST, PROCESSING_FAILED)
+    assert dead[0] == "dlq" and isinstance(dead[2], RetryableProcessingError)
+
+
+def test_conflict_is_dead_lettered_without_a_completion():
+    def run(request, user, wrapped_key):
+        raise RequestConflict("different request")
+
+    steps = Steps()
+    consume(run, steps)
+    ((kind, _, failure),) = steps.events
+    assert kind == "dlq" and failure.args == ("conflict:refresh-request",)
+
+
+def test_unparseable_request_is_dead_lettered_without_a_completion():
+    steps = Steps()
+    handler = RefreshEventHandler(
+        lambda *a: pytest.fail("ran"), lambda *a: None, SETTINGS, steps.fail
+    )
+    record = refresh_record()
+    payload = {**json.loads(record.value), "files": []}
+    BusinessConsumerHandler(
+        REFRESH_REQUESTED, {"GraphRefreshRequested": handler}, steps, Event()
+    )(replace(record, value=json.dumps(payload).encode()))
+    ((kind, _, failure),) = steps.events
+    assert kind == "dlq" and failure.args == ("invalid:refresh-request",)
+
+
+def test_failed_completion_write_still_dead_letters_with_a_warning(log_lines):
+    def run(request, user, wrapped_key):
+        raise RefreshFailure(Failure("S3_ACCESS_DENIED", "denied"))
+
+    steps = Steps(RefreshFailure(Failure("S3_UNAVAILABLE", "secret storage", True)))
+    consume(run, steps)
+    ((kind, _, _),) = steps.events
+    assert kind == "dlq"
+    (warning,) = log_lines.find("graph refresh failed completion record failed")
+    assert warning["log.level"] == "WARN"
+    assert warning["error.type"] == "RefreshFailure"
+    assert "error.stack_trace" in warning
+    assert "secret" not in log_lines.text()
+
+
+def test_failed_completion_is_a_pending_inbox_event_with_the_record_trace():
+    """실제 RefreshService.fail 경로: FAILED 결과 저장 → InboxEvent 발행 대기(받은 trace를 함께 저장)."""
+    inbox = FakeInbox()
+    service = RefreshService(
+        artifacts=FakeArtifacts(),
+        relations=FakeRelations(RelatedDocuments()),
+        documents=FakeDocuments(),
+        model=FakeModel(None),
+        inbox=inbox,
+    )
+
+    def run(request, user, wrapped_key):
+        raise RefreshFailure(Failure("INPUT_FINGERPRINT_MISMATCH", "secret"))
+
+    dead_letters = Steps()
+    handler = RefreshEventHandler(
+        run,
+        lambda *args: None,
+        SETTINGS,
+        lambda request, user, wrapped_key, failure: service.fail(request, failure),
+    )
+    BusinessConsumerHandler(
+        REFRESH_REQUESTED, {"GraphRefreshRequested": handler}, dead_letters, Event()
+    )(refresh_record())
+    (pending,) = inbox.pending()
+    assert pending.completion.outcome == Outcome.FAILED
+    assert pending.completion.failure == PROCESSING_FAILED
+    assert pending.traceparent.startswith(f"00-{TRACE}-")
+    assert [kind for kind, _, _ in dead_letters.events] == ["dlq"]

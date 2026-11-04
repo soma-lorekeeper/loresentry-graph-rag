@@ -7,6 +7,16 @@ from app.kafka.messages import OutgoingRecord
 from app.kafka.publisher import KafkaPublisher, producer_config
 
 
+class Delivered:
+    """전달 콜백이 받는 메시지 대역. broker가 정한 partition·offset만 있다."""
+
+    def partition(self):
+        return 3
+
+    def offset(self):
+        return 41
+
+
 class ProducerStub:
     def __init__(self):
         self.now = 0.0
@@ -33,7 +43,7 @@ class ProducerStub:
         self.now += timeout
         if self.callback and self.now >= self.ack_after:
             callback, self.callback = self.callback, None
-            callback(self.delivery_error, object())
+            callback(self.delivery_error, Delivered())
 
 
 def publisher(producer, timeout=1):

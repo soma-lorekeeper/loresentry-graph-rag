@@ -51,6 +51,7 @@ Kafka의 다른 이벤트 ID로 동일 요청이 재전달되어도 이 완료 �
 | `completion_json` | `refresh-inbox-v1`. 결과 S3 위치·업무 결과·오류·프롬프트 버전이 있는 완료 값 |
 | `processed_at` | 이번 완료 삽입의 UTC 시각. 재발행에도 같은 ce_time 사용 |
 | `outbox_pending` | 새 기록은 문자열 true. Kafka ack 확인 뒤 false |
+| `traceparent` | 완료를 기록한 요청 처리(Kafka consumer span)의 W3C traceparent. relay가 완료 이벤트 헤더로 싣는다. 추적 문맥이 없으면 속성이 없다. `request_sha256`·중복 판정에는 들어가지 않는다 |
 
 본문·후보 목록·`RUNNING`·`RETRYABLE` 같은 진행 상태는 넣지 않는다.
 동일 요청의 재기록은 같은 완료 값일 때만 성공하며 처리 시각을 갱신하지 않는다.

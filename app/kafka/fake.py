@@ -4,6 +4,10 @@ from collections import deque
 from dataclasses import dataclass
 
 from app.kafka.polling import Record
+from app.logs import LogField, LogFlow, skip_entry_log
+
+# sandbox 레코드를 받는 consumer 레이어다(log.layer)
+LOG_LAYER = "consumer"
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,7 @@ class FakeProducer:
         self.published: deque[FakeReceipt] = deque(maxlen=100)
         self.count = 0
 
+    @skip_entry_log("records the sandbox receipt in memory")
     def publish(self, receipt: FakeReceipt) -> None:
         self.published.append(receipt)
         self.count += 1
@@ -33,8 +38,24 @@ class FakeConsumerHandler:
         self._producer = producer
 
     def __call__(self, record: Record) -> None:
-        self._producer.publish(
-            FakeReceipt(
-                record.topic, record.partition, record.offset, len(record.value or b"")
+        """레코드 위치만 기록한다. 처리 스레드에서 레코드마다 레코드 흐름을 연다(헤더의 trace를 잇는다).
+
+        업무 이벤트를 처리하지 않으므로 처리하는 ce_type이 없다(받은 종류는 모두 other로 남는다).
+        """
+        with LogFlow.kafka_record(
+            record.topic,
+            record.partition,
+            record.offset,
+            record.headers,
+            (),
+            "sandbox record",
+        ) as flow:
+            self._producer.publish(
+                FakeReceipt(
+                    record.topic,
+                    record.partition,
+                    record.offset,
+                    len(record.value or b""),
+                )
             )
-        )
+            flow.result(LogField.result("value", record.value or b""))

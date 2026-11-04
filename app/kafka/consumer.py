@@ -1,6 +1,5 @@
 """wire 검증·명시적 업무 처리기·재시도·DLQ를 기존 polling worker에 연결한다."""
 
-import logging
 from collections.abc import Callable, Mapping
 from threading import Event
 from typing import Protocol
@@ -13,10 +12,26 @@ from app.kafka.errors import (
     ProcessingStopped,
     RetryableProcessingError,
 )
-from app.kafka.messages import EVENT_TYPES, IncomingEvent, parse_event
+from app.kafka.messages import (
+    EVENT_TYPES,
+    PROJECT_CHANGED,
+    REFRESH_REQUESTED,
+    IncomingEvent,
+    parse_event,
+)
 from app.kafka.polling import PollingWorker, Record
+from app.logs import AppLogger, LogField, LogFlow, Outcome, skip_entry_log
 
-logger = logging.getLogger(__name__)
+# 레코드 흐름의 시작·종료 줄 문구에 쓰는 이벤트 이름(`<event> event received`)
+EVENT_NAMES = {
+    PROJECT_CHANGED: "project changed",
+    REFRESH_REQUESTED: "graph refresh requested",
+}
+# 이벤트 종류별 대상(ce_subject)의 도메인 ID 필드. 레코드 흐름의 이후 모든 줄에 project_id와 함께 붙인다
+SUBJECT_FIELDS = {
+    "FileChanged": LogField.file_id,
+    "GraphRefreshRequested": LogField.refresh_request_id,
+}
 
 
 class DeadLetterPublisher(Protocol):
@@ -57,50 +72,68 @@ class BusinessConsumerHandler:
         self._delays = retry_delays
 
     def __call__(self, record: Record) -> None:
+        """레코드 하나를 처리 스레드에서 처리한다.
+
+        처리 스레드는 contextvars를 옮기지 않으므로 레코드마다 여기서 레코드 흐름(LogFlow.kafka_record)을 연다.
+        헤더의 traceparent를 이은 consumer span과 레코드 문맥(topic·partition·offset, ce_id·ce_type·ce_subject)이
+        재시도·DLQ 줄과 업무 처리기·어댑터의 모든 줄에 붙는다.
+        """
         if record.topic != self._topic:
             raise ValueError("Record is outside the configured subscription")
         if self._stop.is_set():
             raise ProcessingStopped("Consumer is stopping")
-        try:
-            event = parse_event(record)
-        except InvalidEvent as failure:
-            self._reject(record, failure)
-            return
-        if event is None:
-            # Never log the untrusted ce_type or payload.
-            logger.warning(
-                "Kafka event skipped: topic=%s partition=%s offset=%s",
-                record.topic,
-                record.partition,
-                record.offset,
-            )
-            return
-        for attempt in range(len(self._delays) + 1):
-            if self._stop.is_set():
-                raise ProcessingStopped("Consumer is stopping")
+        with LogFlow.kafka_record(
+            record.topic,
+            record.partition,
+            record.offset,
+            record.headers,
+            EVENT_TYPES[self._topic],
+            EVENT_NAMES[self._topic],
+        ) as flow:
+            # wire 검증 → 업무 처리기 → 재시도·DLQ. 결과는 레코드 흐름의 종료 줄(outcome)에 남는다
             try:
-                self._handlers[event.event_type](event)
-                return
+                event = parse_event(record)
             except InvalidEvent as failure:
-                self._reject(record, failure)
+                self._reject(record, failure, flow)
                 return
-            except RetryableProcessingError as failure:
-                logger.warning(
-                    "Kafka processing failed: topic=%s partition=%s offset=%s "
-                    "event=%s attempt=%s",
-                    record.topic,
-                    record.partition,
-                    record.offset,
-                    event.event_id,
-                    attempt + 1,
+            if event is None:
+                # Never log the untrusted ce_type or payload.
+                # 받은 종류는 레코드 문맥의 loresentry.cloudevent.type(처리하지 않는 종류라 other)에 있다
+                AppLogger.current().warn(
+                    "kafka event skipped", LogField.error_type("UNKNOWN_EVENT_TYPE")
                 )
-                if attempt == len(self._delays):
-                    self._exhausted(record, event, failure)
+                flow.outcome(Outcome.SKIPPED)
+                return
+            subject = SUBJECT_FIELDS.get(event.event_type)
+            flow.add(
+                LogField.project_id(event.project_id),
+                None if subject is None else subject(event.subject),
+            )
+            for attempt in range(len(self._delays) + 1):
+                if self._stop.is_set():
+                    raise ProcessingStopped("Consumer is stopping")
+                try:
+                    # 업무 처리기가 이미 처리한 이벤트(inbox 중복)라고 알리면 결과를 DUPLICATE로 남긴다
+                    if self._handlers[event.event_type](event) == "DUPLICATE":
+                        flow.outcome(Outcome.DUPLICATE)
                     return
-                if self._stop.wait(self._delays[attempt]):
-                    raise ProcessingStopped("Consumer retry stopped") from None
+                except InvalidEvent as failure:
+                    self._reject(record, failure, flow, event)
+                    return
+                except RetryableProcessingError as failure:
+                    AppLogger.current().warn(
+                        "kafka processing failed",
+                        LogField.param("attempt", attempt + 1),
+                        LogField.error_type(type(failure).__name__),
+                        LogField.safe_stack_trace(failure),
+                    )
+                    if attempt == len(self._delays):
+                        self._exhausted(record, event, failure, flow)
+                        return
+                    if self._stop.wait(self._delays[attempt]):
+                        raise ProcessingStopped("Consumer retry stopped") from None
 
-    def _exhausted(self, record, event, failure):
+    def _exhausted(self, record, event, failure, flow):
         """재시도를 다 쓴 실패를 처리한다. 투영 대기는 처리기가 업무 실패로 끝낼 수 있다.
 
         처리기에 exhausted가 있고 실패가 NotReady면 그것을 부르고 offset을 진행한다.
@@ -108,25 +141,45 @@ class BusinessConsumerHandler:
         """
         hook = getattr(self._handlers[event.event_type], "exhausted", None)
         if hook is None or not isinstance(failure, NotReady):
-            self._reject(record, failure)
+            self._reject(record, failure, flow, event)
             return
         try:
             hook(event, failure)
         except (InvalidEvent, RetryableProcessingError) as hook_failure:
-            self._reject(record, hook_failure)
+            self._reject(record, hook_failure, flow, event)
 
-    def _reject(self, record: Record, failure: Exception) -> None:
+    def _reject(
+        self,
+        record: Record,
+        failure: Exception,
+        flow: LogFlow,
+        event: IncomingEvent | None = None,
+    ) -> None:
+        """레코드를 DLQ로 보낸다. 해석한 이벤트면 먼저 업무 처리기의 rejected를 부른다.
+
+        rejected는 DLQ로 가는 요청을 업무 실패로 끝낼 수 있다(최신화 요청의 FAILED 완료). 해석하지 못한 레코드는
+        업무 처리기가 무엇인지 모르므로 부르지 않는다.
+        """
         if self._stop.is_set():
             raise ProcessingStopped("Consumer is stopping")
-        self._dead_letters.dead_letter(record, failure)
-        logger.error(
-            "Kafka event dead-lettered: topic=%s partition=%s offset=%s",
-            record.topic,
-            record.partition,
-            record.offset,
+        hook = (
+            None
+            if event is None
+            else getattr(self._handlers[event.event_type], "rejected", None)
         )
+        if hook is not None:
+            hook(event, failure)
+        self._dead_letters.dead_letter(record, failure)
+        reason = type(failure).__name__
+        AppLogger.current().error(
+            "kafka event dead-lettered",
+            LogField.error_type(reason),
+            LogField.safe_stack_trace(failure),
+        )
+        flow.outcome(Outcome.FAILED).fail(reason)
 
 
+@skip_entry_log("builds the worker once per consumer thread")
 def business_worker(
     consumer: Consumer,
     topic: str,

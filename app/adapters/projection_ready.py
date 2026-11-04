@@ -3,11 +3,18 @@
 from app.adapters.neptune_client import NeptuneGremlinClient, NeptuneUnavailable
 from app.adapters.projection_gremlin import literal
 from app.kafka.errors import InvalidEvent, NotReady, RetryableProcessingError
+from app.logs import AppLogger, LogField
 from app.projection.models import CONSUMER_NAME
+
+# 투영 준비 상태를 Neptune에서 읽는 repository 레이어다(log.layer)
+LOG_LAYER = "repository"
 
 
 class ProjectionReadiness(NeptuneGremlinClient):
     def check(self, project_id: str, event_ids: tuple[str, ...]) -> None:
+        AppLogger.current().info(
+            "projection readiness check", LogField.param("required_events", event_ids)
+        )
         ids = ",".join(
             literal(f"inbox:{CONSUMER_NAME}:{event}") for event in set(event_ids)
         )

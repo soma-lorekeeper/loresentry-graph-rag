@@ -2,6 +2,7 @@
 
 from app.adapters.neptune_client import NeptuneGremlinClient, NeptuneUnavailable
 from app.adapters.projection_gremlin import literal
+from app.logs import AppLogger, LogField, skip_entry_log
 from app.projection.models import canonical_uuid
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import (
@@ -13,6 +14,9 @@ from app.refresh.models import (
     Relation,
 )
 from app.refresh.policy import RELATION_KEYS
+
+# 관계 그래프를 Neptune에서 읽는 repository 레이어다(log.layer)
+LOG_LAYER = "repository"
 
 
 def _failure(code: str, message: str, *, retryable: bool = False):
@@ -39,6 +43,7 @@ def _single_text(value: object) -> str:
     return value[0]
 
 
+@skip_entry_log("pure query building")
 def build_one_hop_query(
     project_id: str,
     seed_ids: tuple[str, ...],
@@ -75,6 +80,9 @@ class NeptuneRelatedDocumentSource(NeptuneGremlinClient):
     """RelatedDocumentSource의 실제 Neptune 구현. 본문은 Content 포트가 읽는다."""
 
     def find_related(self, request: RefreshRequest) -> RelatedDocuments:
+        AppLogger.current().info(
+            "graph related documents find", LogField.param("seed_ids", request.seed_ids)
+        )
         try:
             canonical_uuid(request.job.project_id)
             for seed in request.seed_ids:

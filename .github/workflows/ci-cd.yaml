@@ -79,6 +79,7 @@ jobs:
             --platform linux/amd64 \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             --label "org.opencontainers.image.version=${IMAGE_TAG}" \
+            --build-arg "APP_VERSION=${IMAGE_TAG}" \
             --tag "${ECR_IMAGE}:${IMAGE_TAG}" \
             .
 
