@@ -12,6 +12,7 @@ from app.adapters.llm_schema import (
     parse_candidate,
     response_usage,
 )
+from app.logs import AppLogger, LogField, LogFlow, skip_entry_log
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Failure, ModelCandidate, ModelInput, Usage
 from app.refresh.prompt_versions import SUPPORTED_PROMPT_VERSIONS
@@ -41,6 +42,7 @@ class ModelLimits:
         """호출 하나에 보낼 수 있는 입력 토큰. OpenAI 계수 API가 센 값과 비교한다."""
         return int(self.max_input_tokens * INPUT_BUDGET_RATIO)
 
+    @skip_entry_log("pure validation")
     def validate(self) -> None:
         """잘못된 예산을 네트워크 호출 전에 거절한다."""
         caps = MODEL_CAPABILITIES.get(self.model)
@@ -67,6 +69,7 @@ class ModelLimits:
             fail("MODEL_REQUEST_INVALID", "Invalid model limits")
 
 
+@skip_entry_log("raises a safe failure; the caller logs the call result")
 def fail(
     code: str,
     message: str,
@@ -94,7 +97,19 @@ class OpenAIProposalModel:
         self.limits = limits
 
     def generate(self, model_input: ModelInput) -> ModelCandidate:
-        """호출당 최대 한 요청을 보내고 응답을 업무 검증 전 후보로 반환한다."""
+        """호출당 최대 한 요청을 보내고 응답을 업무 검증 전 후보로 반환한다.
+
+        결과 줄은 `openai call completed`(걸린 시간, 사용 토큰)다. 프롬프트·모델 출력은 남기지 않는다.
+        """
+        AppLogger.current().info(
+            "openai response create call",
+            LogField.code(
+                "prompt_version", model_input.prompt_version, SUPPORTED_PROMPT_VERSIONS
+            ),
+            LogField.code(
+                "schema_version", model_input.schema_version, GENERATION_VERSIONS
+            ),
+        )
         self.limits.validate()
         if (
             model_input.model != self.limits.model
@@ -109,13 +124,22 @@ class OpenAIProposalModel:
         if self.count(model_input) > self.limits.input_budget:
             fail("MODEL_REQUEST_INVALID", "Model input token budget exceeded")
         try:
-            response = self.client.responses.create(
-                **request_arguments(model_input),
-                max_output_tokens=self.limits.max_output_tokens,
-                timeout=self.limits.timeout_seconds,
-                store=False,
-                truncation="disabled",
-            )
+            with LogFlow.call("openai") as call:
+                response = self.client.responses.create(
+                    **request_arguments(model_input),
+                    max_output_tokens=self.limits.max_output_tokens,
+                    timeout=self.limits.timeout_seconds,
+                    store=False,
+                    truncation="disabled",
+                )
+                # 공급자가 센 사용 토큰. 응답 본문은 남기지 않는다
+                reported = getattr(response, "usage", None)
+                call.result(
+                    LogField.result("input_tokens", _tokens(reported, "input_tokens")),
+                    LogField.result(
+                        "output_tokens", _tokens(reported, "output_tokens")
+                    ),
+                )
         except APITimeoutError:
             fail("MODEL_TIMEOUT", "Model request timed out", True)
         except APIConnectionError:
@@ -132,10 +156,16 @@ class OpenAIProposalModel:
         Raises:
             RefreshFailure: 통신 실패는 재시도 가능, 거절·잘못된 응답은 재시도 불가로 분류한다.
         """
+        AppLogger.current().info("openai input tokens count call")
         try:
-            response = self.client.responses.input_tokens.count(
-                **request_arguments(model_input), timeout=self.limits.timeout_seconds
-            )
+            with LogFlow.call("openai") as call:
+                response = self.client.responses.input_tokens.count(
+                    **request_arguments(model_input),
+                    timeout=self.limits.timeout_seconds,
+                )
+                call.result(
+                    LogField.result("input_tokens", _tokens(response, "input_tokens"))
+                )
         except APITimeoutError:
             fail("MODEL_TIMEOUT", "Model token count timed out", True)
         except APIConnectionError:
@@ -148,6 +178,13 @@ class OpenAIProposalModel:
         return tokens
 
 
+def _tokens(value, name: str) -> int | None:
+    """공급자 응답의 토큰 수. 정수가 아니면 None이라 필드에서 빠진다(응답 검증은 decode_response가 한다)."""
+    tokens = getattr(value, name, None)
+    return tokens if type(tokens) is int else None
+
+
+@skip_entry_log("pure request building")
 def request_arguments(model_input: ModelInput) -> dict:
     """생성과 토큰 계수가 같은 입력을 보도록 공유하는 Responses 인자."""
     return {
@@ -165,6 +202,7 @@ def request_arguments(model_input: ModelInput) -> dict:
     }
 
 
+@skip_entry_log("pure error classification")
 def status_failure(error: APIStatusError) -> Failure:
     """기존 AI의 일시 오류·할당량 오류 분류를 Responses SDK 계약으로 옮긴다."""
     body = error.body if isinstance(error.body, dict) else {}
@@ -185,6 +223,7 @@ def status_failure(error: APIStatusError) -> Failure:
     return Failure("MODEL_REQUEST_INVALID", "Model request rejected")
 
 
+@skip_entry_log("pure response decoding")
 def decode_response(
     response, *, model_input: ModelInput | None = None
 ) -> ModelCandidate:

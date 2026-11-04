@@ -8,6 +8,7 @@ from app.adapters.neptune_client import (
     NeptuneUnavailable,
 )
 from app.adapters.projection_gremlin import REJECTIONS, build_projection_query
+from app.logs import AppLogger
 from app.projection.models import (
     ApplyResult,
     ProjectionChange,
@@ -15,11 +16,15 @@ from app.projection.models import (
     ProjectionUnavailable,
 )
 
+# 그래프 투영을 Neptune에 쓰는 repository 레이어다(log.layer)
+LOG_LAYER = "repository"
+
 
 class NeptuneProjectionStore(NeptuneGremlinClient):
     """공통 transport를 사용하고 쓰기·중복 확인 결과만 성공으로 반환한다."""
 
     def apply(self, change: ProjectionChange) -> ApplyResult:
+        AppLogger.current().info("graph projection save")
         processed_at = datetime.now(UTC).isoformat(timespec="milliseconds")
         query = build_projection_query(change, processed_at)
         try:

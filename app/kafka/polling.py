@@ -7,6 +7,8 @@ from threading import Event
 
 from confluent_kafka import Consumer, KafkaError, KafkaException, TopicPartition
 
+from app.logs import kafka_client_logger
+
 
 @dataclass(frozen=True)
 class Record:
@@ -32,6 +34,8 @@ def consumer_config(bootstrap_servers: str, group_id: str) -> dict:
         # The callbacks below use full eager assignments, not cooperative deltas.
         "group.protocol": "classic",
         "partition.assignment.strategy": "range",
+        # librdkafka 로그를 stderr 평문 대신 이 서비스의 로그 형식(log.logger: librdkafka)으로 받는다
+        "logger": kafka_client_logger(),
     }
 
 

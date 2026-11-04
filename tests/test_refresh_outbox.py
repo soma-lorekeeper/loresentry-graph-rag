@@ -59,7 +59,7 @@ def test_relay_uses_stored_event_time_and_honors_stop():
     seen = []
 
     class Publisher:
-        def publish(self, completion, *, occurred_at):
+        def publish(self, completion, *, occurred_at, traceparent):
             seen.append((completion, occurred_at))
 
     relay = RefreshOutboxRelay(s.inbox, Publisher())

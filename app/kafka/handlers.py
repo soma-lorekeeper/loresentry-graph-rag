@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, Validat
 
 from app.kafka.errors import InvalidEvent, NotReady, RetryableProcessingError
 from app.kafka.messages import IncomingEvent
+from app.logs import AppLogger, LogField, skip_entry_log
 from app.projection.models import (
     FileState,
     Identifier,
@@ -28,6 +29,12 @@ from app.refresh.models import (
     RefreshRequest,
     SelectionSettings,
 )
+
+# 충돌한 최신화 요청을 거절할 때의 계약 검사 코드. 이 거절은 FAILED 완료를 남기지 않는다
+CONFLICT = "conflict:refresh-request"
+# DLQ로 보내는 최신화 요청을 끝내는 FAILED 완료의 고정 코드·문구. 예외 메시지는 싣지 않는다
+PROCESSING_FAILED = "PROCESSING_FAILED"
+PROCESSING_FAILED_MESSAGE = "Refresh request could not be processed"
 
 
 class WireModel(BaseModel):
@@ -87,6 +94,7 @@ class RefreshRequested(WireModel):
     wrapped_key: Annotated[StrictStr, Field(min_length=1)] | None = None
 
 
+@skip_entry_log("pure message conversion")
 def projection_change(event: IncomingEvent) -> ProjectionChange:
     if event.sequence is None:
         raise InvalidEvent("missing:ce_sequence")
@@ -133,6 +141,7 @@ def projection_change(event: IncomingEvent) -> ProjectionChange:
         raise InvalidEvent("invalid:projection-payload") from None
 
 
+@skip_entry_log("pure message conversion")
 def refresh_request(
     event: IncomingEvent, model_settings: ModelSettings
 ) -> tuple[RefreshRequest, str, tuple[str, ...], bytes | None]:
@@ -167,10 +176,12 @@ class ProjectionEventHandler:
     def __init__(self, handler: GraphProjectionHandler):
         self._handler = handler
 
-    def __call__(self, event: IncomingEvent) -> None:
+    def __call__(self, event: IncomingEvent) -> str:
+        """문서 변경·프로젝트 삭제를 그래프에 반영한다. 반영 결과(APPLIED·DUPLICATE)를 소비자에게 돌려준다."""
+        AppLogger.current().info("projection event handle")
         change = projection_change(event)
         try:
-            self._handler.handle(change, key=event.project_id)
+            return self._handler.handle(change, key=event.project_id)
         except ProjectionUnavailable:
             raise RetryableProcessingError("Projection unavailable") from None
 
@@ -198,6 +209,7 @@ class RefreshEventHandler:
         self._fail = fail
 
     def __call__(self, event: IncomingEvent) -> None:
+        AppLogger.current().info("graph refresh event handle")
         request, user_id, required_events, wrapped_key = refresh_request(
             event, self._model_settings
         )
@@ -211,12 +223,56 @@ class RefreshEventHandler:
         DLQ로 보내면 완료가 없어 Content의 요청이 진행 중으로 남는다. FAILED면 Content가
         같은 문서를 다음 요청에 다시 싣는다. 기록에 실패하면 예외를 소비자가 DLQ로 보낸다.
         """
+        # 이유는 투영 대기 코드(PROJECTION_NOT_READY·GRAPH_NOT_READY)다
+        AppLogger.current().warn(
+            "graph refresh projection wait exhausted", LogField.error_type(failure.code)
+        )
         if self._fail is None:
             raise failure
         request, user_id, _, wrapped_key = refresh_request(event, self._model_settings)
         with _classified():
             self._fail(
                 request, user_id, wrapped_key, Failure(failure.code, str(failure))
+            )
+
+    def rejected(self, event: IncomingEvent, failure: Exception) -> None:
+        """소비자가 이 요청을 DLQ로 보내기 직전에 부른다. 먼저 FAILED 완료를 남겨 Content의 요청을 끝낸다.
+
+        DLQ만 보내면 완료 이벤트가 없어 Content의 요청이 시간 제한(RefreshTimeout)까지 진행 중으로 남는다.
+        그래서 의존 실패(invalid:refresh-dependency), 재시도 소진, 투영 대기 처리 실패처럼 요청을 해석한 뒤의 거절은
+        고정 코드 PROCESSING_FAILED·고정 문구로 FAILED 완료를 기록한다(InboxEvent의 발행 대기를 relay가 보낸다).
+
+        남기지 않는 경우
+        - 충돌(conflict:refresh-request): 같은 요청 ID가 다른 입력으로 이미 있다. 그 요청의 완료를 덮지 않는다
+        - 요청으로 해석하지 못한 payload(invalid:refresh-request): 완료를 만들 요청이 없다
+        - FAILED 완료를 기록할 처리기가 없는 조립(fail 없음)
+
+        기록이 실패해도 예외를 내보내지 않는다. warn을 남기고 소비자가 그대로 DLQ로 보낸다.
+        """
+        AppLogger.current().info("graph refresh rejection handle")
+        if self._fail is None or (
+            isinstance(failure, InvalidEvent) and failure.args == (CONFLICT,)
+        ):
+            return
+        try:
+            request, user_id, _, wrapped_key = refresh_request(
+                event, self._model_settings
+            )
+        except InvalidEvent:
+            return
+        try:
+            self._fail(
+                request,
+                user_id,
+                wrapped_key,
+                Failure(PROCESSING_FAILED, PROCESSING_FAILED_MESSAGE),
+            )
+        except Exception as error:
+            # 저장소·Inbox 실패. 메시지에는 응답 내용이 섞일 수 있어 종류와 메시지 없는 스택만 남긴다
+            AppLogger.current().warn(
+                "graph refresh failed completion record failed",
+                LogField.error_type(type(error).__name__),
+                LogField.safe_stack_trace(error),
             )
 
 
@@ -226,7 +282,7 @@ def _classified():
     try:
         yield
     except RequestConflict:
-        raise InvalidEvent("conflict:refresh-request") from None
+        raise InvalidEvent(CONFLICT) from None
     except RefreshFailure as failure:
         # seed가 그래프에 아직 없으면 투영 대기와 같다. 재시도를 다 쓰면 FAILED로 끝낸다.
         if failure.failure.code == "GRAPH_NOT_READY":

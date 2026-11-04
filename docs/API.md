@@ -21,7 +21,7 @@
 
 `/health`는 Neptune 상태를 확인하지 않는다. Kafka polling 비활성 시에는 DB가 응답하지 않아도
 `200`을 반환한다. polling 활성 시 worker가 실패하거나 종료되면
-`503`, `{"status":"error","error":"Kafka polling worker unavailable"}`을 반환한다.
+`503`, `{"status":"error","error":"Kafka polling worker unavailable","trace_id":"<trace>"}`을 반환한다.
 정상 응답은 worker 스레드의 생존 확인이며 Kafka 연결·할당·lag의 확인은 아니다.
 자동 시작과 설정은 [polling 구현](implementation/KAFKA_POLLING.md)을 따른다.
 FastAPI 기본 설정을 사용하므로 `/docs`, `/redoc`, `/openapi.json`도 비활성화하지 않은 상태다.
@@ -32,10 +32,9 @@ FastAPI 기본 설정을 사용하므로 `/docs`, `/redoc`, `/openapi.json`도 �
 |---|---|
 | `status` | `ok` |
 | `service` | `graph-rag-api` |
-| `endpoint` | 환경변수로 구성한 Neptune 기본 URL |
-| `role` | Neptune 응답의 `role`, 키가 없으면 `unknown` |
-| `dbEngineVersion` | Neptune 응답의 `dbEngineVersion`, 키가 없으면 `unknown` |
-| `gremlin` | Neptune 응답의 `gremlin.version`, 키가 없으면 `unknown` |
+| `database` | `neptune` |
+
+Neptune 주소·역할·엔진·Gremlin 버전은 응답에 싣지 않는다.
 
 현재 코드는 Neptune 응답의 별도 상태 필드를 검사하지 않는다.
 HTTP 상태 검사와 JSON 해석·필드 추출이 예외 없이 끝나면 성공으로 응답한다.
@@ -50,14 +49,14 @@ HTTP 상태 검사와 JSON 해석·필드 추출이 예외 없이 끝나면 성�
 {
   "status": "error",
   "service": "graph-rag-api",
-  "error": "connection refused"
+  "database": "neptune",
+  "error": "Graph database unavailable",
+  "trace_id": "<trace>"
 }
 ```
 
-`error`는 알려진 실패의 예외 문자열이며 위 문자열은 대체 구현 테스트의 예시다.
-통신 실패·HTTP 오류·JSON 해석 실패·예상하지 못한 응답 구조를 별도 오류 코드로 구분하지 않는다.
-현재 응답은 내부 주소나 라이브러리 예외 정보를 포함할 수 있다.
-이는 현재 구현의 설명이며 오류 정보 비노출이 보장된 계약은 아니다.
+`error`는 고정 문구다. 내부 주소·예외 문자열은 응답에 싣지 않는다. 실패 종류는 같은 `trace_id`의
+로그 줄(`neptune status call failed`의 `error.type`, `request completed`의 `error.type`)에 남는다.
 예상하지 못한 코드 오류는 연결 장애로 변환하지 않고 FastAPI의 기본 `500` 처리로 전달한다.
 
 갱신안 rules·서비스는 내부 Python 유스케이스이며 제공 HTTP 경로를 추가하지 않았다.

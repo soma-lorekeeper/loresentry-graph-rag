@@ -161,3 +161,36 @@ def test_sent_response_loss_and_legacy_inbox_are_not_republished(graph):
         assert fresh.find(req) == done
         fresh.complete(req, done)
         assert entry not in fresh.pending()
+
+
+def test_completion_keeps_the_request_trace_for_the_relay(graph):
+    """InboxEvent의 traceparent 속성: 레코드 흐름 안에서 기록하면 저장되고, 밖에서 기록한 행은 None이다."""
+    from app.logs import LogFlow
+
+    store, query, project = graph
+    traced, untraced = request(project()), request(project())
+    header = (
+        ("traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+    )
+    with NeptuneRefreshInbox(store.endpoint) as inbox:
+        with LogFlow.kafka_record("t", 0, 0, header, (), "graph refresh requested"):
+            inbox.complete(
+                traced,
+                Completion(
+                    traced.job, ArtifactRef("result", "a.json"), Outcome.NO_CHANGE
+                ),
+            )
+        inbox.complete(
+            untraced,
+            Completion(
+                untraced.job, ArtifactRef("result", "b.json"), Outcome.NO_CHANGE
+            ),
+        )
+        pending = {
+            entry.completion.job.project_id: entry.traceparent
+            for entry in inbox.pending()
+        }
+    assert pending[traced.job.project_id].startswith(
+        "00-0af7651916cd43dd8448eb211c80319c-"
+    )
+    assert pending[untraced.job.project_id] is None

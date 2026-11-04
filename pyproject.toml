@@ -12,4 +12,25 @@ target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+# TID251·T20: 로그는 app.logs(AppLogger, LogFlow, LogScope)로만 남긴다(LOG_SCHEMA.md 5절 "로그 클래스")
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "TID", "T20"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"logging".msg = "Log through app.logs (AppLogger.current(), LogFlow, LogScope)."
+"app.logs._fields".msg = "Internal logging module. Import from app.logs."
+"app.logs._flow".msg = "Internal logging module. Import from app.logs."
+"app.logs._format".msg = "Internal logging module. Import from app.logs."
+"app.logs._logger".msg = "Internal logging module. Import from app.logs."
+"app.logs._request".msg = "Internal logging module. Import from app.logs."
+"app.logs._trace".msg = "Internal logging module. Import from app.logs."
+
+[tool.ruff.lint.per-file-ignores]
+# 로깅 팩토리 자신은 logging과 내부 모듈을 쓴다
+"app/logs/**" = ["TID251"]
+# 개발자가 터미널에서 돌리는 CLI는 결과를 stdout에 출력한다
+"scripts/**" = ["T20"]
+# 로그 형식·전파 테스트는 표준 logging 레코드와 내부 포매터를 직접 다룬다
+"tests/conftest.py" = ["TID251"]
+"tests/test_logs.py" = ["TID251"]
+# 자식 프로세스 출력을 흉내 내는 테스트 대역
+"tests/refresh/test_evaluation_ab.py" = ["T201"]

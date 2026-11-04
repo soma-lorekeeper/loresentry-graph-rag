@@ -4,6 +4,7 @@ from collections import defaultdict, deque
 from copy import deepcopy
 from datetime import UTC, datetime
 
+from app.logs import traceparent
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.inbox import PendingCompletion, validate_completion
 from app.refresh.models import (
@@ -185,8 +186,9 @@ class FakeInbox:
         if previous is not None and previous != completion:
             raise RequestConflict("Inbox completion is immutable")
         if previous is None:
+            # 실제 Inbox처럼 지금 요청 처리의 traceparent를 발행 대기와 함께 둔다
             entry = PendingCompletion(
-                str(identity(request)), completion, datetime.now(UTC)
+                str(identity(request)), completion, datetime.now(UTC), traceparent()
             )
             self.records[identity(request)] = deepcopy((request, completion, entry))
         self.calls.record("inbox.ack", request, completion)
@@ -210,7 +212,7 @@ class FakePublisher:
         self.calls = calls if calls is not None else Calls()
         self.delivered = []
 
-    def publish(self, completion, *, occurred_at=None):
+    def publish(self, completion, *, occurred_at=None, traceparent=None):
         self.calls.record("publisher.publish", completion)
         self.delivered.append(deepcopy(completion))
         self.calls.record("publisher.ack", completion)

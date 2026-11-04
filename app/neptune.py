@@ -6,6 +6,10 @@ from json import JSONDecodeError
 import httpx
 
 from app.application import GraphStatusUnavailable
+from app.logs import AppLogger, LogField
+
+# Neptune 상태 API를 부르는 client 레이어다(log.layer)
+LOG_LAYER = "client"
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,8 @@ class NeptuneStatusSource:
         Raises:
             GraphStatusUnavailable: HTTP 요청·상태 코드 또는 JSON 해석에 실패한 경우.
         """
+        # Neptune은 데이터베이스라 호출마다 결과 줄을 남기지 않는다. 진입 줄과 실패 줄만 남긴다(주소는 남기지 않는다)
+        AppLogger.current().info("neptune status get call")
         try:
             # Closed even on failure. One read per check, no retry loop.
             with httpx.Client(timeout=self.timeout_seconds) as client:
@@ -35,10 +41,20 @@ class NeptuneStatusSource:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPError as exc:
+            # 상대가 답한 실패(HTTPStatusError)면 응답 상태도 남긴다
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            AppLogger.current().warn(
+                "neptune status call failed",
+                LogField.error_type(type(exc).__name__),
+                LogField.status_code(status),
+            )
             raise GraphStatusUnavailable(
                 str(exc) or "Neptune status request failed"
             ) from exc
         except (JSONDecodeError, UnicodeDecodeError) as exc:
+            AppLogger.current().warn(
+                "neptune status call failed", LogField.error_type(type(exc).__name__)
+            )
             raise GraphStatusUnavailable(
                 "Neptune status response is not valid JSON"
             ) from exc

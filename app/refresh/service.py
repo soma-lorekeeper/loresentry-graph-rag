@@ -8,6 +8,7 @@
 import json
 from dataclasses import asdict, replace
 
+from app.logs import AppLogger, LogField
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.inbox import validate_completion
 from app.refresh.models import (
@@ -94,9 +95,21 @@ class RefreshService:
         Inbox 이전 실패는 재전달하며 결과 저장 전 모델 호출은 반복될 수 있다.
         재시도 불가능한 계산 실패도 FAILED 결과와 발행 대기를 기록한다.
         """
+        AppLogger.current().info(
+            "graph refresh run",
+            LogField.project_id(request.job.project_id),
+            LogField.refresh_request_id(request.job.request_id),
+            LogField.param("seed_ids", request.seed_ids),
+            LogField.param("changed_documents", request.changed_documents),
+        )
         completed = self.inbox.find(request)
         if completed is not None:
             validate_completion(request, completed)
+            # 이미 끝낸 요청이 다시 왔다(재전달). 모델을 다시 부르지 않는다
+            AppLogger.current().info(
+                "graph refresh already completed",
+                LogField.result("refresh_outcome", completed.outcome),
+            )
             return completed
         result = self.artifacts.read_result(request)
         if result is None:
@@ -116,9 +129,19 @@ class RefreshService:
         이미 완료됐거나 저장된 결과가 있으면 그것을 그대로 쓴다. 완료 이벤트 ID는 요청으로
         정해지고 결과는 한 번만 저장되므로 동시 실행과 경합해도 완료는 하나다.
         """
+        # 실패 코드(GRAPH_NOT_READY, PROCESSING_FAILED 등)는 결과 줄 graph refresh failed의 error.type에 남는다
+        AppLogger.current().info(
+            "graph refresh fail",
+            LogField.project_id(request.job.project_id),
+            LogField.refresh_request_id(request.job.request_id),
+        )
         completed = self.inbox.find(request)
         if completed is not None:
             validate_completion(request, completed)
+            AppLogger.current().info(
+                "graph refresh already completed",
+                LogField.result("refresh_outcome", completed.outcome),
+            )
             return completed
         result = self.artifacts.read_result(request) or RefreshResult(
             request.job,
@@ -143,6 +166,20 @@ class RefreshService:
             result_ref = self.artifacts.save_result(request, saved)
         completion = self._completion(request, result_ref, result)
         self.inbox.complete(request, completion)
+        # 결과 줄. 사용량은 모델 호출 합계다(호출마다의 사용량은 openai call completed 줄에 있다)
+        usage = (
+            LogField.result("refresh_outcome", result.outcome),
+            LogField.result("model_calls", result.usage.calls),
+            LogField.result("input_tokens", result.usage.input_tokens),
+            LogField.result("output_tokens", result.usage.output_tokens),
+        )
+        if result.failure is not None:
+            # FAILED 결과도 완료로 기록한다. 이유는 우리 실패 코드다
+            AppLogger.current().warn(
+                "graph refresh failed", LogField.error_type(result.failure.code), *usage
+            )
+        else:
+            AppLogger.current().info("graph refresh completed", *usage)
         return completion
 
     def _compute(self, request):

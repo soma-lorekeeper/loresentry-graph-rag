@@ -13,6 +13,8 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import BotoCoreError
 
+from app.logs import AppLogger, LogField, skip_entry_log
+
 
 class NeptuneUnavailable(Exception):
     """통신·충돌·불명확한 응답. 호출 유스케이스가 재시도를 결정한다."""
@@ -44,7 +46,12 @@ def _endpoint(value: str) -> str:
 
 
 class NeptuneGremlinClient:
-    """수신 측에서 재시도한다. 어댑터 자체는 자동 재시도하지 않는다."""
+    """수신 측에서 재시도한다. 어댑터 자체는 자동 재시도하지 않는다.
+
+    Neptune은 데이터베이스라 쿼리마다 결과 줄을 남기지 않는다. 그 쿼리를 부른 repository 메서드의 진입 줄이 시작이고,
+    실패만 `neptune query failed`(warn, error.type, 상대가 답했으면 응답 상태)로 남긴다. 쿼리 원문·응답 메시지와
+    주소는 남기지 않는다(쿼리 리터럴에 문서 제목·설명이 들어간다). 이 client는 OpenTelemetry로 계측하지 않는다(SigV4).
+    """
 
     def __init__(
         self,
@@ -73,6 +80,7 @@ class NeptuneGremlinClient:
         self._region = region
 
     @classmethod
+    @skip_entry_log("reads configuration at startup")
     def from_env(cls, *, endpoint: str | None = None) -> Self:
         host = os.environ.get("NEPTUNE_ENDPOINT", "")
         if endpoint is None and (
@@ -93,6 +101,7 @@ class NeptuneGremlinClient:
             or os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2"),
         )
 
+    @skip_entry_log("gremlin calls are covered by repository entry lines")
     def execute(
         self, query: str, *, rejection_codes: tuple[str, ...] = ()
     ) -> list[object]:
@@ -112,14 +121,17 @@ class NeptuneGremlinClient:
         try:
             response = self._client.send(request, follow_redirects=False)
         except httpx.HTTPError as exc:
+            _failed(type(exc).__name__, exc)
             raise NeptuneUnavailable("Neptune response unavailable") from exc
         try:
             payload = response.json()
         except (ValueError, UnicodeDecodeError) as exc:
+            _failed("NEPTUNE_RESPONSE_INVALID", None, response.status_code)
             raise NeptuneUnavailable("Neptune returned invalid JSON") from exc
         finally:
             response.close()
         if not isinstance(payload, dict):
+            _failed("NEPTUNE_RESPONSE_INVALID", None, response.status_code)
             raise NeptuneUnavailable("Neptune returned an invalid response")
         status = payload.get("status")
         if response.status_code != 200 or (
@@ -131,15 +143,22 @@ class NeptuneGremlinClient:
                 message += str(status.get("attributes", ""))
             for rejection in rejection_codes:
                 if rejection in message:
+                    # 호출 측이 선언한 계약 검증 실패(충돌 등). 코드는 우리 쿼리가 정한 고정 낱말이다
+                    _failed(
+                        "NEPTUNE_QUERY_REJECTED", None, response.status_code, rejection
+                    )
                     raise NeptuneQueryRejected(rejection)
+            _failed("NEPTUNE_QUERY_FAILED", None, response.status_code)
             raise NeptuneUnavailable(
                 f"Neptune query failed (HTTP {response.status_code})"
             )
         if not isinstance(status, dict) or type(status.get("code")) is not int:
+            _failed("NEPTUNE_RESPONSE_INVALID", None, response.status_code)
             raise NeptuneUnavailable("Neptune success status is missing")
         result = payload.get("result")
         data = result.get("data") if isinstance(result, dict) else None
         if not isinstance(data, list):
+            _failed("NEPTUNE_RESPONSE_INVALID", None, response.status_code)
             raise NeptuneUnavailable("Neptune result data must be an array")
         return data
 
@@ -147,6 +166,7 @@ class NeptuneGremlinClient:
         try:
             credentials = self._session.get_credentials() if self._session else None
             if credentials is None:
+                _failed("AWS_CREDENTIALS_UNAVAILABLE", None)
                 raise NeptuneUnavailable("AWS credentials are unavailable")
             signed = AWSRequest(
                 method=request.method,
@@ -159,8 +179,10 @@ class NeptuneGremlinClient:
             ).add_auth(signed)
             request.headers.update(dict(signed.headers))
         except BotoCoreError as exc:
+            _failed(type(exc).__name__, exc)
             raise NeptuneUnavailable("AWS request signing failed") from exc
 
+    @skip_entry_log("closes the owned http client")
     def close(self) -> None:
         if self._owned_client:
             self._client.close()
@@ -170,3 +192,19 @@ class NeptuneGremlinClient:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+def _failed(
+    error_type: str,
+    failure: BaseException | None,
+    status: int | None = None,
+    code: str | None = None,
+) -> None:
+    """Neptune 쿼리 하나의 실패 줄. 예외면 메시지 없는 스택을 붙인다."""
+    AppLogger.current().warn(
+        "neptune query failed",
+        LogField.error_type(error_type),
+        LogField.error_code(code),
+        LogField.status_code(status),
+        LogField.safe_stack_trace(failure),
+    )

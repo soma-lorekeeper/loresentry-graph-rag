@@ -33,13 +33,18 @@ from app.adapters.refresh_schema import (
     json_bytes,
     omit_default_discovery,
 )
+from app.logs import AppLogger, LogField, LogFlow, skip_entry_log
 from app.manuscript_crypto import EnvelopeError, is_envelope, open_envelope, seal
 from app.refresh.errors import RefreshFailure, RequestConflict
 from app.refresh.models import ArtifactRef, Failure, InputSnapshot
 from app.refresh.selection import validate_document, validate_input
 from app.refresh.serialization import result_from_payload, result_to_payload
 
+# S3에 최신화 입력·실행 스냅샷·결과를 읽고 쓰는 client 레이어다(log.layer)
+LOG_LAYER = "client"
 
+
+@skip_entry_log("raises a safe failure; the caller logs the call result")
 def fail(code, message, retryable=False):
     """SDK 응답·자격증명·원고 원문 없이 실패를 전달한다."""
     raise RefreshFailure(Failure(code, message, retryable)) from None
@@ -73,6 +78,7 @@ class S3ArtifactSettings:
             raise ValueError("S3 object byte limit must be positive")
 
     @classmethod
+    @skip_entry_log("reads configuration at startup")
     def from_environment(cls, values):
         """명시적으로 전달받은 설정만 사용하며 프로세스 환경을 직접 읽지 않는다."""
         return cls(
@@ -87,11 +93,17 @@ class S3ArtifactSettings:
 
 
 class S3RefreshArtifacts:
-    """RefreshArtifactStore 구현. 쓰기는 If-None-Match로 기존 객체를 덮어쓰지 않는다."""
+    """RefreshArtifactStore 구현. 쓰기는 If-None-Match로 기존 객체를 덮어쓰지 않는다.
+
+    공개 메서드마다 진입 줄(`s3 refresh <대상> get|put call`)을 남기고, 객체 하나를 읽거나 쓸 때마다
+    `s3 call completed`(걸린 시간, 응답 상태) 또는 `s3 call failed`(warn, error.type, 상대의 오류 코드) 결과 줄을
+    남긴다. 버킷·객체 key(프로젝트·요청 ID가 들어간 경로)와 본문은 남기지 않는다.
+    """
 
     def __init__(self, client, settings: S3ArtifactSettings, key: bytes | None = None):
         self.client, self.settings, self.key = client, settings, key
 
+    @skip_entry_log("returns a copy bound to the manuscript key")
     def with_key(self, key: bytes) -> "S3RefreshArtifacts":
         return type(self)(self.client, self.settings, key)
 
@@ -140,33 +152,46 @@ class S3RefreshArtifacts:
         )
 
     def _read(self, ref, *, optional=False, protected=True):
-        """전체 객체를 한도 안에서 읽고 본문 스트림은 항상 닫는다."""
+        """전체 객체를 한도 안에서 읽고 본문 스트림은 항상 닫는다.
+
+        객체 하나를 받는 호출(본문까지 다 읽어야 끝난다)이 결과 줄 하나다. 없는 객체(NoSuchKey)는 상대가 답한
+        정상 결과라 `s3 call completed`(404)로 남기고, 필요한 객체였을 때만 S3_OBJECT_MISSING으로 실패한다.
+        """
+        too_large = False
         try:
-            response = self.client.get_object(Bucket=ref.bucket, Key=ref.key)
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                if optional:
-                    return None
-                fail("S3_OBJECT_MISSING", "Required S3 object is missing")
+            with LogFlow.call("s3") as call:
+                try:
+                    response = self.client.get_object(Bucket=ref.bucket, Key=ref.key)
+                except ClientError as error:
+                    if error.response.get("Error", {}).get("Code") != "NoSuchKey":
+                        raise
+                    call.status(404)
+                    response = None
+                if response is not None:
+                    _answered(call, response)
+                    stream = response["Body"]
+                    try:
+                        too_large = (
+                            response.get("ContentLength", 0)
+                            > self.settings.max_object_bytes
+                        )
+                        if not too_large:
+                            body = stream.read(self.settings.max_object_bytes + 1)
+                    finally:
+                        stream.close()
+        except (ClientError, BotoCoreError) as error:
             self._error(error)
-        except BotoCoreError as error:
-            self._error(error)
-        stream = response["Body"]
-        try:
-            if response.get("ContentLength", 0) > self.settings.max_object_bytes:
-                fail("S3_OBJECT_TOO_LARGE", "S3 object exceeds byte budget")
-            body = stream.read(self.settings.max_object_bytes + 1)
-            if len(body) > self.settings.max_object_bytes:
-                fail("S3_OBJECT_TOO_LARGE", "S3 object exceeds byte budget")
-            if protected and response.get("Metadata", {}).get("sha256") != fingerprint(
-                body
-            ):
-                fail("S3_OBJECT_INVALID", "Stored S3 object checksum differs")
-            return body
-        except BotoCoreError as error:
-            self._error(error)
-        finally:
-            stream.close()
+        if response is None:
+            if optional:
+                return None
+            fail("S3_OBJECT_MISSING", "Required S3 object is missing")
+        if too_large or len(body) > self.settings.max_object_bytes:
+            fail("S3_OBJECT_TOO_LARGE", "S3 object exceeds byte budget")
+        if protected and response.get("Metadata", {}).get("sha256") != fingerprint(
+            body
+        ):
+            fail("S3_OBJECT_INVALID", "Stored S3 object checksum differs")
+        return body
 
     def _put(self, request, kind, body):
         ref = self._ref(request, kind)
@@ -183,28 +208,38 @@ class S3RefreshArtifacts:
             )
             if len(stored) > self.settings.max_object_bytes:
                 fail("S3_OBJECT_TOO_LARGE", "S3 object exceeds byte budget")
+        exists = False
         try:
-            self.client.put_object(
-                Bucket=ref.bucket,
-                Key=ref.key,
-                Body=stored,
-                ContentType="application/json",
-                IfNoneMatch="*",
-                Metadata={"sha256": fingerprint(stored)},
-                ChecksumSHA256=base64.b64encode(sha256(stored).digest()).decode(
-                    "ascii"
-                ),
-            )
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "PreconditionFailed":
-                if self._get(request, kind) != body:
-                    raise RequestConflict(
-                        "Stored S3 object differs from proposed content"
-                    ) from None
-                return ref
+            # 객체 하나를 쓰는 호출. 이미 있는 객체(PreconditionFailed)는 상대가 답한 정상 결과라
+            # s3 call completed(412)로 남기고 아래에서 내용을 비교한다
+            with LogFlow.call("s3") as call:
+                try:
+                    response = self.client.put_object(
+                        Bucket=ref.bucket,
+                        Key=ref.key,
+                        Body=stored,
+                        ContentType="application/json",
+                        IfNoneMatch="*",
+                        Metadata={"sha256": fingerprint(stored)},
+                        ChecksumSHA256=base64.b64encode(sha256(stored).digest()).decode(
+                            "ascii"
+                        ),
+                    )
+                    _answered(call, response)
+                except ClientError as error:
+                    if (
+                        error.response.get("Error", {}).get("Code")
+                        != "PreconditionFailed"
+                    ):
+                        raise
+                    call.status(412)
+                    exists = True
+        except (ClientError, BotoCoreError) as error:
             self._error(error)
-        except BotoCoreError as error:
-            self._error(error)
+        if exists and self._get(request, kind) != body:
+            raise RequestConflict(
+                "Stored S3 object differs from proposed content"
+            ) from None
         return ref
 
     @staticmethod
@@ -267,6 +302,7 @@ class S3RefreshArtifacts:
         return True
 
     def read_input(self, request):
+        AppLogger.current().info("s3 refresh input get call")
         ref = request.input_ref
         if (
             ref.bucket != self.settings.input_bucket
@@ -300,6 +336,7 @@ class S3RefreshArtifacts:
         return source
 
     def read_context(self, request):
+        AppLogger.current().info("s3 refresh context get call")
         manifest = self._check_request(request)
         body = self._get(request, "context", optional=True)
         if body is None:
@@ -339,6 +376,7 @@ class S3RefreshArtifacts:
             fail("S3_OBJECT_INVALID", "Snapshot targets must be active settings")
 
     def save_context(self, snapshot):
+        AppLogger.current().info("s3 refresh context put call")
         request = snapshot.request
         self._validate_context(request, snapshot)
         body = context_bytes(snapshot)
@@ -357,6 +395,7 @@ class S3RefreshArtifacts:
         return self._put(request, "context", body)
 
     def read_result(self, request):
+        AppLogger.current().info("s3 refresh result get call")
         manifest = self._check_request(request)
         body = self._get(request, "result", optional=True)
         if body is None:
@@ -373,6 +412,10 @@ class S3RefreshArtifacts:
         return result
 
     def save_result(self, request, result):
+        AppLogger.current().info(
+            "s3 refresh result put call",
+            LogField.param("refresh_outcome", result.outcome),
+        )
         if result.job != request.job:
             raise RequestConflict("Result belongs to another request")
         saved = self.read_result(request)
@@ -390,6 +433,9 @@ class S3RefreshArtifacts:
         return self._put(request, "result", body)
 
     def read_batch(self, request, index):
+        AppLogger.current().info(
+            "s3 refresh batch get call", LogField.param("index", index)
+        )
         manifest = self._check_request(request)
         body = self._get(request, f"batch-{index:04d}", optional=True)
         if body is None:
@@ -405,6 +451,11 @@ class S3RefreshArtifacts:
         return value.seed_ids, value.result
 
     def save_batch(self, request, index, seed_ids, result):
+        AppLogger.current().info(
+            "s3 refresh batch put call",
+            LogField.param("index", index),
+            LogField.param("seed_ids", seed_ids),
+        )
         if result.job != request.job:
             raise RequestConflict("Batch result belongs to another request")
         value = {
@@ -420,7 +471,17 @@ class S3RefreshArtifacts:
         return self._put(request, f"batch-{index:04d}", json_bytes(value))
 
 
+def _answered(call, response) -> None:
+    """S3가 답한 응답 상태를 결과 줄에 남긴다. 응답에 상태가 없으면(테스트 대역 등) 남기지 않는다."""
+    if not isinstance(response, dict):
+        return
+    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    if isinstance(status, int):
+        call.status(status)
+
+
 @contextmanager
+@skip_entry_log("builds the s3 client at startup")
 def s3_artifacts(settings: S3ArtifactSettings, *, region_name=None, endpoint_url=None):
     """표준 AWS 자격증명 체인으로 클라이언트를 조립하고 항상 종료한다. 자동 재시도는 없다."""
     client = boto3.client(

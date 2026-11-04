@@ -171,12 +171,17 @@ class RefreshCompletionPublisher(Protocol):
     """저장된 결과의 위치와 처리 결과를 완료 메시지로 발행하는 계약."""
 
     def publish(
-        self, completion: Completion, *, occurred_at: datetime | None = None
+        self,
+        completion: Completion,
+        *,
+        occurred_at: datetime | None = None,
+        traceparent: str | None = None,
     ) -> None:
         """완료 메시지를 발행한다.
 
         수신 측에 전달된 뒤 확인 응답만 유실될 수 있다. 재실행 시 중복 발행이
         가능하므로 수신 측도 요청 식별을 기준으로 중복을 처리해야 한다.
+        traceparent는 완료를 기록한 요청 처리의 trace다. 있으면 헤더로 실어 수신 측이 그 trace를 잇는다.
         """
         ...
 

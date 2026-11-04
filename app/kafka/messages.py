@@ -144,13 +144,31 @@ def parse_event(record: Record) -> IncomingEvent | None:
     return IncomingEvent(event_id, event_type, project_id, subject, sequence, payload)
 
 
-def completion_record(completion: Completion, *, now: datetime) -> OutgoingRecord:
-    """동일 요청의 재발행은 UUIDv5 ID를 유지한다. 시간은 IO 계층에서 주입한다."""
+def completion_event_id(completion: Completion) -> UUID:
+    """완료 이벤트의 ce_id. 같은 요청은 늘 같은 UUIDv5다(재발행해도 받는 쪽이 중복을 거른다).
+
+    ID를 검사하지 않는다(로그 문맥에 쓰는 relay가 발행 전에 실패하지 않게). 검사는 completion_record가 하고,
+    검사를 통과한 ID의 소문자 표기는 그 표준 표기와 같으므로 두 곳의 값이 같다.
+    """
+    job = completion.job
+    return uuid5(
+        COMPLETION_NAMESPACE, f"{job.project_id.lower()}:{job.request_id.lower()}"
+    )
+
+
+def completion_record(
+    completion: Completion, *, now: datetime, traceparent: str | None = None
+) -> OutgoingRecord:
+    """동일 요청의 재발행은 UUIDv5 ID를 유지한다. 시간은 IO 계층에서 주입한다.
+
+    traceparent는 완료를 기록한 요청 처리의 trace다(InboxEvent에 저장한 값). 있으면 같은 이름의 헤더로 실어
+    받는 서비스가 그 trace를 잇는다. 없으면(추적 전에 기록한 완료) 헤더를 싣지 않는다.
+    """
     project_id = _uuid(completion.job.project_id, "project_id")
     request_id = _uuid(completion.job.request_id, "request_id")
     if now.tzinfo is None:
         raise ValueError("Completion time must be timezone-aware")
-    event_id = uuid5(COMPLETION_NAMESPACE, f"{project_id}:{request_id}")
+    event_id = completion_event_id(completion)
     headers = {
         "ce_specversion": "1.0",
         "ce_id": str(event_id),
@@ -162,6 +180,8 @@ def completion_record(completion: Completion, *, now: datetime) -> OutgoingRecor
         .replace("+00:00", "Z"),
         "content-type": "application/json",
     }
+    if traceparent is not None:
+        headers["traceparent"] = traceparent
     return OutgoingRecord(
         REFRESH_COMPLETED,
         project_id.encode(),

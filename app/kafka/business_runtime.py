@@ -1,6 +1,5 @@
 """업무별 Kafka consumer·publisher와 실제 Neptune/S3/Content/LLM 어댑터의 수명주기."""
 
-import logging
 import math
 import os
 from collections.abc import Mapping
@@ -25,12 +24,11 @@ from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
 from app.kafka.polling import consumer_config
 from app.kafka.publisher import KafkaPublisher, producer_config
+from app.logs import LogField, LogFlow
 from app.projection.service import GraphProjectionHandler
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Failure, ModelSettings
 from app.refresh.outbox import RefreshOutboxRelay
-
-logger = logging.getLogger(__name__)
 
 # 작성·보완 지시문이 계획 지시문보다 길어질 수 있는 몫(토큰). 지시문은 수천 자 수준이다.
 PLAN_RESERVE = 8192
@@ -251,67 +249,76 @@ class BusinessPollingRuntime:
             raise
 
     def _relay(self, ready):
+        """relay 스레드의 수명 하나가 작업 흐름 하나다.
+
+        `refresh outbox relay start` → `refresh outbox relay completed` 또는 `refresh outbox relay failed`(error,
+        error.type, 메시지 없는 스택)다. 회차마다의 줄은 relay가 남긴다.
+        """
         try:
-            with ExitStack() as stack:
-                store = stack.enter_context(self._outbox_factory())
-                producer = self._producer(
-                    producer_config(self.settings.bootstrap_servers)
-                )
-                stack.callback(producer.flush, 1)
-                relay = RefreshOutboxRelay(store, KafkaPublisher(producer))
-                ready.set()
-                relay.run(self._stop)
-                if not self._stop.is_set():
-                    raise RuntimeError("Refresh Outbox relay stopped unexpectedly")
+            with LogFlow.task("refresh outbox relay"):
+                with ExitStack() as stack:
+                    store = stack.enter_context(self._outbox_factory())
+                    producer = self._producer(
+                        producer_config(self.settings.bootstrap_servers)
+                    )
+                    stack.callback(producer.flush, 1)
+                    relay = RefreshOutboxRelay(store, KafkaPublisher(producer))
+                    ready.set()
+                    relay.run(self._stop)
+                    if not self._stop.is_set():
+                        raise RuntimeError("Refresh Outbox relay stopped unexpectedly")
         except BaseException as failure:
             self._errors.append(type(failure).__name__)
-            logger.error(
-                "Refresh Outbox relay failed: reason=%s", type(failure).__name__
-            )
         finally:
             ready.set()
 
     def _run(self, topic, ready):
+        """topic 하나의 consumer 스레드 수명 하나가 작업 흐름 하나다.
+
+        `kafka worker start`(topic) → `kafka worker completed` 또는 `kafka worker failed`(error, error.type, 메시지
+        없는 스택)다. 스레드 이름(kafka-<topic>)이 모든 줄의 process.thread.name이다. 종료 요청으로 멈춘 처리
+        (ProcessingStopped)는 정상 종료다.
+        """
         try:
-            with ExitStack() as stack:
-                producer = self._producer(
-                    producer_config(self.settings.bootstrap_servers)
-                )
-                stack.callback(producer.flush, 1)
-                publisher = KafkaPublisher(producer)
-                handlers = self._handlers(
-                    topic, publisher, self._stop, stack, self.settings
-                )
-                group = (
-                    "graph-rag.project-changed"
-                    if topic == PROJECT_CHANGED
-                    else "graph-rag.graph-refresh-requested"
-                )
-                config = consumer_config(self.settings.bootstrap_servers, group)
-                config["socket.timeout.ms"] = 10000
-                consumer = self._consumer(config)
+            with LogFlow.task("kafka worker", LogField.kafka_topic(topic)):
                 try:
-                    worker = business_worker(
-                        consumer, topic, handlers, publisher, self._stop
-                    )
-                except Exception:
-                    consumer.close()
-                    raise
-                ready.set()
-                worker.run(self._stop)
-                if not self._stop.is_set():
-                    raise RuntimeError("Business worker stopped unexpectedly")
+                    with ExitStack() as stack:
+                        producer = self._producer(
+                            producer_config(self.settings.bootstrap_servers)
+                        )
+                        stack.callback(producer.flush, 1)
+                        publisher = KafkaPublisher(producer)
+                        handlers = self._handlers(
+                            topic, publisher, self._stop, stack, self.settings
+                        )
+                        group = (
+                            "graph-rag.project-changed"
+                            if topic == PROJECT_CHANGED
+                            else "graph-rag.graph-refresh-requested"
+                        )
+                        config = consumer_config(self.settings.bootstrap_servers, group)
+                        config["socket.timeout.ms"] = 10000
+                        consumer = self._consumer(config)
+                        try:
+                            worker = business_worker(
+                                consumer, topic, handlers, publisher, self._stop
+                            )
+                        except Exception:
+                            consumer.close()
+                            raise
+                        ready.set()
+                        worker.run(self._stop)
+                        if not self._stop.is_set():
+                            raise RuntimeError("Business worker stopped unexpectedly")
+                except ProcessingStopped:
+                    # 종료 신호 뒤의 중단은 정상 종료다(작업 흐름이 completed로 끝난다)
+                    if not self._stop.is_set():
+                        raise
         except ProcessingStopped:
-            if not self._stop.is_set():
-                self._errors.append("ProcessingStopped")
+            self._errors.append("ProcessingStopped")
         except BaseException as failure:
-            self._errors.append(type(failure).__name__)
             # Do not log exception messages or chains containing message bodies.
-            logger.error(
-                "Business Kafka worker failed: topic=%s reason=%s",
-                topic,
-                type(failure).__name__,
-            )
+            self._errors.append(type(failure).__name__)
         finally:
             ready.set()
 

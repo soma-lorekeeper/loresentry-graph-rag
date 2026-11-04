@@ -108,6 +108,9 @@ InvalidEvent는 즉시 DLQ, 명시적인 RetryableProcessingError는 최초 처�
 없거나 seed가 그래프에 아직 없어 재시도를 다 쓰면 업무 처리기가 `PROJECTION_NOT_READY`·`GRAPH_NOT_READY`
 FAILED 결과를 저장하고 완료를 한 번 발행한 뒤 offset을 진행한다. 이 기록이 실패하면 DLQ다.
 재시도 창이 약 25초라 투영이 그보다 늦으면 FAILED가 나며, Content는 같은 문서를 다음 요청에 다시 싣는다.
+해석한 최신화 요청을 DLQ로 보낼 때는(충돌 `conflict:refresh-request` 제외) 먼저 `PROCESSING_FAILED`·
+고정 문구의 FAILED 완료를 같은 경로(`RefreshService.fail`)로 기록한다. 그래서 Content의 요청이 시간 제한까지
+진행 중으로 남지 않는다. 이 기록이 실패해도 warn을 남기고 DLQ로 보낸다. 해석하지 못한 레코드와 충돌은 DLQ만 보낸다.
 DeliveryError와 분류하지 않은 설정/프로그래밍 오류는 예외를 전파한다.
 DLQ ack 이전에는 offset을 진행하지 않는다.
 완료 Outbox의 전송 실패는 원본 요청을 DLQ로 보내지 않는다. 발행 대기를 유지하고

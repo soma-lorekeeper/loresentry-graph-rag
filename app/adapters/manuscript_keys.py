@@ -8,11 +8,16 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from app.logs import AppLogger, LogField, LogFlow, skip_entry_log
 from app.manuscript_crypto import KEY_BYTES
 from app.refresh.errors import RefreshFailure
 from app.refresh.models import Failure
 
+# KMS로 원고 키를 푸는 client 레이어다(log.layer)
+LOG_LAYER = "client"
 
+
+@skip_entry_log("raises a safe failure; the caller logs the call result")
 def unavailable(message):
     raise RefreshFailure(Failure("MANUSCRIPT_KEY_UNAVAILABLE", message, True)) from None
 
@@ -37,6 +42,13 @@ class ManuscriptKeys:
         self._lock = Lock()
 
     def unwrap(self, project_id: str, wrapped_key: bytes) -> bytes:
+        """프로젝트 원고 키를 KMS로 푼다. 캐시에 있으면 KMS를 부르지 않는다.
+
+        KMS 호출은 결과 줄 `kms call completed`(걸린 시간)를 남긴다. 키·감싼 키 값은 남기지 않는다.
+        """
+        AppLogger.current().info(
+            "kms manuscript key unwrap call", LogField.project_id(project_id)
+        )
         entry = (project_id, bytes(wrapped_key))
         with self._lock:
             cached = self._cache.get(entry)
@@ -46,11 +58,12 @@ class ManuscriptKeys:
                     return cached[1]
                 del self._cache[entry]
         try:
-            response = self.client.decrypt(
-                CiphertextBlob=entry[1],
-                KeyId=self.key_id,
-                EncryptionContext={"project_id": project_id},
-            )
+            with LogFlow.call("kms"):
+                response = self.client.decrypt(
+                    CiphertextBlob=entry[1],
+                    KeyId=self.key_id,
+                    EncryptionContext={"project_id": project_id},
+                )
         except (ClientError, BotoCoreError):
             unavailable("Manuscript key could not be unwrapped")
         key = response.get("Plaintext")
@@ -65,6 +78,7 @@ class ManuscriptKeys:
 
 
 @contextmanager
+@skip_entry_log("builds the kms client at startup")
 def manuscript_keys(values: Mapping[str, str]):
     key_id = values.get("MANUSCRIPT_KEY_ID", "").strip()
     if not key_id:

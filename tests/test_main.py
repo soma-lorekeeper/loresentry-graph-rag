@@ -42,13 +42,11 @@ def test_health_db_reports_reachable_graph():
     with TestClient(create_app(source)) as client:
         response = client.get("/health/db")
     assert response.status_code == 200
+    # 주소·역할·엔진 버전은 응답에 싣지 않는다
     assert response.json() == {
         "status": "ok",
         "service": "graph-rag-api",
-        "endpoint": source.endpoint,
-        "role": "writer",
-        "dbEngineVersion": "1.4.8.0",
-        "gremlin": "3.7.1",
+        "database": "neptune",
     }
     assert source.calls == 1
 
@@ -58,11 +56,16 @@ def test_health_db_reports_unreachable_graph_without_retry():
     with TestClient(create_app(source)) as client:
         response = client.get("/health/db")
     assert response.status_code == 503
-    assert response.json() == {
+    body = response.json()
+    # 예외 메시지 대신 고정 문구다. trace_id로 이 요청의 로그를 찾는다
+    assert body.pop("trace_id")
+    assert body == {
         "status": "error",
         "service": "graph-rag-api",
-        "error": "connection refused",
+        "database": "neptune",
+        "error": "Graph database unavailable",
     }
+    assert "connection refused" not in response.text
     assert source.calls == 1
 
 
@@ -70,7 +73,8 @@ def test_health_db_rejects_malformed_snapshot():
     with TestClient(create_app(StubStatusSource({"gremlin": None}))) as client:
         response = client.get("/health/db")
     assert response.status_code == 503
-    assert response.json()["error"] == "Graph status gremlin must be a JSON object"
+    assert response.json()["error"] == "Graph database unavailable"
+    assert "gremlin" not in response.text
 
 
 def test_unexpected_bug_is_not_reported_as_graph_unavailability():
@@ -82,9 +86,9 @@ def test_unexpected_bug_is_not_reported_as_graph_unavailability():
 
 def test_apps_have_independent_dependencies():
     first = StubStatusSource({"role": "writer"})
-    second = StubStatusSource({"role": "reader"})
+    second = StubStatusSource(error=GraphStatusUnavailable("down"))
     with TestClient(create_app(first)) as a, TestClient(create_app(second)) as b:
-        assert a.get("/health/db").json()["role"] == "writer"
-        assert b.get("/health/db").json()["role"] == "reader"
-        assert a.get("/health/db").json()["role"] == "writer"
+        assert a.get("/health/db").status_code == 200
+        assert b.get("/health/db").status_code == 503
+        assert a.get("/health/db").status_code == 200
     assert (first.calls, second.calls) == (2, 1)

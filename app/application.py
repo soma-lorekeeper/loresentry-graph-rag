@@ -3,7 +3,11 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.graph import GraphStatus, interpret_status
+from app.graph import GraphStatus, InvalidGraphStatus, interpret_status
+from app.logs import AppLogger, LogField
+
+# 상태 진단 유스케이스를 조율하는 service 레이어다(log.layer)
+LOG_LAYER = "service"
 
 
 class GraphStatusUnavailable(Exception):
@@ -52,6 +56,15 @@ class GraphHealthService:
             GraphStatusUnavailable: 조회 또는 JSON 해석에 실패한 경우.
             InvalidGraphStatus: 응답의 메타데이터 구조가 유효하지 않은 경우.
         """
+        AppLogger.current().info("graph health check")
         payload = self._source.fetch_status()
-        status = interpret_status(payload)
+        try:
+            status = interpret_status(payload)
+        except InvalidGraphStatus as failure:
+            # 응답은 왔지만 메타데이터 구조가 틀렸다. 예외 메시지(필드 이름)는 남기지 않는다
+            AppLogger.current().warn(
+                "graph health status invalid",
+                LogField.error_type(type(failure).__name__),
+            )
+            raise
         return GraphHealth(endpoint=self._source.endpoint, status=status)

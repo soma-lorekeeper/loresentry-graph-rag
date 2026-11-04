@@ -14,7 +14,7 @@ from app.kafka.errors import (
     RetryableProcessingError,
 )
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED, dead_letter_record
-from tests.test_kafka_messages import content_record
+from tests.test_kafka_messages import EVENT, PROJECT, REQUEST, content_record
 
 
 class DeadLetters:
@@ -38,7 +38,7 @@ def handler(work, dead_letters=None, stop=None, retry_delays=(0, 0)):
     )
 
 
-def test_success_and_unknown_type_have_no_dead_letters(caplog):
+def test_success_and_unknown_type_have_no_dead_letters(caplog, log_lines):
     received = []
     dead_letters = DeadLetters()
     consume = handler(received.append, dead_letters)
@@ -49,6 +49,18 @@ def test_success_and_unknown_type_have_no_dead_letters(caplog):
     assert len(received) == 1
     assert not dead_letters.sent
     assert "untrusted-secret" not in caplog.text
+    assert "untrusted-secret" not in log_lines.text()
+    # 처리하지 않는 종류는 warn 한 줄과 SKIPPED 결과다. 받은 종류는 other로만 남는다
+    (skipped,) = log_lines.find("kafka event skipped")
+    assert skipped["error.type"] == "UNKNOWN_EVENT_TYPE"
+    assert skipped["loresentry.cloudevent.type"] == "other"
+    processed = log_lines.find("graph refresh requested event processed")
+    assert [line["loresentry.result.outcome"] for line in processed] == [
+        "PROCESSED",
+        "SKIPPED",
+    ]
+    assert processed[0]["loresentry.project_id"] == PROJECT
+    assert processed[0]["loresentry.refresh.request_id"] == REQUEST
 
 
 def test_invalid_wire_goes_to_dlq_without_calling_business():
@@ -76,7 +88,7 @@ def test_transient_failure_retries_same_event_then_succeeds():
     assert not dead_letters.sent
 
 
-def test_retry_exhaustion_dead_letters_once_with_safe_logs(caplog):
+def test_retry_exhaustion_dead_letters_once_with_safe_logs(caplog, log_lines):
     calls = []
     dead_letters = DeadLetters()
 
@@ -88,6 +100,21 @@ def test_retry_exhaustion_dead_letters_once_with_safe_logs(caplog):
     assert len(calls) == 3
     assert len(dead_letters.sent) == 1
     assert "secret manuscript" not in caplog.text
+    assert "secret" not in log_lines.text()
+    retries = log_lines.find("kafka processing failed")
+    assert [line["loresentry.param.attempt"] for line in retries] == [1, 2, 3]
+    assert {line["error.type"] for line in retries} == {"RetryableProcessingError"}
+    (dead,) = log_lines.find("kafka event dead-lettered")
+    assert (dead["log.level"], dead["error.type"]) == (
+        "ERROR",
+        "RetryableProcessingError",
+    )
+    (processed,) = log_lines.find("graph refresh requested event processed")
+    assert processed["log.level"] == "WARN"
+    assert processed["loresentry.result.outcome"] == "FAILED"
+    # 재시도·DLQ 줄도 레코드 문맥으로 남는다
+    assert dead["loresentry.kafka.offset"] == 2**40
+    assert dead["loresentry.cloudevent.id"] == EVENT
 
 
 class WaitingWork:
@@ -277,3 +304,16 @@ def test_project_changed_consumer_reads_v2_only_and_dead_letters_to_v2():
     transport = Subscription(stop)
     business_worker(transport, PROJECT_CHANGED, handlers, DeadLetters(), stop).run(stop)
     assert transport.topics == ["content.project.changed.v2"]
+
+
+def test_inbox_duplicate_from_the_business_handler_is_the_record_outcome(log_lines):
+    consume = BusinessConsumerHandler(
+        PROJECT_CHANGED,
+        {"FileChanged": lambda _: "DUPLICATE", "ProjectDeleted": lambda _: None},
+        DeadLetters(),
+        Event(),
+    )
+    consume(content_record("FileChanged"))
+    (processed,) = log_lines.find("project changed event processed")
+    assert processed["loresentry.result.outcome"] == "DUPLICATE"
+    assert processed["loresentry.file_id"] == REQUEST

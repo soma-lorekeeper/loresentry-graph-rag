@@ -13,9 +13,17 @@ CONSUMER_NAME = "graph-rag-refresh"
 
 @dataclass(frozen=True)
 class PendingCompletion:
+    """발행을 기다리는 완료 하나.
+
+    Attributes:
+        traceparent: 완료를 기록한 요청 처리의 W3C traceparent. relay가 완료 이벤트 헤더로 싣는다.
+            추적 전에 기록한 완료는 None이다. 요청 식별(request_sha256)에는 들어가지 않는다.
+    """
+
     identifier: str
     completion: Completion
     created_at: datetime
+    traceparent: str | None = None
 
 
 def request_digest(request: RefreshRequest) -> str:

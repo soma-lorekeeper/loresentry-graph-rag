@@ -58,14 +58,7 @@ def test_real_adapter_and_route_can_repeat_a_read(upstream):
     assert (
         first.json()
         == second.json()
-        == {
-            "status": "ok",
-            "service": "graph-rag-api",
-            "endpoint": upstream["endpoint"],
-            "role": "writer",
-            "dbEngineVersion": "unknown",
-            "gremlin": "unknown",
-        }
+        == {"status": "ok", "service": "graph-rag-api", "database": "neptune"}
     )
     assert upstream["requests"] == [("GET", "/status"), ("GET", "/status")]
 
