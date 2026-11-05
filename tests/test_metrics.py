@@ -222,6 +222,11 @@ def test_kafka_record_records_its_consume_delay_and_process_time(measured, spans
     # 이유 없이 FAILED로만 알린 레코드
     with LogFlow.kafka_record("t", 0, 3, (), (), "x", GROUP) as flow:
         flow.outcome(Outcome.FAILED)
+    # 다른 partition에서 5분 기다린 레코드(굶는 partition)
+    with LogFlow.kafka_record(
+        "t", 4, 9, (), (), "x", GROUP, timestamp=time.time() - 300
+    ):
+        pass
 
     found = measured()
     common = {
@@ -231,11 +236,26 @@ def test_kafka_record_records_its_consume_delay_and_process_time(measured, spans
     }
     delay = found["loresentry.kafka.consume.delay"]
     assert (delay.scope, delay.unit) == (SCOPE, "s")
-    (waited,) = delay.points
-    assert dict(waited.attributes) == common
+    # partition별로 나뉜다. partition ID는 문자열이다
+    waits = {
+        point.attributes["messaging.destination.partition.id"]: point
+        for point in delay.points
+    }
+    assert set(waits) == {"0", "4"}
+    waited, starved = waits["0"], waits["4"]
+    assert dict(waited.attributes) == {
+        **common,
+        "messaging.destination.partition.id": "0",
+    }
     assert waited.count == 2
     assert waited.min == 0
     assert 30 <= waited.max < 40
+    assert dict(starved.attributes) == {
+        **common,
+        "messaging.destination.partition.id": "4",
+    }
+    assert starved.count == 1
+    assert 300 <= starved.sum < 310
     assert list(waited.explicit_bounds) == [
         0.01,
         0.05,
@@ -253,16 +273,35 @@ def test_kafka_record_records_its_consume_delay_and_process_time(measured, spans
 
     process = found["messaging.process.duration"]
     assert (process.scope, process.unit) == (SCOPE, "s")
-    points = {point.attributes.get("error.type"): point for point in process.points}
-    assert set(points) == {None, "RuntimeError", "InvalidEvent", "_OTHER"}
-    assert dict(points[None].attributes) == {
+    points = {
+        (
+            point.attributes["messaging.destination.partition.id"],
+            point.attributes.get("error.type"),
+        ): point
+        for point in process.points
+    }
+    assert set(points) == {
+        ("0", None),
+        ("0", "RuntimeError"),
+        ("0", "InvalidEvent"),
+        ("0", "_OTHER"),
+        ("4", None),
+    }
+    assert dict(points[("0", None)].attributes) == {
         **common,
+        "messaging.destination.partition.id": "0",
         "messaging.operation.name": "process",
     }
-    assert dict(points["RuntimeError"].attributes) == {
+    assert dict(points[("0", "RuntimeError")].attributes) == {
         **common,
+        "messaging.destination.partition.id": "0",
         "messaging.operation.name": "process",
         "error.type": "RuntimeError",
+    }
+    assert dict(points[("4", None)].attributes) == {
+        **common,
+        "messaging.destination.partition.id": "4",
+        "messaging.operation.name": "process",
     }
     for point in points.values():
         assert point.count == 1
@@ -270,15 +309,22 @@ def test_kafka_record_records_its_consume_delay_and_process_time(measured, spans
         assert list(point.explicit_bounds) == MESSAGING_BUCKETS
     # 처리 시간은 그 레코드의 consumer span 안에서 기록된다(exemplar가 그 span이다)
     first = spans()[0]
-    (exemplar,) = points[None].exemplars
+    (exemplar,) = points[("0", None)].exemplars
     assert exemplar.span_id == first.context.span_id
     assert "secret" not in repr(found)
 
 
-def test_records_from_the_polling_worker_carry_their_create_time(measured):
+def test_records_from_the_polling_worker_carry_their_create_time_and_partition(
+    measured,
+):
+    class OnPartition(Message):
+        # broker가 partition 4에서 준 레코드
+        def partition(self):
+            return 4
+
     stop = Event()
     created = int(time.time() * 1000) - 5000
-    transport = Transport(stop, [Message(created=created)])
+    transport = Transport(stop, [OnPartition(created=created)])
     records = []
     sandbox = FakeConsumerHandler(FakeProducer(), "graph-rag-fake-test")
 
@@ -287,14 +333,22 @@ def test_records_from_the_polling_worker_carry_their_create_time(measured):
         sandbox(record)
 
     worker(transport, handle).run(stop)
-    assert records[0].timestamp == created / 1000
-    (waited,) = measured()["loresentry.kafka.consume.delay"].points
-    assert dict(waited.attributes) == {
+    assert (records[0].timestamp, records[0].partition) == (created / 1000, 4)
+    found = measured()
+    (waited,) = found["loresentry.kafka.consume.delay"].points
+    expected = {
         "messaging.system": "kafka",
         "messaging.destination.name": "graph-rag.sandbox.test",
+        "messaging.destination.partition.id": "4",
         "messaging.consumer.group.name": "graph-rag-fake-test",
     }
+    assert dict(waited.attributes) == expected
     assert 5 <= waited.sum < 15
+    (processed,) = found["messaging.process.duration"].points
+    assert dict(processed.attributes) == {
+        **expected,
+        "messaging.operation.name": "process",
+    }
 
 
 def test_kafka_publish_records_the_time_until_delivery(measured):

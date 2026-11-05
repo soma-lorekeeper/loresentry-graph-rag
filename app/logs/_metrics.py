@@ -13,9 +13,11 @@ process.runtime.cpython.*·cpython.gc.*).
 여기서 만드는 지표
 - loresentry.event_loop.lag: API 이벤트 루프가 막혀 늦게 깨어난 시간. measure_event_loop가 1초마다 잰다
 - loresentry.kafka.handler.queue: Kafka 처리 스레드에 맡긴 레코드 수(state: queued 시작 전, running 처리 중).
-  submit_kafka_handler가 센다
+  submit_kafka_handler가 센다. worker는 레코드 하나를 맡기면 끝날 때까지 다음 레코드를 받지 않으므로 queued는 거의
+  늘 0이고, running이 계속 worker 수만큼이면 처리 스레드가 쉬지 않는다는 뜻이다(보기용, 경보 없음)
 - loresentry.kafka.consume.delay: Kafka 레코드가 만들어진 뒤 처리를 시작하기까지 걸린 시간(LogFlow.kafka_record의 시작)
 - messaging.process.duration: Kafka 레코드 하나의 처리 시간(LogFlow.kafka_record의 끝)
+  두 지표 모두 partition(messaging.destination.partition.id)으로 나뉜다. 특정 partition만 굶는 밀림을 partition별로 본다
 - messaging.client.operation.duration: Kafka 발행 하나(LogFlow.call("kafka", topic=..., headers=...))
 - gen_ai.client.operation.duration, gen_ai.client.token.usage: 생성형 AI 호출 하나와 그 사용 토큰(model을 넘긴 LogFlow.call)
 
@@ -237,16 +239,24 @@ def submit_kafka_handler[Record](
 # ------------------------------------------------------------ 흐름이 남기는 지표(_flow가 부른다)
 
 
-def _kafka(topic: str, group: str | None) -> dict[str, str]:
-    """Kafka 소비 지표의 공통 속성. consumer group을 모르면 넣지 않는다."""
-    attributes = {"messaging.system": "kafka", "messaging.destination.name": topic}
+def _kafka(topic: str, partition: int, group: str | None) -> dict[str, str]:
+    """Kafka 소비 지표의 공통 속성. consumer group을 모르면 넣지 않는다.
+
+    partition은 semantic conventions대로 문자열(messaging.destination.partition.id)이다. topic의 partition 수만큼만 값이
+    있어 속성 묶음이 크게 늘지 않는다.
+    """
+    attributes = {
+        "messaging.system": "kafka",
+        "messaging.destination.name": topic,
+        "messaging.destination.partition.id": str(partition),
+    }
     if group:
         attributes["messaging.consumer.group.name"] = group
     return attributes
 
 
 def kafka_record_started(
-    topic: str, group: str | None, timestamp: float | None
+    topic: str, partition: int, group: str | None, timestamp: float | None
 ) -> None:
     """Kafka 레코드 처리를 시작할 때. 레코드의 시각부터 지금까지(loresentry.kafka.consume.delay)를 남긴다.
 
@@ -255,14 +265,23 @@ def kafka_record_started(
     """
     if timestamp is None:
         return
-    _CONSUME_DELAY.record(max(0.0, time.time() - timestamp), _kafka(topic, group))
+    _CONSUME_DELAY.record(
+        max(0.0, time.time() - timestamp), _kafka(topic, partition, group)
+    )
 
 
 def kafka_record_finished(
-    topic: str, group: str | None, seconds: float, error_type: str | None
+    topic: str,
+    partition: int,
+    group: str | None,
+    seconds: float,
+    error_type: str | None,
 ) -> None:
     """Kafka 레코드 하나를 다 처리했을 때(messaging.process.duration). 실패면 종료 줄과 같은 error.type을 붙인다."""
-    attributes = {**_kafka(topic, group), "messaging.operation.name": "process"}
+    attributes = {
+        **_kafka(topic, partition, group),
+        "messaging.operation.name": "process",
+    }
     if error_type is not None:
         attributes["error.type"] = error_type
     _PROCESS_DURATION.record(seconds, attributes)

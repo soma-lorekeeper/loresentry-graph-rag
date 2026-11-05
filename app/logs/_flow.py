@@ -180,6 +180,7 @@ class LogFlow:
             group: 레코드를 받은 consumer group. span·지표의 messaging.consumer.group.name이다.
             timestamp: 레코드의 시각(Unix 초, 보통 producer가 만든 시각). 주면 처리를 시작할 때 지금과의 차이를 대기 시간
                 지표(loresentry.kafka.consume.delay)로 남긴다. 처리를 마치면 처리 시간(messaging.process.duration)을 남긴다.
+                두 지표 모두 topic·partition·consumer group으로 나뉜다.
         """
         return _KafkaRecordFlow(
             caller_origin(),
@@ -517,7 +518,7 @@ class _KafkaRecordFlow(LogFlow):
             },
         )
         # 레코드가 만들어진 뒤 처리를 시작하기까지 걸린 시간(loresentry.kafka.consume.delay). 밀림을 보는 지표다
-        kafka_record_started(self._topic, self._group, self._timestamp)
+        kafka_record_started(self._topic, self._partition, self._group, self._timestamp)
         logger = new_logger(*span_ids(self._span))._derive(
             LogField.kafka_topic(self._topic),
             LogField.kafka_partition(self._partition),
@@ -553,7 +554,9 @@ class _KafkaRecordFlow(LogFlow):
             error_type = self._error_type(exc)
             if error_type is None and self._outcome is Outcome.FAILED:
                 error_type = "_OTHER"
-            kafka_record_finished(self._topic, self._group, self._elapsed(), error_type)
+            kafka_record_finished(
+                self._topic, self._partition, self._group, self._elapsed(), error_type
+            )
             self._close_span()
         return False
 
