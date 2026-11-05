@@ -9,11 +9,14 @@
 건너뛰므로 그 필드는 줄에서 빠진다.
 """
 
+import itertools
 import math
 import os.path
+import sys
 import traceback
 from datetime import timedelta
 from enum import Enum
+from types import FrameType
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -24,6 +27,11 @@ OTHER = "other"
 # 메시지 없는 스택에 남기는 원인 수와 원인마다의 프레임 수 상한
 MAX_CAUSES = 5
 MAX_FRAMES = 20
+# 호출 위치 스택(예외가 없는 warn·error 줄)에 남기는 프레임 수 상한(LOG_SCHEMA.md 5절 "warn·error 스택")
+MAX_SITE_FRAMES = 30
+# 호출 위치 스택의 맨 위(가장 최근)에서 건너뛰는 모듈: 이 로그 패키지와 표준 logging. 그 아래 첫 프레임이 줄을 찍은 곳이다.
+# 우리 줄은 서비스 함수(LogFlow 줄이면 흐름을 연 함수), 프레임워크 줄은 그 라이브러리의 함수다
+LOGGING_MODULES = ("app.logs", "logging")
 _PARAM = "loresentry.param."
 _RESULT = "loresentry.result."
 
@@ -136,11 +144,7 @@ class LogField:
             # walk_tb는 잡은 곳 → 던진 곳 순서다. 던진 곳에 가까운 프레임을 남기고 Java처럼 던진 곳부터 적는다
             frames = list(traceback.walk_tb(current.__traceback__))[-MAX_FRAMES:]
             for frame, line_number in reversed(frames):
-                module = frame.f_globals.get("__name__", "?")
-                file_name = os.path.basename(frame.f_code.co_filename)
-                lines.append(
-                    f"\tat {module}.{frame.f_code.co_qualname}({file_name}:{line_number})"
-                )
+                lines.append(_frame_line(frame, line_number))
             if current.__cause__ is not None:
                 current = current.__cause__
             elif current.__suppress_context__:
@@ -246,6 +250,39 @@ def duration(value: timedelta | float | int | None) -> LogField | None:
         return None
     seconds = value.total_seconds() if isinstance(value, timedelta) else float(value)
     return _of("event.duration", int(round(seconds * 1_000_000_000)))
+
+
+def log_site_stack(label: str) -> LogField:
+    """줄을 쓰는 순간의 호출 위치 스택(error.stack_trace). 예외가 없는 warn·error 줄에 포매터가 붙인다.
+
+    로그만 보고 그 줄이 어느 호출 경로에서 나왔는지 알 수 있게 한다. 첫 줄은 `log site: <label>`(그 줄의 error.type, 없으면
+    logger 이름)이라 예외 스택과 구별된다. 그 아래는 가장 최근 프레임부터 최대 MAX_SITE_FRAMES개이고, 모양은 메시지 없는 예외
+    스택과 같다(`\\tat 모듈.함수(파일:줄)`). 맨 위의 로깅 프레임(이 패키지, 표준 logging)은 건너뛴다. 프레임 객체에서 모듈·함수·
+    파일·줄 번호만 읽는다. 소스 코드 줄과 지역 변수는 읽지 않는다(LOG_SCHEMA.md 4절). logging은 줄을 찍은 스레드에서 포매터를
+    바로 부르므로 그 스레드의 스택이다.
+    """
+    frames = itertools.dropwhile(
+        lambda found: _logging_frame(found[0]), traceback.walk_stack(sys._getframe())
+    )
+    lines = [f"log site: {label}"]
+    for frame, line in itertools.islice(frames, MAX_SITE_FRAMES):
+        lines.append(_frame_line(frame, line))
+    return LogField((("error.stack_trace", "\n".join(lines)),))
+
+
+def _frame_line(frame: FrameType, line: int) -> str:
+    """프레임 한 줄(`\\tat 모듈.함수(파일:줄)`). 모듈은 프레임의 __name__, 함수는 클래스까지 붙인 이름, 파일은 이름만이다."""
+    module = frame.f_globals.get("__name__", "?")
+    file_name = os.path.basename(frame.f_code.co_filename)
+    return f"\tat {module}.{frame.f_code.co_qualname}({file_name}:{line})"
+
+
+def _logging_frame(frame: FrameType) -> bool:
+    """로깅 프레임인가(LOGGING_MODULES)."""
+    module = frame.f_globals.get("__name__", "")
+    return any(
+        module == name or module.startswith(name + ".") for name in LOGGING_MODULES
+    )
 
 
 def _of(name: str, value: object) -> LogField | None:

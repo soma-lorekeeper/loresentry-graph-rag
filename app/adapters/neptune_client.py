@@ -50,7 +50,12 @@ class NeptuneGremlinClient:
 
     Neptune은 데이터베이스라 쿼리마다 결과 줄을 남기지 않는다. 그 쿼리를 부른 repository 메서드의 진입 줄이 시작이고,
     실패만 `neptune query failed`(warn, error.type, 상대가 답했으면 응답 상태)로 남긴다. 쿼리 원문·응답 메시지와
-    주소는 남기지 않는다(쿼리 리터럴에 문서 제목·설명이 들어간다). 이 client는 OpenTelemetry로 계측하지 않는다(SigV4).
+    주소는 남기지 않는다(쿼리 리터럴에 문서 제목·설명이 들어간다).
+
+    쿼리마다 EDOT distro의 httpx 계측이 CLIENT span(`POST`, url.full은 /gremlin까지)을 열고 traceparent 헤더를 붙인다.
+    쿼리 본문은 span에 담기지 않는다. IAM 인증(SigV4)과 함께 동작한다: 서명은 build_request로 만든 요청에 send 전에 하고
+    (_sign), 계측은 그 뒤 transport(HTTPTransport.handle_request)에서 traceparent를 더한다. 그래서 traceparent는 서명한 헤더
+    목록(SignedHeaders)에 없고, Neptune은 SignedHeaders에 든 헤더만으로 서명을 다시 계산하므로 더한 헤더가 서명을 깨지 않는다.
     """
 
     def __init__(

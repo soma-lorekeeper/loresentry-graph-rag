@@ -173,7 +173,9 @@ def test_completion_keeps_the_request_trace_for_the_relay(graph):
         ("traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
     )
     with NeptuneRefreshInbox(store.endpoint) as inbox:
-        with LogFlow.kafka_record("t", 0, 0, header, (), "graph refresh requested"):
+        with LogFlow.kafka_record(
+            "t", 0, 0, header, (), "graph refresh requested", "graph-rag-test"
+        ):
             inbox.complete(
                 traced,
                 Completion(

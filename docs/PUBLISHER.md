@@ -99,7 +99,7 @@ value는 [completion_to_payload](../app/refresh/serialization.py)를 사용한�
 | `ce_subject` | payload의 `request_id` |
 | `ce_time` | UTC RFC 3339, 밀리초 3자리 |
 | `content-type` | `application/json` |
-| `traceparent` | 유효한 추적 문맥이 있을 때만 전달 |
+| `traceparent` | 로깅 팩토리가 발행 span의 값으로 넣는다. relay가 행에 저장한 trace를 부모로 연 범위 안에서 보내므로 완료를 기록한 요청 처리의 trace를 잇는다 |
 
 key와 헤더 값은 UTF-8, value는 snake_case UTF-8 JSON이다. 헤더 이름은 한 번만 넣는다.
 Content는 모든 Outbox 이벤트에 `ce_sequence=seq`를 붙이지만 완료 이벤트에는 필요하지 않다.

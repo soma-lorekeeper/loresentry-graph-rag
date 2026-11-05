@@ -6,7 +6,6 @@ from typing import Never, Self
 from urllib.parse import urlsplit
 
 import httpx
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from pydantic import ValidationError
 
 from app.adapters.content_schema import ContentsResponse, canonical_id
@@ -45,9 +44,9 @@ def _fail(code: str, message: str, retryable: bool = False) -> Never:
 class ContentDocumentSource:
     """신뢰한 호출자 ID를 한 실행에 바인딩한다. 재시도는 RefreshService가 담당한다.
 
-    쓰는 httpx client는 OpenTelemetry로 계측해 호출마다 traceparent 헤더가 붙는다. 그래서 content의 요청 줄이
-    이 Kafka 레코드 흐름과 같은 trace.id를 갖는다. 호출마다 `content call completed`(url.domain·url.full·응답 상태·
-    걸린 시간) 결과 줄이 남는다. 주소의 쿼리(문서 ID 목록)는 남기지 않는다.
+    EDOT distro의 httpx 계측이 호출마다 traceparent 헤더를 붙인다(content call span의 자식인 CLIENT span). 그래서
+    content의 요청 줄이 이 Kafka 레코드 흐름과 같은 trace.id를 갖는다. 호출마다 `content call completed`(url.domain·
+    url.full·응답 상태·걸린 시간) 결과 줄이 남는다. 주소의 쿼리(문서 ID 목록)는 남기지 않는다.
     """
 
     def __init__(
@@ -67,9 +66,6 @@ class ContentDocumentSource:
         )
         self._owned_client = client is None
         self._client = client if client is not None else httpx.Client()
-        # 이미 계측한 client(같은 client를 여러 실행이 나눠 쓰는 경우)는 다시 계측하지 않는다
-        if not getattr(self._client, "_is_instrumented_by_opentelemetry", False):
-            HTTPXClientInstrumentor.instrument_client(self._client)
 
     @classmethod
     @skip_entry_log("reads configuration when a refresh run starts")

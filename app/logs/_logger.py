@@ -6,6 +6,7 @@ identify, 결과 줄에 이유를 맡기는 add_to_outcome, 오류 응답 본문
 
 흐름
 1. 시작점(HTTP 요청, Kafka 레코드, 스케줄·폴링 회차, outbox 행)이 그때 아는 trace·span·user로 객체를 만든다.
+   줄마다 남는 trace.id·span.id는 그 줄을 찍는 순간의 지금 span이고, 시작점의 값은 지금 span이 없거나 다른 trace일 때 쓴다.
 2. bind로 contextvars에 넣는다. 같은 흐름의 어느 계층이든 `AppLogger.current()`로 꺼낸다. 처리 스레드·스레드 풀은
    contextvars를 옮기지 않으므로 그 스레드 안에서 시작점이 새로 바인딩한다.
 3. 줄마다 찍은 위치(모듈·함수·레이어·패키지)와 필드를 LogRecord에 실어 표준 logging으로 넘긴다. root logger의
@@ -86,14 +87,11 @@ class Shared:
     Attributes:
         outcome: 결과 줄(request completed)에 붙일 필드(add_to_outcome).
         user: 흐름 중간에 알게 된 사용자(identify). 모르면 None.
-        trace_id, span_id: 시작할 때 모르고 첫 줄 직전에 정해지는 trace(폴링 회차). 정해지지 않았으면 None.
     """
 
     __slots__ = (
         "outcome",
         "user",
-        "trace_id",
-        "span_id",
         "_before_first_line",
         "_lock",
     )
@@ -101,8 +99,6 @@ class Shared:
     def __init__(self):
         self.outcome: list[LogField] = []
         self.user: str | None = None
-        self.trace_id: str | None = None
-        self.span_id: str | None = None
         self._before_first_line: Callable[[], None] | None = None
         self._lock = threading.Lock()
 
@@ -135,7 +131,9 @@ class AppLogger:
         shared: Shared | None,
         tags: tuple[str, ...],
     ):
-        # 직접 만들지 않는다. 로깅 팩토리가 new_logger·_derive 등으로 만든다
+        # 직접 만들지 않는다. 로깅 팩토리가 new_logger·_derive 등으로 만든다.
+        # trace_id·span_id는 시작점이 연 span(32·16 hex)이다. 줄에는 찍는 순간의 지금 span이 먼저 남고(_effective_trace),
+        # 이 값은 지금 span이 없거나 다른 trace일 때 쓴다. 시작점에 span이 없었으면 None이다
         self._trace_id = trace_id
         self._span_id = span_id
         self._user_id = user_id
@@ -224,12 +222,18 @@ class AppLogger:
         return self._shared
 
     def _effective_trace(self) -> tuple[str | None, str | None]:
-        """이 줄의 trace. 객체의 값, 공유 칸에 늦게 정해진 값, 지금 열려 있는 span 순서로 찾는다."""
+        """이 줄의 (trace.id, span.id)(LOG_SCHEMA.md 7절 "로그 필드").
+
+        줄을 찍는 순간의 지금 span이 먼저다. 그래서 줄의 span.id로 APM에서 그 줄을 찍은 span(호출, 작업, 쿼리의 부모)을 바로
+        찾는다. 흐름이 바인딩돼 있는데 지금 span이 없거나 다른 trace면(계측이 문맥을 넘기지 않은 스레드 등) 흐름 시작점의 값을
+        쓴다. 흐름 밖(DETACHED, 시작점에 span이 없던 흐름)은 지금 span이 있으면 그 값이고, 없으면 비운다.
+        """
+        trace_id, span_id = current_ids()
+        if trace_id is not None and self._trace_id in (None, trace_id):
+            return trace_id, span_id
         if self._trace_id is not None:
             return self._trace_id, self._span_id
-        if self._shared is not None and self._shared.trace_id is not None:
-            return self._shared.trace_id, self._shared.span_id
-        return current_ids()
+        return None, None
 
     def _effective_user(self) -> str | None:
         """흐름 중간에 알린 사용자(identify)가 있으면 그 값, 없으면 시작점이 준 값."""
@@ -293,7 +297,7 @@ class AppLogger:
         logger.handle(record)
 
 
-# 바인딩이 없을 때(기동, 스레드 시작, 프레임워크 콜백) 쓰는 객체. trace는 그때 열려 있는 span이 있으면 그 값이다
+# 바인딩이 없을 때(기동, 스레드 시작, 프레임워크 콜백) 쓰는 객체. trace는 줄을 찍는 순간의 지금 span이고, span이 없으면 비운다
 DETACHED = AppLogger(None, None, None, (), None, ())
 
 

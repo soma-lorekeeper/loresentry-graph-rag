@@ -62,7 +62,9 @@ def test_only_callback_success_confirms_delivery_and_no_partition_is_forced():
     assert len(producer.outgoing) == 1
     topic, outgoing = producer.outgoing[0]
     assert topic == "test"
-    assert outgoing["headers"] == [("ce_id", b"id")]
+    # 넘긴 헤더 뒤에 로깅 팩토리가 발행 span의 traceparent를 넣는다
+    assert [name for name, _ in outgoing["headers"]] == ["ce_id", "traceparent"]
+    assert outgoing["headers"][0] == ("ce_id", b"id")
     assert "partition" not in outgoing
 
 

@@ -187,6 +187,9 @@ def test_durable_completion_relay_republishes_same_event_after_restart(
         assert all(message.error() is None for message in messages)
         assert messages[0].value() == messages[1].value()
         assert messages[0].key() == messages[1].key() == req.job.project_id.encode()
-        assert dict(messages[0].headers()) == dict(messages[1].headers())
+        # 같은 이벤트다. traceparent만 발행마다 다르다(로깅 팩토리가 그 발행 span의 값을 넣는다)
+        first, second = (dict(message.headers()) for message in messages)
+        assert first.pop("traceparent") != second.pop("traceparent")
+        assert first == second
     finally:
         reader.close()

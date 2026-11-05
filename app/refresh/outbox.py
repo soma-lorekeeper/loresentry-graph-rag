@@ -21,8 +21,9 @@ class RefreshOutboxRelay:
     def drain(self, stop: Event) -> int:
         """발행 대기를 오래된 순으로 보낸다. 보낸 행 수를 돌려준다.
 
-        행마다의 줄(발행, 발행 완료 기록)은 그 완료를 기록한 요청 처리의 trace(행에 저장한 traceparent)로 남는다.
-        그래서 그 요청의 trace 끝에 완료 이벤트 발행이 보이고, 받는 서비스가 같은 trace를 잇는다.
+        행마다 그 완료를 기록한 요청 처리의 trace(행에 저장한 traceparent)를 부모로 한 범위(LogScope.outbox_event)를 열고
+        그 안에서 발행하고 발행 완료를 기록한다. 행마다의 줄, 발행 span, Neptune 쿼리 span이 그 trace로 남고, 발행 헤더도
+        그 trace를 이어 받는 서비스가 같은 trace를 잇는다. relay 회차 trace에는 회차 span과 발행 대기 조회만 남는다.
         """
         entries = self.store.pending()
         if entries:
@@ -44,11 +45,7 @@ class RefreshOutboxRelay:
                 LogField.project_id(completion.job.project_id),
                 LogField.refresh_request_id(completion.job.request_id),
             ):
-                self.publisher.publish(
-                    completion,
-                    occurred_at=entry.created_at,
-                    traceparent=entry.traceparent,
-                )
+                self.publisher.publish(completion, occurred_at=entry.created_at)
                 # 전달 확인 전에는 SENT로 바꾸지 않는다. ack/DB 응답 유실은 중복 발행 가능.
                 self.store.mark_sent(entry)
             sent += 1
@@ -61,7 +58,8 @@ class RefreshOutboxRelay:
         """종료 신호까지 1초 주기로 발행 대기를 보낸다.
 
         회차 하나가 흐름 하나(LogFlow.polling)다. 보낼 행이 있던 회차와 실패한 회차만 시작·종료 줄
-        (보낸 행 수, 걸린 시간)이 남고, 빈 회차는 줄도 span도 남기지 않는다.
+        (보낸 행 수, 걸린 시간)이 남고, 빈 회차는 줄을 남기지 않는다. 회차 span(발행 대기 조회의 부모)은 빈 회차 표시가 붙어
+        collector가 버린다.
 
         전달·일시 저장소 실패는 회차 실패(warn, error.type, 쉬는 시간)로 남기고 쉬었다가 다시 보낸다.
         재시도할 수 없는 실패와 예상하지 못한 예외는 회차 실패 줄을 남긴 뒤 밖으로 던져 relay를 멈춘다

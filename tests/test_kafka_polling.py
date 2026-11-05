@@ -116,7 +116,7 @@ def test_fake_handling_and_exact_commit_in_order():
     transport = Transport(stop, [Message(), Message(1)])
     transport.stop_on_commit = False
     producer = FakeProducer()
-    handler = FakeConsumerHandler(producer)
+    handler = FakeConsumerHandler(producer, "graph-rag-fake-test")
     records = []
     handler_threads = set()
 

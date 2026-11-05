@@ -27,7 +27,7 @@ from app.refresh.models import Completion, Failure, RefreshRequest
 # 완료 Inbox를 Neptune에 읽고 쓰는 repository 레이어다(log.layer)
 LOG_LAYER = "repository"
 CONFLICT = "REFRESH_INBOX_CONFLICT"
-# InboxEvent에 저장하는 traceparent 모양(W3C version 00). 다른 값은 발행 헤더로 싣지 않는다
+# InboxEvent에 저장하는 traceparent 모양(W3C version 00). 다른 값은 저장된 trace로 쓰지 않는다
 TRACEPARENT = re.compile(r"00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}")
 
 
@@ -106,8 +106,9 @@ class NeptuneRefreshInbox(NeptuneGremlinClient):
         """완료와 발행 대기를 InboxEvent 하나로 기록한다.
 
         지금 요청 처리(Kafka 레코드 흐름의 consumer span)의 traceparent를 traceparent 속성으로 함께 저장한다.
-        relay가 그 값으로 완료 이벤트 헤더를 붙여 content가 이 요청의 trace를 잇는다. 요청 식별(request_sha256)과
-        중복 판정(completion_json)에는 들어가지 않으므로, 재전달된 같은 완료는 처음 저장한 traceparent를 유지한다.
+        relay가 그 값을 부모로 행의 범위를 열고 그 안에서 완료 이벤트를 보내 content가 이 요청의 trace를 잇는다.
+        요청 식별(request_sha256)과 중복 판정(completion_json)에는 들어가지 않으므로, 재전달된 같은 완료는 처음 저장한
+        traceparent를 유지한다.
         """
         AppLogger.current().info(
             "refresh inbox complete",

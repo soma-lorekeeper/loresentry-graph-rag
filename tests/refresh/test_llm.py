@@ -45,6 +45,8 @@ def client_fixture():
     )
     return SimpleNamespace(
         max_retries=0,
+        # 호출 span의 server.address로 읽는 SDK client의 주소
+        base_url=SimpleNamespace(host="api.openai.com"),
         responses=SimpleNamespace(
             create=Mock(return_value=response),
             # 생성 전 토큰 계수. 글자 수 합을 토큰 수로 돌려주는 결정적 대체 구현이다.

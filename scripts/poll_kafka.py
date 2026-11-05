@@ -32,7 +32,7 @@ def main() -> None:
     try:
         consumer = Consumer(consumer_config(args.bootstrap_servers, args.group_id))
         worker = PollingWorker(
-            consumer, tuple(args.topic), FakeConsumerHandler(producer)
+            consumer, tuple(args.topic), FakeConsumerHandler(producer, args.group_id)
         )
         worker.run(stop)
     finally:

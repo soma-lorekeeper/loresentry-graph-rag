@@ -85,13 +85,13 @@ class FakePollingRuntime:
             raise RuntimeError("Kafka polling runtime failed to start") from self._error
 
     def _run(self) -> None:
-        """polling 스레드의 수명 하나가 작업 흐름 하나다.
+        """polling 스레드의 수명 하나가 작업 흐름 하나(LogFlow.worker, span 없음)다.
 
         `kafka polling start` → `kafka polling completed`(기록한 sandbox 레코드 수) 또는 `kafka polling failed`
         (error, error.type, 메시지 없는 스택)다.
         """
         try:
-            with LogFlow.task(
+            with LogFlow.worker(
                 "kafka polling", LogField.param("topics", self._settings.topics)
             ) as task:
                 try:
@@ -104,7 +104,7 @@ class FakePollingRuntime:
                     worker = PollingWorker(
                         consumer,
                         self._settings.topics,
-                        FakeConsumerHandler(self.producer),
+                        FakeConsumerHandler(self.producer, self._settings.group_id),
                     )
                     self._ready.set()
                     worker.run(self._stop)

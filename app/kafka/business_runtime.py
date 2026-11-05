@@ -18,7 +18,7 @@ from app.adapters.neptune_refresh import neptune_refresh_service
 from app.adapters.projection_ready import ProjectionReadiness
 from app.adapters.refresh_artifacts import S3ArtifactSettings, s3_artifacts
 from app.adapters.refresh_inbox import NeptuneRefreshInbox
-from app.kafka.consumer import business_worker
+from app.kafka.consumer import GROUPS, business_worker
 from app.kafka.errors import ProcessingStopped
 from app.kafka.handlers import ProjectionEventHandler, RefreshEventHandler
 from app.kafka.messages import PROJECT_CHANGED, REFRESH_REQUESTED
@@ -249,13 +249,13 @@ class BusinessPollingRuntime:
             raise
 
     def _relay(self, ready):
-        """relay 스레드의 수명 하나가 작업 흐름 하나다.
+        """relay 스레드의 수명 하나가 작업 흐름 하나(LogFlow.worker)다.
 
         `refresh outbox relay start` → `refresh outbox relay completed` 또는 `refresh outbox relay failed`(error,
-        error.type, 메시지 없는 스택)다. 회차마다의 줄은 relay가 남긴다.
+        error.type, 메시지 없는 스택)다. 스레드 수명 동안 열린 span은 두지 않는다. 회차마다의 줄과 span은 relay가 남긴다.
         """
         try:
-            with LogFlow.task("refresh outbox relay"):
+            with LogFlow.worker("refresh outbox relay"):
                 with ExitStack() as stack:
                     store = stack.enter_context(self._outbox_factory())
                     producer = self._producer(
@@ -273,14 +273,14 @@ class BusinessPollingRuntime:
             ready.set()
 
     def _run(self, topic, ready):
-        """topic 하나의 consumer 스레드 수명 하나가 작업 흐름 하나다.
+        """topic 하나의 consumer 스레드 수명 하나가 작업 흐름 하나(LogFlow.worker)다.
 
         `kafka worker start`(topic) → `kafka worker completed` 또는 `kafka worker failed`(error, error.type, 메시지
         없는 스택)다. 스레드 이름(kafka-<topic>)이 모든 줄의 process.thread.name이다. 종료 요청으로 멈춘 처리
-        (ProcessingStopped)는 정상 종료다.
+        (ProcessingStopped)는 정상 종료다. 스레드 수명 동안 열린 span은 두지 않고, 레코드마다 consumer span이 열린다.
         """
         try:
-            with LogFlow.task("kafka worker", LogField.kafka_topic(topic)):
+            with LogFlow.worker("kafka worker", LogField.kafka_topic(topic)):
                 try:
                     with ExitStack() as stack:
                         producer = self._producer(
@@ -291,12 +291,9 @@ class BusinessPollingRuntime:
                         handlers = self._handlers(
                             topic, publisher, self._stop, stack, self.settings
                         )
-                        group = (
-                            "graph-rag.project-changed"
-                            if topic == PROJECT_CHANGED
-                            else "graph-rag.graph-refresh-requested"
+                        config = consumer_config(
+                            self.settings.bootstrap_servers, GROUPS[topic]
                         )
-                        config = consumer_config(self.settings.bootstrap_servers, group)
                         config["socket.timeout.ms"] = 10000
                         consumer = self._consumer(config)
                         try:

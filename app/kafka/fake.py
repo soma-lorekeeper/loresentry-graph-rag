@@ -34,8 +34,10 @@ class FakeProducer:
 class FakeConsumerHandler:
     """payload를 해석하거나 Neptune·S3·Content·LLM을 호출하지 않는다."""
 
-    def __init__(self, producer: FakeProducer):
+    def __init__(self, producer: FakeProducer, group: str):
         self._producer = producer
+        # 레코드를 받는 consumer group. 레코드 흐름의 consumer span(messaging.consumer.group.name)에 남는다
+        self._group = group
 
     def __call__(self, record: Record) -> None:
         """레코드 위치만 기록한다. 처리 스레드에서 레코드마다 레코드 흐름을 연다(헤더의 trace를 잇는다).
@@ -49,6 +51,7 @@ class FakeConsumerHandler:
             record.headers,
             (),
             "sandbox record",
+            self._group,
         ) as flow:
             self._producer.publish(
                 FakeReceipt(

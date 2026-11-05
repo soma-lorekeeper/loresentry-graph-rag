@@ -16,7 +16,8 @@ class PendingCompletion:
     """발행을 기다리는 완료 하나.
 
     Attributes:
-        traceparent: 완료를 기록한 요청 처리의 W3C traceparent. relay가 완료 이벤트 헤더로 싣는다.
+        traceparent: 완료를 기록한 요청 처리의 W3C traceparent. relay가 이 값을 부모로 행의 범위(LogScope.outbox_event)를
+            열어 완료 이벤트 발행이 그 trace를 잇는다.
             추적 전에 기록한 완료는 None이다. 요청 식별(request_sha256)에는 들어가지 않는다.
     """
 

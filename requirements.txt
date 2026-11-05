@@ -9,8 +9,7 @@ botocore==1.43.108
 confluent-kafka==2.16.0
 cryptography==50.0.2
 
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
-opentelemetry-exporter-otlp-proto-http==1.45.1
-opentelemetry-instrumentation-fastapi==0.66b1
-opentelemetry-instrumentation-httpx==0.66b1
+elastic-opentelemetry==1.19.0
+opentelemetry-instrumentation-fastapi==0.66b2
+opentelemetry-instrumentation-httpx==0.66b2
+opentelemetry-instrumentation-botocore==0.66b2
