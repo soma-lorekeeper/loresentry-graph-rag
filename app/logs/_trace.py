@@ -28,7 +28,8 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 
 from app.logs._fields import _class_name
 
-# 이 패키지가 여는 span의 계측 이름(scope.name). gitops logging/tools/apm_consistency.py가 이 이름으로 우리 span을 알아본다
+# 이 패키지가 여는 span의 계측 이름(scope.name). gitops logging/tools/apm_consistency.py가 이 이름으로 우리 span을 알아본다.
+# 이 패키지의 지표(_metrics)도 같은 이름의 meter로 만든다
 TRACER = "app.logs"
 # 할 일이 없던 폴링 회차의 span 표시. EDOT Collector가 이 속성이 true인 span이 든 trace를 통째로 버린다
 # (gitops logging/base/otel-collector/otel.yml의 tail_sampling, LOG_SCHEMA.md 7절)

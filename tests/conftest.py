@@ -5,21 +5,30 @@ SDK는 이미지에서 EDOT distro(docker-entrypoint.sh의 opentelemetry-instrum
 - 이미지와 같이 span 속성은 안정 이름(OTEL_SEMCONV_STABILITY_OPT_IN)으로 내고, distro가 켜는 계측(content 호출·Neptune
   쿼리의 httpx, S3·KMS의 botocore)을 켠다. FastAPI는 앱마다 app.logs.setup_tracing이 단다.
 - spans fixture는 그 테스트에서 끝난 span 목록을 돌려주는 함수다.
+- MeterProvider도 한 번 꽂고, 기록된 지표를 메모리 reader(METRICS)로 모은다. 이미지의 distro처럼 histogram은 delta라
+  모을 때마다 앞에서 모은 뒤의 값만 나온다. 테스트를 시작할 때 한 번 모아 앞 테스트의 값을 버린다.
+- measured fixture는 그 테스트에서 기록된 지표를 이름별로 돌려주는 함수다.
 """
 
 import io
 import json
 import logging
 import os
+from types import SimpleNamespace
 
 import pytest
 
 # 계측을 import하기 전에 둔다. 계측이 처음 쓸 때 한 번만 읽는다
 os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http,database")
 
-from opentelemetry import trace  # noqa: E402
+from opentelemetry import metrics, trace  # noqa: E402
 from opentelemetry.instrumentation.botocore import BotocoreInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor  # noqa: E402
+from opentelemetry.sdk.metrics import Histogram, MeterProvider  # noqa: E402
+from opentelemetry.sdk.metrics.export import (  # noqa: E402
+    AggregationTemporality,
+    InMemoryMetricReader,
+)
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
@@ -32,6 +41,12 @@ EXPORTER = InMemorySpanExporter()
 _provider = TracerProvider()
 _provider.add_span_processor(SimpleSpanProcessor(EXPORTER))
 trace.set_tracer_provider(_provider)
+# 기록된 지표를 모으는 reader. distro(OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta)와 같이 histogram은 delta다.
+# app.logs의 지표는 import 때 API의 대리 객체로 만들어졌다가 여기서 꽂은 provider로 옮겨 간다
+METRICS = InMemoryMetricReader(
+    preferred_temporality={Histogram: AggregationTemporality.DELTA}
+)
+metrics.set_meter_provider(MeterProvider(metric_readers=[METRICS]))
 HTTPXClientInstrumentor().instrument()
 BotocoreInstrumentor().instrument()
 
@@ -45,6 +60,36 @@ def _clear_spans():
 def spans():
     """그 테스트에서 지금까지 끝난 span 목록(끝난 순서)을 돌려주는 함수."""
     return lambda: list(EXPORTER.get_finished_spans())
+
+
+@pytest.fixture(autouse=True)
+def _clear_metrics():
+    # 앞 테스트가 기록한 histogram 값을 버린다(delta라 한 번 모으면 비워진다)
+    METRICS.get_metrics_data()
+
+
+@pytest.fixture
+def measured():
+    """그 테스트에서 기록된 지표를 모아 {이름: (scope, unit, points)}로 돌려주는 함수.
+
+    histogram은 부를 때마다 앞의 호출(또는 테스트 시작) 뒤에 기록된 값만 나온다. gauge는 부른 때의 값이다.
+    points는 SDK의 data point(attributes, histogram이면 count·sum·min·max·explicit_bounds·exemplars, gauge면 value)다.
+    """
+
+    def read() -> dict[str, SimpleNamespace]:
+        found = {}
+        data = METRICS.get_metrics_data()
+        for resource in data.resource_metrics if data is not None else ():
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    found[metric.name] = SimpleNamespace(
+                        scope=scope.scope.name,
+                        unit=metric.unit,
+                        points=list(metric.data.data_points),
+                    )
+        return found
+
+    return read
 
 
 class CapturedLines:

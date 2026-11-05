@@ -21,12 +21,18 @@
 - worker: 스레드 수명만큼 도는 루프(Kafka polling worker, outbox relay 스레드). task와 같은 줄이지만 span을 열지 않는다.
   루프 안의 레코드·회차가 저마다 span을 연다(LOG_SCHEMA.md 7절 "별도 작업")
 
+흐름이 남기는 지표(app.logs._metrics): kafka_record는 대기 시간(loresentry.kafka.consume.delay)과 처리 시간
+(messaging.process.duration), Kafka 발행 call은 발행 시간(messaging.client.operation.duration), 생성형 AI call(model)은 호출 시간
+(gen_ai.client.operation.duration)과 사용 토큰(gen_ai.client.token.usage)이다. 실패면 종료 줄과 같은 error.type이 붙는다.
+content·S3·KMS call은 지표를 남기지 않는다. content 호출(과 Neptune 쿼리)은 httpx 계측의 http.client.request.duration이 잰다.
+
 span은 시작 줄보다 먼저 열고 걸린 시간을 재기 시작한다. 그래서 span 길이가 종료 줄의 event.duration보다 짧지 않다. 종료 줄은
 span을 닫기 전에 그 span 안에서 찍으므로, 종료 줄(호출 결과 줄 포함)의 span.id가 그 span이다. 실패로 끝난 흐름(예외, fail, 상대의
 5xx)은 span 상태가 ERROR이고 설명은 그 줄의 error.type이다.
 
 흐름 객체는 진행 중에 알게 된 값을 받는다: add(이후 모든 줄에 붙일 대상 ID), result(종료 줄의 결과 값),
-outcome(Kafka 레코드의 결과), status(호출의 응답 상태), fail(예외 없이 끝난 실패의 이유).
+outcome(Kafka 레코드의 결과), status(호출의 응답 상태), fail(예외 없이 끝난 실패의 이유), usage(생성형 AI 호출의 사용 토큰과
+응답 모델. 지표에만 쓴다).
 
 시작·종료 줄의 위치(log.logger·log.origin.function·log.layer)는 흐름을 연 서비스 함수다. 실패 줄에는 예외 메시지를
 싣지 않는다. 클래스 이름(error.type)과 메시지 없는 스택만 남긴다. 예외가 없는 실패 줄에는 포매터가 호출 위치 스택을 붙인다.
@@ -52,6 +58,12 @@ from app.logs._logger import (
     caller_origin,
     new_logger,
     reset,
+)
+from app.logs._metrics import (
+    genai_called,
+    kafka_published,
+    kafka_record_finished,
+    kafka_record_started,
 )
 from app.logs._trace import (
     IDLE_POLLING,
@@ -110,6 +122,9 @@ class LogFlow:
         self._error_code: str | None = None
         # 예외 없이 끝난 실패의 이유(fail). 실패가 아니면 None
         self._failure_type: str | None = None
+        # 생성형 AI 호출의 사용 토큰(입력, 출력)과 응답 모델 이름(usage). 지표에만 쓰고, 모르면 None이다
+        self._tokens: tuple[int | None, int | None] = (None, None)
+        self._response_model: str | None = None
         # 이 흐름이 연 span과, 그 span을 지금 문맥으로 둔 token. 끝날 때 종료 줄을 찍은 뒤 떼고 닫는다. span을 열지 않는
         # 흐름(worker)은 None이다
         self._span: trace.Span | None = None
@@ -146,6 +161,8 @@ class LogFlow:
         known_types: Iterable[str],
         event: str,
         group: str,
+        *,
+        timestamp: float | None = None,
     ) -> "LogFlow":
         """Kafka 레코드 하나. 헤더의 traceparent를 이은 consumer span을 열고 그 span으로 로그 객체를 바인딩한다.
 
@@ -160,7 +177,10 @@ class LogFlow:
             headers: 레코드 헤더 (이름, 값) 쌍. 같은 이름이 여럿이면 마지막 값이다.
             known_types: 이 consumer가 처리하는 ce_type.
             event: 문구에 쓰는 이벤트 이름(예: "graph refresh requested").
-            group: 레코드를 받은 consumer group. span의 messaging.consumer.group.name이다.
+            group: 레코드를 받은 consumer group. span·지표의 messaging.consumer.group.name이다.
+            timestamp: 레코드의 시각(Unix 초, 보통 producer가 만든 시각). 주면 처리를 시작할 때 지금과의 차이를 대기 시간
+                지표(loresentry.kafka.consume.delay)로 남긴다. 처리를 마치면 처리 시간(messaging.process.duration)을 남긴다.
+                두 지표 모두 topic·partition·consumer group으로 나뉜다.
         """
         return _KafkaRecordFlow(
             caller_origin(),
@@ -171,6 +191,7 @@ class LogFlow:
             known_types,
             event,
             group,
+            timestamp,
         )
 
     @classmethod
@@ -181,6 +202,7 @@ class LogFlow:
         *,
         server: str | None = None,
         model: str | None = None,
+        operation: str | None = None,
         topic: str | None = None,
         headers: list[tuple[str, bytes | None]] | None = None,
     ) -> "LogFlow":
@@ -190,12 +212,14 @@ class LogFlow:
         호출, botocore의 S3·KMS 호출)이 그 자식이 된다. 계측이 없는 대상(OpenAI Responses API)은 server에 그 호스트를
         넘긴다. 그러면 이 span이 CLIENT가 되고 server.address가 붙어 의존 대상의 span이 빠지지 않는다(LOG_SCHEMA.md 7절
         "외부 호출"). 그 대상이 생성형 AI면 model(설정 값인 모델 이름)도 넘긴다. 계측이 넣었을 gen_ai.provider.name(target)·
-        gen_ai.request.model을 이 span에 넣는다. 프롬프트와 모델 응답은 넣지 않는다(LOG_SCHEMA.md 4절).
+        gen_ai.request.model을 이 span에 넣는다. 프롬프트와 모델 응답은 넣지 않는다(LOG_SCHEMA.md 4절). 생성형 AI 호출은 끝날 때
+        호출 시간(gen_ai.client.operation.duration)과, usage로 알린 사용 토큰(gen_ai.client.token.usage)을 지표로 남긴다.
 
         Kafka 발행은 보낼 topic과 헤더 목록(headers)을 넘긴다. span이 `<topic> publish`(PRODUCER, messaging 속성)가 되고,
         그 span을 지금 문맥으로 둔 뒤 헤더 목록에 traceparent를 넣는다(목록에 이미 있던 traceparent는 지운다). 그래서 저장된
         trace의 범위(LogScope) 안에서 보내면 헤더가 그 trace를 잇고, Kafka 레코드 흐름 안에서 보내면(DLQ) 그 레코드의 trace를
-        잇는다. 서비스 코드는 traceparent 헤더를 직접 만들지 않는다.
+        잇는다. 서비스 코드는 traceparent 헤더를 직접 만들지 않는다. 끝나면 발행 시간(messaging.client.operation.duration,
+        전달 확인까지)을 지표로 남긴다.
 
         성공은 `<target> call completed`(걸린 시간, 응답 상태), 상대의 5xx는 같은 문구의 warn과 UPSTREAM_SERVER_ERROR,
         fail이나 예외는 `<target> call failed`(warn, error.type, 예외면 메시지 없는 스택)이고 span이 ERROR다. 예외는 그대로
@@ -207,10 +231,13 @@ class LogFlow:
             url: HTTP 호출의 대상 주소. 주면 url.domain·url.full(쿼리 제외)을 붙인다.
             server: 계측이 없는 대상의 호스트. 주면 span이 CLIENT다.
             model: 계측이 없는 생성형 AI 호출의 모델 이름(설정 값).
+            operation: 생성형 AI 호출의 작업 이름(gen_ai.operation.name, 예: chat). model과 함께 넘긴다.
             topic: Kafka 발행의 topic. headers와 함께 넘긴다.
             headers: Kafka 발행의 헤더 목록. 이 함수가 traceparent를 넣는다.
         """
-        return _CallFlow(caller_origin(), target, url, server, model, topic, headers)
+        return _CallFlow(
+            caller_origin(), target, url, server, model, operation, topic, headers
+        )
 
     @classmethod
     def task(cls, name: str, *start: LogField | None) -> "LogFlow":
@@ -258,6 +285,25 @@ class LogFlow:
         self._failure_type = error_type
         return self
 
+    def usage(
+        self,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        response_model: str | None = None,
+    ) -> "LogFlow":
+        """생성형 AI 호출의 사용 토큰(공급자가 센 입력·출력)과 응답 모델 이름. 호출이 끝날 때 지표에 쓴다.
+
+        줄에는 붙지 않는다(줄의 토큰 수는 result로 남긴다). 0 이상의 정수가 아닌 토큰 수와 문자열이 아닌 모델 이름은 버린다.
+        """
+        # 0 이상의 정수(bool 제외)만 토큰 수다
+        self._tokens = tuple(
+            tokens if type(tokens) is int and tokens >= 0 else None
+            for tokens in (input_tokens, output_tokens)
+        )
+        if isinstance(response_model, str) and response_model:
+            self._response_model = response_model
+        return self
+
     # ------------------------------------------------------------ 내부
 
     def __enter__(self) -> "LogFlow":
@@ -287,6 +333,17 @@ class LogFlow:
             detach(self._span_token)
         if self._span is not None:
             self._span.end()
+
+    def _elapsed(self) -> float:
+        """span을 연 뒤(span이 없으면 흐름을 만든 뒤) 지금까지 걸린 초. 지표의 시간이다."""
+        return (time.perf_counter_ns() - self._started) / 1_000_000_000
+
+    def _error_type(self, failure: BaseException | None) -> str | None:
+        """지표의 error.type. 종료 줄과 같다: 예외면 그 클래스 이름, 아니면 fail로 알린 이유(상대의 5xx면
+        UPSTREAM_SERVER_ERROR). 실패가 아니면 None이다."""
+        if failure is not None:
+            return type(failure).__name__
+        return self._failure_type
 
     def _failed(self, failure: BaseException | None) -> None:
         """이 흐름의 span을 실패로 표시한다. 설명은 종료 줄의 error.type(예외 클래스 이름, 없으면 fail로 알린 이유)이다."""
@@ -433,6 +490,7 @@ class _KafkaRecordFlow(LogFlow):
         known_types: Iterable[str],
         event: str,
         group: str,
+        timestamp: float | None,
     ):
         super().__init__(origin)
         self._topic, self._partition, self._offset = topic, partition, offset
@@ -441,6 +499,8 @@ class _KafkaRecordFlow(LogFlow):
         self._known = frozenset(known_types)
         self._event = event
         self._group = group
+        # 레코드의 시각(Unix 초). 처리를 시작할 때 대기 시간 지표에 쓴다. 모르면 None
+        self._timestamp = timestamp
 
     def __enter__(self) -> LogFlow:
         self._open_span(
@@ -457,6 +517,8 @@ class _KafkaRecordFlow(LogFlow):
                 "messaging.operation.type": "process",
             },
         )
+        # 레코드가 만들어진 뒤 처리를 시작하기까지 걸린 시간(loresentry.kafka.consume.delay). 밀림을 보는 지표다
+        kafka_record_started(self._topic, self._partition, self._group, self._timestamp)
         logger = new_logger(*span_ids(self._span))._derive(
             LogField.kafka_topic(self._topic),
             LogField.kafka_partition(self._partition),
@@ -487,6 +549,14 @@ class _KafkaRecordFlow(LogFlow):
         finally:
             self._close_bindings()
             reset(self._token)
+            # 처리 시간(messaging.process.duration). 실패면 종료 줄과 같은 error.type이고, 이유 없이 FAILED로 알린 레코드는
+            # semantic conventions의 대체 값 _OTHER다
+            error_type = self._error_type(exc)
+            if error_type is None and self._outcome is Outcome.FAILED:
+                error_type = "_OTHER"
+            kafka_record_finished(
+                self._topic, self._partition, self._group, self._elapsed(), error_type
+            )
             self._close_span()
         return False
 
@@ -501,15 +571,17 @@ class _CallFlow(LogFlow):
         url: str | None,
         server: str | None,
         model: str | None,
+        operation: str | None,
         topic: str | None,
         headers: list[tuple[str, bytes | None]] | None,
     ):
         super().__init__(origin)
         self._target = target
         self._url = url
-        # 계측이 없는 대상의 호스트(있으면 CLIENT span)와 생성형 AI 호출의 모델 이름
+        # 계측이 없는 대상의 호스트(있으면 CLIENT span)와 생성형 AI 호출의 모델 이름·작업 이름(지표의 gen_ai.operation.name)
         self._server = server
         self._model = model
+        self._operation = operation
         # Kafka 발행의 topic과 헤더 목록(있으면 PRODUCER span, 헤더에 traceparent를 넣는다)
         self._topic = topic
         self._headers = headers
@@ -561,8 +633,27 @@ class _CallFlow(LogFlow):
                 self._end(logging.INFO, f"{self._target} call completed")
         finally:
             self._close_bindings()
+            self._record(exc)
             self._close_span()
         return False
+
+    def _record(self, failure: BaseException | None) -> None:
+        """호출 하나의 지표. Kafka 발행과 생성형 AI 호출만 남긴다. 실패면 종료 줄과 같은 error.type이다.
+
+        content 호출은 httpx 계측의 HTTP 지표(http.client.request.duration)가 이미 재므로 남기지 않는다.
+        """
+        if self._headers is not None:
+            kafka_published(self._topic, self._elapsed(), self._error_type(failure))
+        elif self._model is not None:
+            genai_called(
+                self._target,
+                self._operation,
+                self._model,
+                self._response_model,
+                self._elapsed(),
+                *self._tokens,
+                self._error_type(failure),
+            )
 
     def _extra_end_fields(self) -> list[LogField | None]:
         if self._url is None:
