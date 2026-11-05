@@ -5,9 +5,15 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Event
 
-from confluent_kafka import Consumer, KafkaError, KafkaException, TopicPartition
+from confluent_kafka import (
+    TIMESTAMP_NOT_AVAILABLE,
+    Consumer,
+    KafkaError,
+    KafkaException,
+    TopicPartition,
+)
 
-from app.logs import kafka_client_logger
+from app.logs import kafka_client_logger, submit_kafka_handler
 
 
 @dataclass(frozen=True)
@@ -18,6 +24,9 @@ class Record:
     key: bytes | None
     value: bytes | None
     headers: tuple[tuple[str, bytes | None], ...] = ()
+    # 레코드의 시각(Unix 초). 보통 producer가 만든 시각(CreateTime)이고, broker가 시각을 주지 않으면 None이다.
+    # 레코드 흐름(LogFlow.kafka_record)이 처리를 시작할 때 지금과의 차이를 대기 시간 지표로 남긴다
+    timestamp: float | None = None
 
 
 def consumer_config(bootstrap_servers: str, group_id: str) -> dict:
@@ -132,6 +141,9 @@ class PollingWorker:
                 # A signal may have arrived during poll. Leave this record uncommitted.
                 if stop.is_set():
                     break
+                # (시각 종류, Unix 밀리초). 종류가 TIMESTAMP_NOT_AVAILABLE이면 값이 없다
+                kind, millis = message.timestamp()
+                created = None if kind == TIMESTAMP_NOT_AVAILABLE else millis / 1000
                 record = Record(
                     topic=message.topic(),
                     partition=message.partition(),
@@ -139,10 +151,12 @@ class PollingWorker:
                     key=message.key(),
                     value=message.value(),
                     headers=tuple(message.headers() or ()),
+                    timestamp=created,
                 )
                 self._consumer.pause(self._assigned)
                 epoch = self._epoch
-                self._future = executor.submit(self._handler, record)
+                # executor.submit과 같다. 로깅 팩토리가 맡긴 레코드 수(시작 전·처리 중)를 지표로 센다
+                self._future = submit_kafka_handler(executor, self._handler, record)
         finally:
             try:
                 # auto commit is disabled, including on close.

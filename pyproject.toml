@@ -24,6 +24,7 @@ select = ["E4", "E7", "E9", "F", "I", "B", "UP", "TID", "T20"]
 "app.logs._flow".msg = "Internal logging module. Import from app.logs."
 "app.logs._format".msg = "Internal logging module. Import from app.logs."
 "app.logs._logger".msg = "Internal logging module. Import from app.logs."
+"app.logs._metrics".msg = "Internal logging module. Import from app.logs."
 "app.logs._request".msg = "Internal logging module. Import from app.logs."
 "app.logs._trace".msg = "Internal logging module. Import from app.logs."
 

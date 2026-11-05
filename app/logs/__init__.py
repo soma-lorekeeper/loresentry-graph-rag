@@ -1,9 +1,10 @@
-"""로그·trace의 공개 API(LOG_SCHEMA.md 5절 "로그 클래스", 7절 "trace"). ai-chat app/logs와 같은 이름·출력이다.
+"""로그·trace·앱 지표의 공개 API(LOG_SCHEMA.md 5절 "로그 클래스", 7절 "trace", ALERTING.md 7절 "앱 지표 규약"). ai-chat
+app/logs와 같은 이름·출력이다.
 
 서비스 코드는 로깅·추적 로직을 모른다. 인자(값, 헤더 목록)만 넘기고, 로그 객체 만들기·바인딩, 걸린 시간 재기, 결과로 레벨
-정하기, 시작·종료 줄 쓰기, 우리 span 열기와 지금 문맥 바꾸기, 저장된 trace 잇기, Kafka 헤더에 traceparent 넣기는 모두 이 패키지가
-한다. 추적 엔진(SDK, exporter, 라이브러리 계측)은 EDOT Python distro가 프로세스 시작 때 설정한다(docker-entrypoint.sh의
-opentelemetry-instrument).
+정하기, 시작·종료 줄 쓰기, 우리 span 열기와 지금 문맥 바꾸기, 저장된 trace 잇기, Kafka 헤더에 traceparent 넣기, 앱 지표
+기록하기는 모두 이 패키지가 한다. 추적·지표 엔진(SDK, exporter, 라이브러리 계측)은 EDOT Python distro가 프로세스 시작 때
+설정한다(docker-entrypoint.sh의 opentelemetry-instrument).
 
 서비스 코드는 이 패키지에서 아래 이름만 import한다. logging 모듈·print·opentelemetry와 밑줄로 시작하는 내부 모듈
 (app.logs._*)은 ruff banned-api(TID251)·T20이 막는다.
@@ -19,6 +20,10 @@ opentelemetry-instrument).
 - RequestLogMiddleware: 받은 HTTP 요청의 시작점
 - traceparent: 저장했다 나중에 처리하는 일에 함께 저장할 지금의 W3C traceparent
 - kafka_client_logger: confluent-kafka 설정의 "logger"(librdkafka 로그를 이 형식으로 받는다)
+- measure_event_loop: API 앱의 lifespan이 여는 범위. 이벤트 루프 지연 지표(loresentry.event_loop.lag)를 잰다
+- submit_kafka_handler: Kafka 레코드를 처리 스레드에 맡긴다(executor.submit 대신). 맡긴 레코드 수 지표
+  (loresentry.kafka.handler.queue)를 센다
+- Kafka 처리·발행, 생성형 AI 호출의 지표는 LogFlow(kafka_record, call)가 흐름을 닫을 때 남긴다
 """
 
 from collections.abc import Callable
@@ -28,6 +33,7 @@ from app.logs._fields import LogField
 from app.logs._flow import LogFlow, LogScope, Outcome
 from app.logs._format import configure_logging, kafka_client_logger
 from app.logs._logger import AppLogger
+from app.logs._metrics import measure_event_loop, submit_kafka_handler
 from app.logs._request import RequestLogMiddleware
 from app.logs._trace import setup_tracing, traceparent
 
@@ -40,8 +46,10 @@ __all__ = [
     "RequestLogMiddleware",
     "configure_logging",
     "kafka_client_logger",
+    "measure_event_loop",
     "setup_tracing",
     "skip_entry_log",
+    "submit_kafka_handler",
     "traceparent",
 ]
 

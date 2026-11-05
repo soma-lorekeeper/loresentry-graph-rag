@@ -52,6 +52,7 @@ class FakeConsumerHandler:
             (),
             "sandbox record",
             self._group,
+            timestamp=record.timestamp,
         ) as flow:
             self._producer.publish(
                 FakeReceipt(

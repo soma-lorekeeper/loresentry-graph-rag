@@ -126,8 +126,12 @@ class OpenAIProposalModel:
         if self.count(model_input) > self.limits.input_budget:
             fail("MODEL_REQUEST_INVALID", "Model input token budget exceeded")
         try:
+            # 생성은 GenAI 작업 이름 chat이다(호출 시간·사용 토큰 지표의 gen_ai.operation.name)
             with LogFlow.call(
-                "openai", server=self.client.base_url.host, model=model_input.model
+                "openai",
+                server=self.client.base_url.host,
+                model=model_input.model,
+                operation="chat",
             ) as call:
                 response = self.client.responses.create(
                     **request_arguments(model_input),
@@ -138,11 +142,15 @@ class OpenAIProposalModel:
                 )
                 # 공급자가 센 사용 토큰. 응답 본문은 남기지 않는다
                 reported = getattr(response, "usage", None)
+                input_tokens = _tokens(reported, "input_tokens")
+                output_tokens = _tokens(reported, "output_tokens")
                 call.result(
-                    LogField.result("input_tokens", _tokens(reported, "input_tokens")),
-                    LogField.result(
-                        "output_tokens", _tokens(reported, "output_tokens")
-                    ),
+                    LogField.result("input_tokens", input_tokens),
+                    LogField.result("output_tokens", output_tokens),
+                )
+                # 사용 토큰 지표(gen_ai.client.token.usage)와 응답의 모델 이름(gen_ai.response.model). 본문은 넘기지 않는다
+                call.usage(
+                    input_tokens, output_tokens, getattr(response, "model", None)
                 )
         except APITimeoutError:
             fail("MODEL_TIMEOUT", "Model request timed out", True)
@@ -162,9 +170,12 @@ class OpenAIProposalModel:
         """
         AppLogger.current().info("openai input tokens count call")
         try:
-            # 생성 호출과 같이 OpenAI 호스트의 CLIENT span이다
+            # 생성 호출과 같이 OpenAI 호스트의 CLIENT span이다. 호출 시간 지표에서는 작업 이름 count_tokens로 생성과 나뉜다
             with LogFlow.call(
-                "openai", server=self.client.base_url.host, model=model_input.model
+                "openai",
+                server=self.client.base_url.host,
+                model=model_input.model,
+                operation="count_tokens",
             ) as call:
                 response = self.client.responses.input_tokens.count(
                     **request_arguments(model_input),

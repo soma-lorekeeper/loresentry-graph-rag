@@ -1193,6 +1193,7 @@ from opentelemetry.instrumentation.httpx import (
     HTTPX2ClientInstrumentor,
     HTTPXClientInstrumentor,
 )
+from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
 
 seen = {}
 
@@ -1232,6 +1233,7 @@ instrumentors = {
     "httpx2": HTTPX2ClientInstrumentor,
     "botocore": BotocoreInstrumentor,
     "fastapi": FastAPIInstrumentor,
+    "system_metrics": SystemMetricsInstrumentor,
 }
 print(json.dumps({
     "content": seen["/projects/files/content"],
@@ -1304,8 +1306,8 @@ def test_the_entrypoint_sets_safe_defaults_and_keeps_what_the_overlay_sets(tmp_p
         "OTEL_PROPAGATORS=tracecontext",
         "OTEL_SEMCONV_STABILITY_OPT_IN=http,database",
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false",
-        "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS="
-        "fastapi,httpx2,logging,system_metrics,confluent_kafka",
+        # system_metrics는 켠다(런타임 지표). 지표를 보낼지는 OTEL_METRICS_EXPORTER가 정한다
+        "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=fastapi,httpx2,logging,confluent_kafka",
         # 클라우드 detector(aws_eks의 403 평문 줄) 없이, otel이 마지막이다
         "OTEL_EXPERIMENTAL_RESOURCE_DETECTORS="
         "process_runtime,os,telemetry_distro,service_instance,containerid,otel",
@@ -1353,6 +1355,7 @@ def test_under_the_distro_only_content_calls_carry_a_traceparent():
         "httpx2": False,
         "botocore": True,
         "fastapi": False,
+        "system_metrics": True,
     }
     # distro 자신은 평문 줄을 남기지 않는다
     assert done.stderr == ""

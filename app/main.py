@@ -20,6 +20,7 @@ from app.logs import (
     LogField,
     RequestLogMiddleware,
     configure_logging,
+    measure_event_loop,
     setup_tracing,
     skip_entry_log,
 )
@@ -67,7 +68,9 @@ def create_app(source: GraphStatusSource | None = None) -> FastAPI:
                 await asyncio.to_thread(runtime.start)
             if business is not None:
                 await asyncio.to_thread(business.start)
-            yield
+            # 앱이 요청을 받는 동안 이벤트 루프 지연(loresentry.event_loop.lag)을 1초마다 잰다. 종료 때 그 task를 멈춘다
+            async with measure_event_loop():
+                yield
         finally:
             try:
                 if business is not None:

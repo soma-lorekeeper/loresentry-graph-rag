@@ -5,16 +5,24 @@ from threading import Event, get_ident
 from types import SimpleNamespace
 
 import pytest
-from confluent_kafka import KafkaError, KafkaException, TopicPartition
+from confluent_kafka import (
+    TIMESTAMP_CREATE_TIME,
+    TIMESTAMP_NOT_AVAILABLE,
+    KafkaError,
+    KafkaException,
+    TopicPartition,
+)
 
 from app.kafka.fake import FakeConsumerHandler, FakeProducer
 from app.kafka.polling import PollingWorker, consumer_config
 
 
 class Message:
-    def __init__(self, offset=0, error=None):
+    def __init__(self, offset=0, error=None, created=None):
         self._offset = offset
         self._error = error
+        # 레코드의 생성 시각(Unix 밀리초). 없으면 broker가 시각을 주지 않은 레코드다
+        self._created = created
 
     def topic(self):
         return "graph-rag.sandbox.test"
@@ -33,6 +41,11 @@ class Message:
 
     def headers(self):
         return [("ce_id", b"event"), ("optional", None)]
+
+    def timestamp(self):
+        if self._created is None:
+            return TIMESTAMP_NOT_AVAILABLE, -1
+        return TIMESTAMP_CREATE_TIME, self._created
 
     def error(self):
         return self._error
@@ -132,6 +145,8 @@ def test_fake_handling_and_exact_commit_in_order():
     assert [item.offset for item in producer.published] == [0, 1]
     assert [item.value_bytes for item in producer.published] == [5, 0]
     assert records[0].headers == (("ce_id", b"event"), ("optional", None))
+    # broker가 시각을 주지 않은 레코드다
+    assert records[0].timestamp is None
     assert transport.commits == [(records[0].topic, 0, 1), (records[0].topic, 0, 2)]
     assert transport.threads == {get_ident()}
     assert not transport.threads & handler_threads

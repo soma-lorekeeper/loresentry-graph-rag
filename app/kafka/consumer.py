@@ -96,6 +96,8 @@ class BusinessConsumerHandler:
             EVENT_TYPES[self._topic],
             EVENT_NAMES[self._topic],
             GROUPS[self._topic],
+            # 레코드의 시각. 처리를 시작하기까지 기다린 시간을 지표로 남긴다
+            timestamp=record.timestamp,
         ) as flow:
             # wire 검증 → 업무 처리기 → 재시도·DLQ. 결과는 레코드 흐름의 종료 줄(outcome)에 남는다
             try:
